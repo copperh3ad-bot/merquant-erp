@@ -1,0 +1,61 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Build output
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment secrets — block ALL .env files by default, only allow .env.example
+.env
+.env.*
+!.env.example
+
+# Git bundle backups (do NOT commit these)
+*.bundle
+
+# OS / misc
+Thumbs.db
+
+# Session patch bundles and scratch files (not for source control)
+s9/
+s10/
+s10b/
+s11/
+s12/
+s12-wired/
+*-patch.zip
+merquant-session*.zip
+merquant-session*/
+merquant-repo-backup-*/
+
+# Loose patch files and platform scripts that don't belong in source
+*.patch
+*.ps1
+
+# Runtime caches
+.wget-hsts
+.npmrc
+.cache/
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/

@@ -1,0 +1,338 @@
+// Parses BOB-format tech pack .xlsx files (Brand of the Basics product specification sheets)
+// Returns structured data: header, fabrications, trims, skus, carton, upc.
+
+function cellStr(v) { return v == null ? "" : String(v).trim(); }
+
+function readSheet(XLSX, wb, name) {
+  const ws = wb.Sheets[name];
+  if (!ws) return [];
+  const json = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+  return json.map(r => Array.isArray(r) ? r.map(cellStr) : []);
+}
+
+const HEADER_KEYS = {
+  "Brand": "brand",
+  "Product Type": "product_type",
+  "Product SKU": "product_sku",
+  "Product Name (Sold As)": "product_name",
+  "Production Description": "production_description",
+  "Product No.": "product_no",
+  "Sample No": "sample_no",
+  "Date": "date",
+};
+
+function parseInfoSheet(rows) {
+  const header = {};
+  const fabrications = [];
+  const trims = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const label = (r[0] || "").trim();
+    const val   = (r[2] || "").trim();
+
+    // Trim trailing spaces on "Date " etc.
+    const cleanLabel = label.replace(/\s+$/, "");
+    if (HEADER_KEYS[cleanLabel]) header[HEADER_KEYS[cleanLabel]] = val;
+
+    const mFab = /^Fabrication \((\d+)\)/i.exec(label);
+    if (mFab && val) {
+      const fab = { number: Number(mFab[1]), fabric_type: val };
+      for (let j = i + 1; j < Math.min(i + 6, rows.length); j++) {
+        const lj = (rows[j][0] || "").trim();
+        const vj = (rows[j][2] || "").trim();
+        if (lj === "Fabric Location")        fab.location = vj;
+        else if (lj === "Fabric Construction") fab.construction = vj;
+        else if (lj === "Fabric Weight")       fab.weight = vj;
+        else if (lj === "Fabric Treatment")    fab.treatment = vj;
+        else if (/^FABRICATION|^TRIMS/i.test(lj) || /^Fabrication \(/i.test(lj)) break;
+      }
+      if (fab.fabric_type) fabrications.push(fab);
+    } else if (label === "Fabrication" && val) {
+      // Trim fabric block (unnumbered "Fabrication")
+      const tr = { fabric_type: val };
+      for (let j = i + 1; j < Math.min(i + 6, rows.length); j++) {
+        const lj = (rows[j][0] || "").trim();
+        const vj = (rows[j][2] || "").trim();
+        if (lj === "Fabric Location")        tr.location = vj;
+        else if (lj === "Fabric Construction") tr.construction = vj;
+        else if (lj === "Fabric Weight")       tr.weight = vj;
+        else if (lj === "Fabric Treatment")    tr.treatment = vj;
+        else if (/^TRIMS|^PRODUCT/i.test(lj)) break;
+      }
+      if (tr.fabric_type) trims.push(tr);
+    }
+  }
+  return { header, fabrications, trims };
+}
+
+function parseSizeSheet(rows) {
+  const skus = [];
+  let inTable = false;
+  for (const r of rows) {
+    if (!r || !r.length) continue;
+    const first = (r[0] || "").trim();
+
+    if (first === "Size" && (r[2] || "").trim() === "Item Code") {
+      inTable = true;
+      continue;
+    }
+    if (!inTable) continue;
+    if (!first) continue;
+
+    const get = i => (r[i] || "").trim();
+    const item_code = get(2);
+    if (!item_code) {
+      // Break once the size column goes off the table
+      if (skus.length > 0) inTable = false;
+      continue;
+    }
+    skus.push({
+      size: first,
+      item_code,
+      color:              get(4),
+      product_dimensions: get(6),
+      insert_dimensions:  get(8),
+      pvc_bag_dimensions: get(10),
+      stiffener_size:     get(12),
+    });
+  }
+  return skus;
+}
+
+function parseShippingSheet(rows) {
+  const carton = [];
+  const upc = [];
+
+  // Carton table: col 2=Size, 4=Units per carton, 6=Master Carton Size / CM
+  let inCtn = false;
+  for (const r of rows) {
+    if (!r) continue;
+    const c2 = (r[2] || "").trim();
+    const c4 = (r[4] || "").trim();
+    if (c2 === "Size" && c4 === "Units per carton") { inCtn = true; continue; }
+    if (inCtn) {
+      const size = c2;
+      if (size) {
+        const units = parseInt(c4, 10);
+        const dim = (r[6] || "").trim();
+        if (size && !isNaN(units)) carton.push({ size, units_per_carton: units, carton_size_cm: dim });
+      } else if (carton.length >= 3) {
+        inCtn = false;
+      }
+    }
+  }
+
+  // UPC table: col 2=SIZE, 3=Our SKU, 4=Bob's SKU, 6=QTY/CTN
+  let inUpc = false;
+  for (const r of rows) {
+    if (!r) continue;
+    const c2 = (r[2] || "").trim();
+    const c3 = (r[3] || "").trim();
+    if (c2 === "SIZE" && /SKU/i.test(c3)) { inUpc = true; continue; }
+    if (inUpc && c2) {
+      const our = (r[3] || "").trim();
+      const bob = (r[4] || "").trim();
+      const qty = (r[6] || "").trim();
+      if (our) upc.push({ size: c2, our_sku: our, bob_sku: bob, qty_per_ctn: qty });
+    }
+  }
+
+  return { carton, upc };
+}
+
+// Parse labelling sheet — captures every label block (Law Tag, Size Label, etc.)
+function parseLabellingSheet(rows) {
+  const labels = [];
+  let current = null;
+  let sectionContext = "";
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const first = (r[0] || "").trim();
+    const val   = (r[2] || "").trim();
+
+    // Section headers (e.g., "Law tag/Care label", "Size label", "Care label for pillow protector")
+    if (first && !val && !/^(Label|Material|Size|Color|Placement|Placment)$/i.test(first)
+        && first.length > 3 && first.length < 80
+        && !first.startsWith("(") && !/PRODUCT SPECIFICATION|Labelling Information/i.test(first)) {
+      sectionContext = first;
+      continue;
+    }
+
+    if (first === "Label" && val) {
+      if (current) labels.push(current);
+      current = { section: sectionContext, type: val };
+    } else if (current) {
+      if (first === "Material")       current.material = val;
+      else if (first === "Size")      current.size = val;
+      else if (first === "Color")     current.color = val;
+      else if (first === "Placement" || first === "Placment") current.placement = val;
+    }
+  }
+  if (current) labels.push(current);
+  return labels;
+}
+
+// Parse packaging sheet — captures PVC bag, insert, stiffener, barcode sticker
+function parsePackagingSheet(rows) {
+  const items = [];
+  let variant = "Main"; // e.g. "Mattress protector" vs "Pillow Protector"
+
+  const KEYS = {
+    "Packaging type":                "Packaging",
+    "Bag material":                  "PVC Bag",
+    "Color paper insert material":   "Insert Card",
+    "Cardboard material(Stiffener)": "Stiffener",
+    "Size Sticker":                  "Size Sticker",
+    "Barcode sticker":               "Barcode Sticker",
+    "Barcode Sticker /Size":         "Barcode Sticker Size",
+    "Cardboard":                     "Stiffener (Cardboard)",
+    "cardboard size":                "Stiffener Size",
+  };
+
+  for (const r of rows) {
+    if (!r) continue;
+    const lbl = (r[0] || "").trim();
+    const val = (r[2] || "").trim();
+
+    // Variant switchers
+    if (lbl && !val) {
+      const lc = lbl.toLowerCase();
+      if (/mattress protector|encasement/i.test(lbl) && !/^PRODUCT|Artwork/i.test(lbl)) {
+        variant = lbl.length < 40 ? lbl : variant;
+        continue;
+      }
+      if (/pillow protector/i.test(lbl) && lbl.length < 40) {
+        variant = "Pillow Protector";
+        continue;
+      }
+    }
+
+    if (KEYS[lbl] && val) {
+      items.push({
+        variant,
+        category: KEYS[lbl],
+        label: lbl,
+        value: val,
+      });
+    }
+  }
+  return items;
+}
+
+// Parse zipper info (relevant for FT9 total encasement)
+function parseZipperInfo(rows) {
+  // Zippers usually mentioned in fabrications sheet under "Zipper" key
+  // In BOB FT9, zipper length per size is in the Size sheet col 8
+  // We capture zipper details if present anywhere in info sheet
+  const zip = {};
+  for (const r of rows) {
+    if (!r) continue;
+    const lbl = (r[0] || "").trim();
+    const val = (r[2] || "").trim();
+    if (/^Zipper/i.test(lbl) && val) {
+      zip[lbl] = val;
+    }
+  }
+  return zip;
+}
+
+// Extract GSM from a fabric_type string like "140gsm - 100% Nylon ..."
+function extractGsm(text) {
+  const m = /(\d+)(?:\-(\d+))?\s*gsm/i.exec(text || "");
+  if (!m) return null;
+  return m[2] ? Math.round((Number(m[1]) + Number(m[2])) / 2) : Number(m[1]);
+}
+
+// Convert our structured data into tech_packs.fabric_specs format used by MerQuant
+function toFabricSpecs(fabrications, trims) {
+  const specs = [];
+  for (const f of fabrications) {
+    specs.push({
+      component_type: f.location || `Fabrication ${f.number}`,
+      fabric_type:    f.fabric_type,
+      gsm:            extractGsm(f.fabric_type) || extractGsm(f.weight),
+      construction:   f.construction || null,
+      finish:         f.treatment || null,
+      width_cm:       null, // not in BOB format
+      consumption_per_unit: null,
+      wastage_percent: null,
+      color: /white/i.test(f.fabric_type || "") ? "White" : null,
+      notes: f.location || null,
+    });
+  }
+  for (const t of trims) {
+    specs.push({
+      component_type: t.location || "Trim / Binding",
+      fabric_type:    t.fabric_type,
+      gsm:            extractGsm(t.fabric_type) || extractGsm(t.weight),
+      construction:   t.construction || null,
+      finish:         t.treatment || null,
+      width_cm: null,
+      consumption_per_unit: null,
+      wastage_percent: null,
+      color: null,
+      notes: t.location || null,
+    });
+  }
+  return specs;
+}
+
+// Main parse entry point
+export async function parseBobTechPack(file) {
+  // Lazy-load SheetJS
+  if (!window.XLSX) {
+    await new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+      s.onload = res; s.onerror = rej;
+      document.head.appendChild(s);
+    });
+  }
+  const XLSX = window.XLSX;
+  const buf = await file.arrayBuffer();
+  const wb  = XLSX.read(buf, { type: "array" });
+
+  const infoSheet  = readSheet(XLSX, wb, "Product & Fabric Information");
+  const sizeSheet  = readSheet(XLSX, wb, "Product - Size & Workmanship");
+  const labelSheet = readSheet(XLSX, wb, "Product - Labelling");
+  const pkgSheet   = readSheet(XLSX, wb, "Product - Packaging");
+  // Shipping sheet has a trailing space in the name
+  const shipName   = wb.SheetNames.find(n => /^Product - Shipping information/i.test(n));
+  const shipSheet  = shipName ? readSheet(XLSX, wb, shipName) : [];
+
+  if (!infoSheet.length) throw new Error("Not a BOB tech pack — missing 'Product & Fabric Information' sheet");
+
+  const { header, fabrications, trims } = parseInfoSheet(infoSheet);
+  const skus = parseSizeSheet(sizeSheet);
+  const { carton, upc } = parseShippingSheet(shipSheet);
+  const labels = parseLabellingSheet(labelSheet);
+  const packaging = parsePackagingSheet(pkgSheet);
+  const zipper = parseZipperInfo(infoSheet);
+
+  const fabric_specs = toFabricSpecs(fabrications, trims);
+
+  // Merge carton + upc into SKUs by size
+  const cartonByS = new Map(carton.map(c => [c.size.toUpperCase(), c]));
+  const upcByS    = new Map(upc.map(u => [u.size.toUpperCase(), u]));
+  const enriched_skus = skus.map(s => {
+    const c = cartonByS.get(s.size.toUpperCase());
+    const u = upcByS.get(s.size.toUpperCase());
+    return { ...s, ...(c ? { units_per_carton: c.units_per_carton, carton_size_cm: c.carton_size_cm } : {}),
+                  ...(u ? { bob_sku: u.bob_sku, qty_per_ctn_upc: u.qty_per_ctn } : {}) };
+  });
+
+  return {
+    header,
+    fabrications,
+    trims,
+    fabric_specs,
+    skus: enriched_skus,
+    carton,
+    upc,
+    labels,
+    packaging,
+    zipper,
+  };
+}
