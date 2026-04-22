@@ -4,6 +4,10 @@
 // uses case-insensitive codes (DB trigger normalizes), and handles both
 // qty_per_carton (price_list) and pieces_per_carton (master_articles) field names
 // so it keeps working even if a legacy row is compared.
+//
+// CBM fix: po_items.cbm stores the LINE TOTAL (num_cartons * cbm_per_carton),
+// while price_list.cbm_per_carton is PER CARTON. We now derive actual-per-carton
+// from the stored total and compare like-for-like, and display per-carton values.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -93,7 +97,22 @@ export default function PriceVerification({ items = [] }) {
       const expectedPpc   = readPiecesPerCarton(ref); // handles qty_per_carton OR pieces_per_carton
 
       const priceStatus = classifyPriceStatus(it, expectedPrice);
-      const cbmStatus   = classifyCbmStatus(it, expectedCbm);
+
+      // po_items.cbm is the LINE TOTAL (num_cartons * cbm_per_carton).
+      // price_list.cbm_per_carton is PER CARTON.
+      // Derive actual-per-carton so the comparison is like-for-like and the
+      // UI shows consistent units in both Actual and Expected columns.
+      const totalCbm   = toNumber(it.cbm);
+      const numCartons = toNumber(it.num_cartons);
+      const actualCbmPerCarton =
+        totalCbm !== null && numCartons && numCartons > 0
+          ? Number((totalCbm / numCartons).toFixed(4))
+          : null;
+
+      const cbmStatus = classifyCbmStatus(
+        { cbm: actualCbmPerCarton },
+        expectedCbm
+      );
 
       const actualPpc = readPiecesPerCarton(it);
       const ppcStatus =
@@ -109,7 +128,7 @@ export default function PriceVerification({ items = [] }) {
         actualPrice: toNumber(it.unit_price),
         expectedPrice,
         priceStatus,
-        actualCbm: toNumber(it.cbm),
+        actualCbm: actualCbmPerCarton,
         expectedCbm,
         cbmStatus,
         actualPpc,
@@ -160,8 +179,8 @@ export default function PriceVerification({ items = [] }) {
                 <th className="py-2 pr-3 text-right">Actual PPC</th>
                 <th className="py-2 pr-3 text-right">Expected PPC</th>
                 <th className="py-2 pr-3 text-center">PPC</th>
-                <th className="py-2 pr-3 text-right">Actual CBM</th>
-                <th className="py-2 pr-3 text-right">Expected CBM</th>
+                <th className="py-2 pr-3 text-right">Actual CBM/ctn</th>
+                <th className="py-2 pr-3 text-right">Expected CBM/ctn</th>
                 <th className="py-2 text-center">CBM</th>
               </tr>
             </thead>
