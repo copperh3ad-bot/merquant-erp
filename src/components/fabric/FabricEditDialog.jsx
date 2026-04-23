@@ -45,7 +45,29 @@ export default function FabricEditDialog({ open, onOpenChange, article, onSave, 
           <p className="text-xs text-muted-foreground">Changes saved as master data and applied to future POs for this article.</p>
         </DialogHeader>
 
-        <div className="overflow-x-auto">
+        {/* Article-level fields. Product Dimensions lives here (not on components)
+            because it's a property of the finished article, not of each cut piece.
+            If present, it overrides any value resolved from tech_packs. */}
+        <div className="bg-slate-50 border border-slate-200 rounded p-3 grid grid-cols-2 gap-3 text-xs">
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+              Product Dimensions
+              <span className="ml-1 font-normal text-slate-400">(manual override — leave blank to use tech pack)</span>
+            </label>
+            <input
+              className={inp}
+              placeholder='e.g. 20x26" or 60x80x13.5cm'
+              value={form.product_dimensions || ""}
+              onChange={e => setForm(f => ({ ...f, product_dimensions: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">Article Code</label>
+            <div className="text-xs px-1.5 py-1 font-mono text-slate-700">{article?.article_code || "—"}</div>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto mt-3">
           <table className="w-full text-xs border-collapse">
             <thead>
               <tr className="bg-slate-100">
@@ -103,4 +125,3 @@ export default function FabricEditDialog({ open, onOpenChange, article, onSave, 
     </Dialog>
   );
 }
-

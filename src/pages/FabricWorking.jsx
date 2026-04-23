@@ -23,6 +23,24 @@ import { isFabricComponentWithWarn } from "@/lib/fabricClassifier";
 // is excluded from this sheet (and a console.warn flags it for review).
 const isFabricComponent = isFabricComponentWithWarn;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Dimensions feature (2026-04) — garment/article size dimensions such as
+// "FULL = 54x75x11\"" are surfaced from three sources in priority order:
+//
+//   1. articles.product_dimensions        — direct manual override
+//   2. tech_packs.size_chart by item_code — covers family tech packs where a
+//      single tech pack row contains dimensions for many sibling SKUs keyed
+//      by their item_code (the common BOB pattern)
+//   3. tech_packs.size_chart by article_code + product_size — legacy path for
+//      tech packs that were stored under the article's own code and keyed by
+//      human-readable size
+//
+// This layered approach means we don't lose coverage when a tech pack is stored
+// under one article_code but contains dimensions for its entire family.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const normalizeSizeKey = (s) => String(s == null ? "" : s).trim().toUpperCase();
+
 export default function FabricWorking() {
   const qc = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -40,6 +58,84 @@ export default function FabricWorking() {
     queryFn: () => mfg.articles.listByPO(activePo.id),
     enabled: !!activePo?.id,
   });
+
+  // Load every tech pack that could contain dimensions for articles in this
+  // PO. We cannot filter by article_code alone — a family tech pack stored
+  // under GPMP50 contains dimensions for GPMP33, GPMP38, etc. — so we fetch
+  // all tech packs and build two indexes: one by item_code inside size_chart,
+  // and one by (tech_pack.article_code, size).
+  const { data: dimsIndex } = useQuery({
+    queryKey: ["dimsIndex", activePo?.id],
+    enabled: !!activePo?.id && (articles?.length || 0) > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("tech_packs")
+        .select("article_code, extracted_measurements, created_at")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+
+      // byItemCode: Map<ITEM_CODE, product_dimensions>
+      // byCodeSize: Map<ARTICLE_CODE, Map<SIZE, product_dimensions>>
+      const byItemCode = new Map();
+      const byCodeSize = new Map();
+
+      for (const tp of data || []) {
+        const chart = tp?.extracted_measurements?.size_chart;
+        if (!chart || typeof chart !== "object") continue;
+
+        if (!byCodeSize.has(tp.article_code)) byCodeSize.set(tp.article_code, new Map());
+        const sizeMap = byCodeSize.get(tp.article_code);
+
+        for (const [sizeRaw, row] of Object.entries(chart)) {
+          const dim = row?.product_dimensions;
+          if (!dim) continue;
+          const sizeKey = normalizeSizeKey(sizeRaw);
+          // First-seen wins (results are ordered by created_at DESC so most
+          // recent tech pack is authoritative).
+          if (!sizeMap.has(sizeKey)) sizeMap.set(sizeKey, String(dim));
+          const itemCode = row?.item_code;
+          if (itemCode && !byItemCode.has(itemCode)) byItemCode.set(itemCode, String(dim));
+        }
+
+        // Fallback: some older tech packs only populate a single this_sku row.
+        const only = tp?.extracted_measurements?.this_sku;
+        if (only?.product_dimensions) {
+          if (only.item_code && !byItemCode.has(only.item_code)) {
+            byItemCode.set(only.item_code, String(only.product_dimensions));
+          }
+          if (only.size) {
+            const k = normalizeSizeKey(only.size);
+            if (!sizeMap.has(k)) sizeMap.set(k, String(only.product_dimensions));
+          }
+        }
+      }
+      return { byItemCode, byCodeSize };
+    },
+  });
+
+  // Resolve product_dimensions for an article/component pair using the layered
+  // priority described at the top of the file. Returns "" if nothing is known,
+  // which renders as a dash in the UI.
+  const resolveDims = (article, productSize) => {
+    // Layer 1: direct manual override on the article row.
+    if (article?.product_dimensions) return String(article.product_dimensions);
+    if (!dimsIndex) return "";
+
+    // Layer 2: item_code match — handles family tech packs.
+    if (article?.article_code && dimsIndex.byItemCode.has(article.article_code)) {
+      return dimsIndex.byItemCode.get(article.article_code);
+    }
+
+    // Layer 3: legacy (article_code, size) match.
+    if (article?.article_code && productSize) {
+      const sizeMap = dimsIndex.byCodeSize.get(article.article_code);
+      if (sizeMap) {
+        const hit = sizeMap.get(normalizeSizeKey(productSize));
+        if (hit) return hit;
+      }
+    }
+    return "";
+  };
 
   // Annotate components with their article_code so the classifier's
   // fail-closed console warning can identify WHICH article has a row with an
@@ -170,6 +266,7 @@ export default function FabricWorking() {
       }
       qc.invalidateQueries({ queryKey: ["articles", activePo.id] });
       qc.invalidateQueries({ queryKey: ["allArticles"] });
+      qc.invalidateQueries({ queryKey: ["dimsIndex", activePo.id] });
       alert(`${updated} article${updated !== 1 ? "s" : ""} updated · ${skipped} skipped (no tech pack) · ${preservedAccessoryRows} accessory/trim row${preservedAccessoryRows !== 1 ? "s" : ""} preserved`);
     } catch (e) {
       alert("Failed: " + e.message);
@@ -187,10 +284,25 @@ export default function FabricWorking() {
 
   const handleDownloadCSV = () => {
     const rows = [["PO", activePo?.po_number, "Customer", activePo?.customer_name], []];
-    rows.push(["Article", "Colors", "Total Qty", "Part", "Prod Size", "Direction", "Fabrication", "Width cm", "Cut/Unit m", "Net Mtrs", "Wastage%", "Total Mtrs"]);
+    rows.push(["Article", "Colors", "Total Qty", "Part", "Prod Size", "Dimensions", "Direction", "Fabrication", "Width cm", "Cut/Unit m", "Net Mtrs", "Wastage%", "Total Mtrs"]);
     combinedGroups.forEach(g => {
       g.components.forEach((comp, i) => {
-        rows.push([i===0?g.displayName:"", i===0?g.colors:"", i===0?g.totalQty:"", comp.component_type, comp.product_size||"", comp.direction||"", comp.fabric_type, comp.width||"", (comp.consumption_per_unit||0).toFixed(4), (comp.net_total||0).toFixed(2), (comp.wastage_percent||6)+"%", (comp.total_required||0).toFixed(2)]);
+        const dims = resolveDims(g.template, comp.product_size);
+        rows.push([
+          i===0?g.displayName:"",
+          i===0?g.colors:"",
+          i===0?g.totalQty:"",
+          comp.component_type,
+          comp.product_size||"",
+          dims,
+          comp.direction||"",
+          comp.fabric_type,
+          comp.width||"",
+          (comp.consumption_per_unit||0).toFixed(4),
+          (comp.net_total||0).toFixed(2),
+          (comp.wastage_percent||6)+"%",
+          (comp.total_required||0).toFixed(2),
+        ]);
       });
     });
     rows.push([], ["FABRIC SUMMARY"], ["Fabric Type","Width","Net Mtrs","Total Mtrs (w/ wastage)"]);
@@ -221,6 +333,9 @@ export default function FabricWorking() {
   //     renders as a garbled "%İ" on Windows.
   //   - Row height is computed in a probe pass so pagination works with
   //     variable-height rows (wrapped fabric types).
+  //   - 2026-04: added "Dimensions" column between Prod. Size and Direction.
+  //     Column widths rebalanced: Fabrication trimmed ~12mm in both layouts
+  //     to free room for the new column without overflowing A4 landscape.
   const handleDownloadPDF = () => {
     const doc = new jsPDF({ orientation: "landscape", format: "a4" });
 
@@ -329,33 +444,38 @@ export default function FabricWorking() {
     doc.text(clipText(subLine, USABLE_W, 7.5), MARGIN_L, 17);
     let y = 22;
 
+    // Column widths adjusted to fit the new "Dimensions" column within the A4
+    // landscape usable width. Fabrication was the widest wrappable column, so
+    // it absorbs most of the trim.
     const COMBINED_COLS = [
       { label: "Article (Base)", width: 30,  align: "left",   mode: "clip" },
-      { label: "Colors",         width: 22,  align: "left",   mode: "clip" },
+      { label: "Colors",         width: 20,  align: "left",   mode: "clip" },
       { label: "Total Qty",      width: 12,  align: "right",  mode: "clip" },
-      { label: "Part",           width: 20,  align: "left",   mode: "clip" },
-      { label: "Prod. Size",     width: 25,  align: "left",   mode: "clip" },
+      { label: "Part",           width: 18,  align: "left",   mode: "clip" },
+      { label: "Prod. Size",     width: 22,  align: "left",   mode: "clip" },
+      { label: "Dimensions",     width: 20,  align: "center", mode: "clip" },
       { label: "Dir",            width: 10,  align: "center", mode: "clip" },
-      { label: "Fabrication",    width: 66,  align: "left",   mode: "wrap" },
+      { label: "Fabrication",    width: 55,  align: "left",   mode: "wrap" },
       { label: "Width",          width: 12,  align: "center", mode: "clip" },
       { label: "Cut/Unit",       width: 14,  align: "right",  mode: "clip" },
       { label: "Net Mtrs",       width: 14,  align: "right",  mode: "clip" },
-      { label: "Wastage",        width: 12,  align: "right",  mode: "clip" },
-      { label: "Total Mtrs",     width: 16,  align: "right",  mode: "clip" },
+      { label: "Wastage",        width: 11,  align: "right",  mode: "clip" },
+      { label: "Total Mtrs",     width: 15,  align: "right",  mode: "clip" },
     ];
     const SEPARATE_COLS = [
-      { label: "Article",     width: 30,  align: "left",   mode: "clip" },
-      { label: "Code",        width: 22,  align: "left",   mode: "clip" },
+      { label: "Article",     width: 28,  align: "left",   mode: "clip" },
+      { label: "Code",        width: 20,  align: "left",   mode: "clip" },
       { label: "Qty",         width: 12,  align: "right",  mode: "clip" },
-      { label: "Part",        width: 20,  align: "left",   mode: "clip" },
-      { label: "Prod. Size",  width: 25,  align: "left",   mode: "clip" },
+      { label: "Part",        width: 18,  align: "left",   mode: "clip" },
+      { label: "Prod. Size",  width: 22,  align: "left",   mode: "clip" },
+      { label: "Dimensions",  width: 20,  align: "center", mode: "clip" },
       { label: "Dir",         width: 10,  align: "center", mode: "clip" },
-      { label: "Fabrication", width: 64,  align: "left",   mode: "wrap" },
+      { label: "Fabrication", width: 55,  align: "left",   mode: "wrap" },
       { label: "Width",       width: 12,  align: "center", mode: "clip" },
       { label: "Cut/Unit",    width: 14,  align: "right",  mode: "clip" },
       { label: "Net Mtrs",    width: 14,  align: "right",  mode: "clip" },
-      { label: "Wastage",     width: 12,  align: "right",  mode: "clip" },
-      { label: "Total Mtrs",  width: 16,  align: "right",  mode: "clip" },
+      { label: "Wastage",     width: 11,  align: "right",  mode: "clip" },
+      { label: "Total Mtrs",  width: 15,  align: "right",  mode: "clip" },
     ];
     const SUMMARY_COLS = [
       { label: "Fabric Type", width: 170, align: "left",   mode: "wrap" },
@@ -377,12 +497,14 @@ export default function FabricWorking() {
       combinedGroups.forEach((g, gi) => {
         g.components.forEach((comp, ci) => {
           const isFirst = ci === 0;
+          const dims = resolveDims(g.template, comp.product_size);
           const values = [
             isFirst ? g.displayName : "",
             isFirst ? g.colors : "",
             isFirst ? String(g.totalQty == null ? "" : g.totalQty) : "",
             comp.component_type || "",
             comp.product_size || "",
+            dims || "",
             comp.direction || "",
             comp.fabric_type || "",
             comp.width ? `${comp.width}cm` : "",
@@ -391,8 +513,9 @@ export default function FabricWorking() {
             `${comp.wastage_percent == null ? 6 : comp.wastage_percent}%`,
             (comp.total_required || 0).toFixed(2),
           ];
-          const inner = COMBINED_COLS[6].width - CELL_PAD_X * 2;
-          const probeLines = wrapText(values[6], inner, FONT_SIZE).length;
+          // Fabrication is now at index 7 (was 6) after inserting Dimensions.
+          const inner = COMBINED_COLS[7].width - CELL_PAD_X * 2;
+          const probeLines = wrapText(values[7], inner, FONT_SIZE).length;
           const probeH = Math.max(BASE_ROW_H, probeLines * LINE_H + CELL_PAD_Y);
           ensureRoom(COMBINED_COLS, probeH);
           drawRow(COMBINED_COLS, values, y, { zebra: gi % 2 === 0 });
@@ -425,12 +548,14 @@ export default function FabricWorking() {
             const isFirst = ci === 0;
             const net = (comp.consumption_per_unit || 0) * (art.order_quantity || 0);
             const total = comp.total_required || net * (1 + (comp.wastage_percent || 0) / 100);
+            const dims = resolveDims(art, comp.product_size);
             const values = [
               isFirst ? (art.article_name || "") : "",
               isFirst ? (art.article_code || "") : "",
               isFirst ? String(art.order_quantity || "") : "",
               comp.component_type || "",
               comp.product_size || "",
+              dims || "",
               comp.direction || "",
               comp.fabric_type || "",
               comp.width ? `${comp.width}cm` : "",
@@ -439,8 +564,9 @@ export default function FabricWorking() {
               `${comp.wastage_percent == null ? 6 : comp.wastage_percent}%`,
               total.toFixed(2),
             ];
-            const inner = SEPARATE_COLS[6].width - CELL_PAD_X * 2;
-            const probeLines = wrapText(values[6], inner, FONT_SIZE).length;
+            // Fabrication is now at index 7 (was 6) after inserting Dimensions.
+            const inner = SEPARATE_COLS[7].width - CELL_PAD_X * 2;
+            const probeLines = wrapText(values[7], inner, FONT_SIZE).length;
             const probeH = Math.max(BASE_ROW_H, probeLines * LINE_H + CELL_PAD_Y);
             ensureRoom(SEPARATE_COLS, probeH);
             drawRow(SEPARATE_COLS, values, y, { zebra: artIdx % 2 === 0 });
@@ -583,7 +709,7 @@ export default function FabricWorking() {
               <table className="w-full text-xs border-collapse" style={{ fontFamily:"Arial,sans-serif" }}>
                 <thead>
                   <tr style={thStyle}>
-                    {["Article (Base)","Colors","Total Qty","Part","Prod. Size","Direction","Fabrication","Width cm","Cut/Unit m","Net Mtrs","Wastage %","Total Mtrs", ...(readOnly ? [] : [""])].map(col => (
+                    {["Article (Base)","Colors","Total Qty","Part","Prod. Size","Dimensions","Direction","Fabrication","Width cm","Cut/Unit m","Net Mtrs","Wastage %","Total Mtrs", ...(readOnly ? [] : [""])].map(col => (
                       <th key={col} className={thCls}>{col}</th>
                     ))}
                   </tr>
@@ -596,12 +722,14 @@ export default function FabricWorking() {
                           <td className={`${tdCls} font-semibold text-blue-900`}>{g.displayName}</td>
                           <td className={`${tdCls} text-gray-500`}>{g.colors}</td>
                           <td className={`${tdCls} text-center font-semibold`}>{g.totalQty}</td>
-                          <td colSpan={9} className={`${tdCls} text-muted-foreground italic`}>No components — click edit to add fabric specs</td>
+                          <td colSpan={10} className={`${tdCls} text-muted-foreground italic`}>No components — click edit to add fabric specs</td>
                           {!readOnly && <td className={`${tdCls} text-center no-print`}>
                             <button onClick={() => setEditingArticle(g.template)} className="text-blue-600 hover:text-blue-800"><Pencil className="h-3.5 w-3.5"/></button>
                           </td>}
                         </tr>
-                      ) : g.components.map((comp, ci) => (
+                      ) : g.components.map((comp, ci) => {
+                        const dims = resolveDims(g.template, comp.product_size);
+                        return (
                         <tr key={ci} style={{ backgroundColor: gi%2===0?"#EBF0FA":"#fff" }}>
                           {ci===0 && <>
                             <td rowSpan={g.components.length} className={`${tdCls} font-semibold text-blue-900 align-top`}>{g.displayName}</td>
@@ -610,6 +738,7 @@ export default function FabricWorking() {
                           </>}
                           <td className={`${tdCls} font-medium`}>{comp.component_type}</td>
                           <td className={`${tdCls} text-center`}>{comp.product_size||"—"}</td>
+                          <td className={`${tdCls} text-center font-mono`}>{dims||"—"}</td>
                           <td className={`${tdCls} text-center`}>{comp.direction||"—"}</td>
                           <td className={tdCls}>{comp.fabric_type}</td>
                           <td className={`${tdCls} text-center`}>{comp.width?`${comp.width}cm`:"—"}</td>
@@ -621,7 +750,8 @@ export default function FabricWorking() {
                             <button onClick={() => setEditingArticle(g.template)} className="text-blue-600 hover:text-blue-800"><Pencil className="h-3.5 w-3.5"/></button>
                           </td>}
                         </tr>
-                      ))}
+                        );
+                      })}
                     </React.Fragment>
                   ))}
                 </tbody>
@@ -641,7 +771,7 @@ export default function FabricWorking() {
                     <table className="w-full text-xs border-collapse" style={{ fontFamily:"Arial,sans-serif" }}>
                       <thead>
                         <tr style={thStyle}>
-                          {["Article","Code","Qty","Part","Prod. Size","Direction","Fabrication","Width cm","Cut/Unit m","Net Mtrs","Wastage %","Total Mtrs", ...(readOnly ? [] : [""])].map(col => (
+                          {["Article","Code","Qty","Part","Prod. Size","Dimensions","Direction","Fabrication","Width cm","Cut/Unit m","Net Mtrs","Wastage %","Total Mtrs", ...(readOnly ? [] : [""])].map(col => (
                             <th key={col} className={thCls}>{col}</th>
                           ))}
                         </tr>
@@ -675,6 +805,7 @@ export default function FabricWorking() {
                               ) : comps.map((comp, idx) => {
                                 const net = (comp.consumption_per_unit||0)*(article.order_quantity||0);
                                 const total = comp.total_required || net*(1+(comp.wastage_percent||0)/100);
+                                const dims = resolveDims(article, comp.product_size);
                                 return (
                                   <tr key={idx} style={{ backgroundColor:artBg }}>
                                     {idx===0 && <>
@@ -684,6 +815,7 @@ export default function FabricWorking() {
                                     </>}
                                     <td className={`${tdCls} font-medium`}>{comp.component_type}</td>
                                     <td className={`${tdCls} text-center`}>{comp.product_size||"—"}</td>
+                                    <td className={`${tdCls} text-center font-mono`}>{dims||"—"}</td>
                                     <td className={`${tdCls} text-center`}>{comp.direction||"—"}</td>
                                     <td className={tdCls}>{comp.fabric_type}</td>
                                     <td className={`${tdCls} text-center`}>{comp.width?`${comp.width}cm`:"—"}</td>
