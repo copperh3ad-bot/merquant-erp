@@ -182,16 +182,28 @@ export default function PurchaseOrders() {
           throw new Error("PO has no item codes — cannot import without line items.");
         }
 
-        // Widen query: pull by raw codes AND normalized forms (in case Master Data has variants).
-        // IMPORTANT: Supabase applies a default 1000-row limit when no .limit()/.range() is set.
-        // As the consumption_library grows with more tech packs, unsetting that cap is required
-        // or SKUs from the most-recently-imported rows get silently dropped from the lookup set.
+        // Fetch only the consumption_library rows we actually need for this PO's SKUs.
+        // PostgREST enforces a max-rows cap (default 1000) that .limit() can't exceed,
+        // so we filter server-side instead of pulling the whole table. We include each
+        // full SKU AND its stripped-color base SKU so family tech packs (where fabric is
+        // keyed by base code) can resolve. Total lookup set is typically <200 codes.
+        const lookupCodes = new Set();
+        for (const { raw } of itemCodeNorm) {
+          if (!raw) continue;
+          lookupCodes.add(raw);
+          const base = baseSkuOf(raw);
+          if (base && base !== raw) lookupCodes.add(base);
+          // Also try case variants in case spreadsheet stored differently
+          lookupCodes.add(raw.toUpperCase());
+          if (base) lookupCodes.add(base.toUpperCase());
+        }
+        const lookupArr = [...lookupCodes];
         const { data: cl, error: clErr } = await supabase
           .from("consumption_library")
           .select("item_code, kind, component_type, fabric_type, material, gsm, color, construction, treatment, width_cm, consumption_per_unit, wastage_percent, supplier, placement, size_spec, size")
-          .limit(100000);
+          .in("item_code", lookupArr);
         if (clErr) throw clErr;
-        console.log(`[PO Import] Loaded ${cl?.length || 0} consumption_library rows`);
+        console.log(`[PO Import] Loaded ${cl?.length || 0} consumption_library rows for ${lookupArr.length} lookup codes`);
 
         // Index master data by normalized item_code so we can match loosely
         const clByNorm = new Map();       // norm -> [rows]
