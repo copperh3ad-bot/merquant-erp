@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Database, Upload, Download, FileSpreadsheet, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Link as LinkIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { validateMasterData } from "@/lib/validators/masterDataValidator";
+import ValidationReport from "@/components/masterdata/ValidationReport";
 
 async function loadSheetJS() {
   if (window.XLSX) return window.XLSX;
@@ -181,12 +183,13 @@ export default function MasterData() {
   const [stage, setStage] = useState("idle");
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState(null);
+  const [validation, setValidation] = useState(null);
   const [activeTab, setActiveTab] = useState(SHEET_ORDER[0]);
   const [tpLinked, setTpLinked] = useState(new Set());
   const fileRef = useRef();
 
   const reset = () => {
-    setStage("idle"); setMessage(""); setPreview(null); setTpLinked(new Set());
+    setStage("idle"); setMessage(""); setPreview(null); setValidation(null); setTpLinked(new Set());
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -238,6 +241,20 @@ export default function MasterData() {
       setMessage(`${totV} rows ready · ${totI} with errors`);
       const first = SHEET_ORDER.find(n => report[n].valid.length + report[n].invalid.length > 0);
       if (first) setActiveTab(first);
+
+      // Layer 1 deterministic validation — runs across ALL parsed rows (valid+invalid).
+      // Catches structural issues like duplicate upsert keys BEFORE the user clicks Import,
+      // so we don't hit the "ON CONFLICT DO UPDATE cannot affect row a second time" failure.
+      const sheetsForValidation = {};
+      for (const sheetName of SHEET_ORDER) {
+        const r = report[sheetName];
+        if (!r) continue;
+        sheetsForValidation[sheetName] = [
+          ...r.valid.map(v => v.raw),
+          ...r.invalid.map(v => v.raw),
+        ];
+      }
+      setValidation(validateMasterData(sheetsForValidation));
     } catch (e) { setStage("error"); setMessage(e.message || "Parse failed"); }
   };
 
@@ -504,10 +521,18 @@ export default function MasterData() {
               );
             })()}
 
+            {validation && <ValidationReport result={validation} />}
+
             <div className="flex justify-end gap-2 pt-2 border-t">
               <Button variant="outline" size="sm" onClick={reset}>Cancel</Button>
               <Button size="sm" onClick={handleImport}
-                      disabled={Object.values(preview).every(r => r.valid.length === 0)}>
+                      disabled={
+                        Object.values(preview).every(r => r.valid.length === 0) ||
+                        (validation && validation.errors.length > 0)
+                      }
+                      title={validation && validation.errors.length > 0
+                        ? `Fix ${validation.errors.length} error${validation.errors.length > 1 ? 's' : ''} in the validation report to enable Import`
+                        : undefined}>
                 Import {Object.values(preview).reduce((s, r) => s + r.valid.length, 0)} rows
               </Button>
             </div>
