@@ -53,7 +53,9 @@ const SHEETS = {
       fabric_type: toStr(r.fabric_type), gsm: toNum(r.gsm),
       construction: toStr(r.construction),
       treatment: toStr(r.finish) || toStr(r.treatment),
-      color: toStr(r.color), width_cm: toNum(r.width_cm),
+      // Upsert key requires non-null for stable matching (see 2026-04-24 cleanup migration)
+      color: toStr(r.color) ?? "", material: "",
+      width_cm: toNum(r.width_cm),
       consumption_per_unit: toNum(r.consumption_per_unit),
       wastage_percent: toNum(r.wastage_percent),
       supplier: toStr(r.supplier), tech_pack_code: toStr(r.tech_pack_code),
@@ -73,7 +75,9 @@ const SHEETS = {
       item_code: toStr(r.item_code), size: toStr(r.size),
       kind: "accessory",
       component_type: toStr(r.category) || toStr(r.item_name),
-      material: toStr(r.item_name) || toStr(r.material),
+      // Upsert key requires non-null for stable matching (see 2026-04-24 cleanup migration)
+      color: "",
+      material: (toStr(r.item_name) || toStr(r.material)) ?? "",
       size_spec: toStr(r.size_spec),
       placement: toStr(r.placement),
       consumption_per_unit: toNum(r.consumption_per_unit),
