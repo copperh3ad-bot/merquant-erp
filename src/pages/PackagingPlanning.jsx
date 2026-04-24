@@ -74,6 +74,22 @@ const TAB_CONFIG = {
     defaultWastage: 5,
     showEAN: true,
   },
+  Zipper: {
+    category: "Zipper",
+    typeOptions: ["SBS Nylon Zipper","Coil Zipper","Metal Zipper","Invisible Zipper","Plastic Molded Zipper","Custom"],
+    typeLabel: "Zipper Type",
+    qualityLabel: "Length / Description",
+    qualityPlaceholder: "e.g. #3 SBS locking, 120cm, white",
+    defaultWastage: 3,
+  },
+  Trim: {
+    category: "Trim",
+    typeOptions: ["Elastic","Drawcord","Cord Lock","Drawcord Stopper","Jacquard Band","Velcro","Rivet","Button","Ribbon","Piping","Custom"],
+    typeLabel: "Trim Type",
+    qualityLabel: "Material / Description",
+    qualityPlaceholder: "e.g. 0.6cm elastic, grey jacquard",
+    defaultWastage: 3,
+  },
 };
 
 const SUB_TABS = Object.keys(TAB_CONFIG);
@@ -280,6 +296,22 @@ export default function PackagingPlanning() {
     queryKey: ["accessoryItems"],
     queryFn: async () => { const { data, error } = await supabase.from("accessory_items").select("*").order("category").limit(5000); if (error) throw error; return data; }
   });
+  // Master data accessory specs (from consumption_library). Used as a fallback
+  // to seed Packaging Planning rows when there are no saved accessory_items
+  // yet for a given PO article — so the production team sees the specs they
+  // uploaded in Master Data without re-typing them.
+  const { data: masterAccessorySpecs = [] } = useQuery({
+    queryKey: ["masterAccessorySpecs"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("consumption_library")
+        .select("item_code,component_type,material,size_spec,placement,wastage_percent,consumption_per_unit")
+        .eq("kind", "accessory")
+        .limit(5000);
+      if (error) return [];
+      return data || [];
+    }
+  });
   const { data: allTemplates = [] } = useQuery({
     queryKey: ["accessoryTemplates"],
     queryFn: () => accessoryTemplates.list(),
@@ -315,13 +347,62 @@ export default function PackagingPlanning() {
 
   const poArticleIds = poArticles.map(a => a.id).sort().join(",");
   const itemIds = existingItems.map(i => i.id).sort().join(",");
+  const masterSpecsKey = masterAccessorySpecs.length;
 
   // Initialise rows from existing DB data when PO / articles change
   useEffect(() => {
     if (!activePo || poArticles.length === 0) return;
-    const key = `${activePo.id}|${poArticleIds}|${itemIds}`;
+    const key = `${activePo.id}|${poArticleIds}|${itemIds}|${masterSpecsKey}`;
     if (initKeyRef.current === key) return;
     initKeyRef.current = key;
+
+    // Helper: seed rows from master data (consumption_library) when no saved
+    // accessory_items exist yet for this article+category. Returns null if no
+    // matching master-data rows found (so caller can fall back to default empty row).
+    const seedFromMasterData = (articleCode, tabCategory, cfg) => {
+      if (!articleCode) return null;
+      const rows = masterAccessorySpecs.filter(
+        m => m.item_code === articleCode && m.component_type === tabCategory
+      );
+      if (rows.length === 0) return null;
+      return rows.map(m => {
+        // Master data wastage is stored as decimal (0.02 = 2%). Packaging
+        // Planning stores wastage as a percent (2). Convert if needed.
+        const wastage = m.wastage_percent != null
+          ? (m.wastage_percent <= 1 ? m.wastage_percent * 100 : m.wastage_percent)
+          : cfg.defaultWastage;
+        // Map master-data fields to Packaging Planning row shape:
+        //   - type    ← material (the descriptive name of the item)
+        //   - quality ← material (repeated so it shows in the Quality column)
+        //   - size    ← size_spec (dimensions from master data)
+        // For tabs with splitDescSize=true (Polybag/Stiffener/Carton):
+        //   - description ← material, size ← size_spec
+        if (cfg.splitDescSize) {
+          return {
+            type: cfg.typeOptions[0],
+            quality: "",
+            description: m.material || "",
+            size: m.size_spec || "",
+            wastage_percent: wastage,
+            multiplier: 1,
+            pc_ean_code: "",
+            carton_ean_code: "",
+            existing_id: null,
+          };
+        }
+        return {
+          type: cfg.typeOptions[0],
+          quality: m.material || "",
+          description: "",
+          size: m.size_spec || "",
+          wastage_percent: wastage,
+          multiplier: 1,
+          pc_ean_code: "",
+          carton_ean_code: "",
+          existing_id: null,
+        };
+      });
+    };
 
     const init = {};
     SUB_TABS.forEach(tab => {
@@ -344,13 +425,17 @@ export default function PackagingPlanning() {
             existing_id: e.id,
           }));
         } else {
-          init[tab][art.id] = [defaultRow(cfg)];
+          // Try to seed from master data before falling back to a blank row.
+          // This restores the "descriptions should auto-fill from what I
+          // uploaded in Master Data" expectation.
+          const seeded = seedFromMasterData(art.article_code, cfg.category, cfg);
+          init[tab][art.id] = seeded || [defaultRow(cfg)];
         }
       });
     });
     setAllRows(init);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePo?.id, poArticleIds, itemIds]);
+  }, [activePo?.id, poArticleIds, itemIds, masterSpecsKey]);
 
   const handleChange = (tab, artId, newRows) =>
     setAllRows(prev => ({ ...prev, [tab]: { ...prev[tab], [artId]: newRows } }));
