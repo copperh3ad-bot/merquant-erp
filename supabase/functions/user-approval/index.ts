@@ -70,8 +70,22 @@ async function isOwner(userId: string): Promise<boolean> {
     .select("role,email")
     .eq("id", userId)
     .maybeSingle();
-  if (!profile) return false;
-  if (profile.role === "owner" || profile.role === "admin") return true;
+  if (!profile) {
+    // No profile row — fall back to signup_whitelist using auth.users.email
+    const { data: user } = await admin.auth.admin.getUserById(userId);
+    const email = user?.user?.email;
+    if (!email) return false;
+    const { data: wl } = await admin
+      .from("signup_whitelist")
+      .select("role")
+      .eq("email", email)
+      .maybeSingle();
+    return !!wl;
+  }
+  // Case-insensitive role check. Schema uses capitalized values ("Owner",
+  // "Manager"); older code used lowercase. Accept both.
+  const role = (profile.role || "").toLowerCase();
+  if (role === "owner" || role === "admin") return true;
   const { data: wl } = await admin
     .from("signup_whitelist")
     .select("role")
