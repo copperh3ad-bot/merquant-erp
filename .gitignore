@@ -59,3 +59,9 @@ merquant-repo-backup-*/
 # Supabase CLI local state
 supabase/.temp/
 supabase/.branches/
+
+# Delivery artifacts at repo root — zips and xlsx files get dropped here
+# during patch-application workflows. Ignore them so they don't pollute git status.
+/*.zip
+/*.xlsx
+/extract/
