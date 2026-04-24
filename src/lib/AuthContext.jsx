@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { supabase } from "@/api/supabaseClient";
 import { can as canCheck, canSeePage as canSeePageCheck, canSeeField as canSeeFieldCheck } from "@/lib/permissions";
 
@@ -7,6 +7,13 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(undefined);
   const [profile, setProfile] = useState(null);
+  // Tracks the currently-known user ID. Supabase fires onAuthStateChange on
+  // tab focus, visibility change, and token refresh — in those cases the
+  // session object is newly allocated but represents the SAME user. Re-rendering
+  // all consumers of useAuth() in those cases unmounts in-progress forms
+  // (uploaders, dialogs, preview states). We compare the user id and only
+  // propagate state changes when identity actually changes.
+  const sessionUserIdRef = useRef(null);
 
   const fetchProfile = async (userId) => {
     // Try 3 times with increasing delays — handles race conditions on first load
@@ -38,13 +45,29 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
+      sessionUserIdRef.current = session?.user?.id ?? null;
       if (session?.user) fetchProfile(session.user.id);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const newUserId = session?.user?.id ?? null;
+      const prevUserId = sessionUserIdRef.current;
+
+      // Only update state when the authenticated identity actually changes.
+      // This prevents cascading re-renders on tab focus / token refresh that
+      // would otherwise unmount uploaders and lose in-progress form state.
+      if (newUserId === prevUserId) {
+        return;
+      }
+
+      sessionUserIdRef.current = newUserId;
       setSession(session);
-      if (session?.user) fetchProfile(session.user.id);
-      else { setProfile(null); }
+
+      if (session?.user) {
+        fetchProfile(session.user.id);
+      } else {
+        setProfile(null);
+      }
     });
 
     return () => subscription.unsubscribe();
