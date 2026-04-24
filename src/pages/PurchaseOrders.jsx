@@ -183,10 +183,10 @@ export default function PurchaseOrders() {
         }
 
         // Fetch only the consumption_library rows we actually need for this PO's SKUs.
-        // PostgREST enforces a max-rows cap (default 1000) that .limit() can't exceed,
-        // so we filter server-side instead of pulling the whole table. We include each
-        // full SKU AND its stripped-color base SKU so family tech packs (where fabric is
-        // keyed by base code) can resolve. Total lookup set is typically <200 codes.
+        // PostgREST enforces a hard max-rows cap (default 1000) that .limit() can't exceed,
+        // so we (a) filter server-side by item_code, and (b) paginate via .range() in case
+        // the filtered result still exceeds 1000 rows (a big PO + many accessories per SKU
+        // can push past the cap).
         const lookupCodes = new Set();
         for (const { raw } of itemCodeNorm) {
           if (!raw) continue;
@@ -198,12 +198,24 @@ export default function PurchaseOrders() {
           if (base) lookupCodes.add(base.toUpperCase());
         }
         const lookupArr = [...lookupCodes];
-        const { data: cl, error: clErr } = await supabase
-          .from("consumption_library")
-          .select("item_code, kind, component_type, fabric_type, material, gsm, color, construction, treatment, width_cm, consumption_per_unit, wastage_percent, supplier, placement, size_spec, size")
-          .in("item_code", lookupArr);
-        if (clErr) throw clErr;
-        console.log(`[PO Import] Loaded ${cl?.length || 0} consumption_library rows for ${lookupArr.length} lookup codes`);
+
+        const PAGE = 1000;
+        const MAX_PAGES = 20;  // safety cap at 20,000 rows
+        const cl = [];
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const from = page * PAGE;
+          const to = from + PAGE - 1;
+          const { data, error } = await supabase
+            .from("consumption_library")
+            .select("item_code, kind, component_type, fabric_type, material, gsm, color, construction, treatment, width_cm, consumption_per_unit, wastage_percent, supplier, placement, size_spec, size")
+            .in("item_code", lookupArr)
+            .range(from, to);
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          cl.push(...data);
+          if (data.length < PAGE) break;  // last page
+        }
+        console.log(`[PO Import] Loaded ${cl.length} consumption_library rows for ${lookupArr.length} lookup codes`);
 
         // Index master data by normalized item_code so we can match loosely
         const clByNorm = new Map();       // norm -> [rows]
