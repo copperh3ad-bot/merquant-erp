@@ -76,29 +76,39 @@ const SHEETS = {
     transform: (r) => {
       const itemName = toStr(r.item_name) || "";
       const rawMaterial = toStr(r.material) || "";
-      // Disambiguate: include both item_name AND material in the material field
-      // so e.g. (Care Label, "3M non-woven") and (Size Label, "3M non-woven")
-      // become distinct upsert keys. Within a single SKU+category, duplicates
-      // only collide if BOTH item_name and material are identical (a true dup).
-      let material;
-      if (itemName && rawMaterial && itemName !== rawMaterial) {
-        material = `${itemName} — ${rawMaterial}`;
-      } else {
-        material = itemName || rawMaterial || "";
-      }
+      const sizeSpec = toStr(r.size_spec) || "";
+      const placement = toStr(r.placement) || "";
+      const parts = [itemName, rawMaterial, sizeSpec, placement].filter(Boolean);
+      const unique = parts.filter((p, i) => p !== parts[i - 1]);
+      const material = unique.join(" — ");
       return {
         item_code: toStr(r.item_code), size: toStr(r.size),
         kind: "accessory",
         component_type: toStr(r.category) || itemName,
         color: "",
         material,
-        size_spec: toStr(r.size_spec),
-        placement: toStr(r.placement),
+        size_spec: sizeSpec,
+        placement,
         consumption_per_unit: toNum(r.consumption_per_unit),
         wastage_percent: toNum(r.wastage_percent) || 0,
         supplier: toStr(r.supplier), tech_pack_code: toStr(r.tech_pack_code),
         notes: [toStr(r.variant), toStr(r.unit) ? `unit: ${toStr(r.unit)}` : null].filter(Boolean).join(" · ") || null,
       };
+    },
+    // After transform, drop byte-identical duplicates (same SKU+category+material+size+placement+consumption).
+    // Source tech packs sometimes list the same accessory twice; we silently keep the first.
+    postProcess: (rows) => {
+      const seen = new Set();
+      const out = [];
+      let dropped = 0;
+      for (const row of rows) {
+        const key = [row.item_code, row.component_type, row.material, row.size_spec, row.placement, row.consumption_per_unit].join("||");
+        if (seen.has(key)) { dropped++; continue; }
+        seen.add(key);
+        out.push(row);
+      }
+      if (dropped > 0) console.info(`[MasterDataImport] auto-dropped ${dropped} byte-identical accessory duplicate(s)`);
+      return out;
     },
   },
   "4. Carton Master": {
@@ -263,6 +273,26 @@ export default function MasterData() {
           else {
             try { valid.push({ raw, payload: cfg.transform(raw) }); }
             catch (e) { invalid.push({ raw, errors: [e.message] }); }
+          }
+        }
+        // Optional post-transform pass — used by accessory sheet to drop
+        // byte-identical duplicate rows (some tech packs list same item twice).
+        if (cfg.postProcess) {
+          const before = valid.length;
+          const dedupedPayloads = cfg.postProcess(valid.map(v => v.payload));
+          const keepKeys = new Set(dedupedPayloads.map(p => JSON.stringify(p)));
+          const filtered = [];
+          for (const v of valid) {
+            const k = JSON.stringify(v.payload);
+            if (keepKeys.has(k)) {
+              filtered.push(v);
+              keepKeys.delete(k); // ensure we don't keep multiple
+            }
+          }
+          valid.length = 0;
+          valid.push(...filtered);
+          if (valid.length < before) {
+            console.info(`[MasterDataImport] ${sheetName}: dropped ${before - valid.length} duplicate row(s)`);
           }
         }
         report[sheetName] = { valid, invalid };
