@@ -150,7 +150,20 @@ function validateFabricConsumption(rows) {
   // matchBy in importer: ["item_code","kind","component_type","color"]
   // kind is hardcoded to "fabric" so only these three distinguish rows
   out.push(...findDuplicates(s, rows, ["item_code", "component_type", "color"]));
-  out.push(...requireNumericRange(s, rows, "consumption_per_unit", 0.001, 50, WARN));
+  // Components where 0 consumption is normal (placeholders, swatches, samples)
+  const ZERO_CONSUMPTION_OK = new Set(["fabric bag","fabric swatch","swatch","sample","spare","reserve"]);
+  rows.forEach((r, i) => {
+    if (isNoteOnlyRow(r)) return;
+    const rowNum = i + 2;
+    const cons = Number(r.consumption_per_unit);
+    const comp = String(r.component_type || "").toLowerCase().trim();
+    if (!isNaN(cons) && cons === 0 && ZERO_CONSUMPTION_OK.has(comp)) return; // expected zero
+    if (isNaN(cons) || cons < 0.001 || cons > 50) {
+      out.push(issue(WARN, s, rowNum, "OUT_OF_RANGE",
+        `consumption_per_unit = ${r.consumption_per_unit} is outside expected range 0.001–50`,
+        "Unusual value. Double-check. If intentional, override this warning."));
+    }
+  });
   out.push(...requireNumericRange(s, rows, "gsm", 20, 500, WARN));
   out.push(...requireNumericRange(s, rows, "width_cm", 50, 400, WARN));
   // Wastage: allow 0-1 (decimal) or 0-100 (percent)
@@ -265,12 +278,52 @@ function validateCrossSheet(sheets) {
   const articles = sheets["1. Articles (SKUs)"] || [];
   const articleCodes = new Set(articles.map((r) => normKey(r.item_code)).filter(Boolean));
 
+  // Strip a trailing color/variant suffix (e.g. PCSJMO-T-WH -> PCSJMO-T).
+  // A "suffix" is a final hyphen-segment of 1-4 alphanumeric chars.
+  // If stripping yields the same string (no hyphen), returns null.
+  const stripSuffix = (code) => {
+    if (!code) return null;
+    const m = /^(.+)-([A-Z0-9]{1,4})$/i.exec(code);
+    return m ? normKey(m[1]) : null;
+  };
+
+  // Article matches a downstream code if either:
+  //   - exact match (PCSJMO-T-WH in articles AND fabric)
+  //   - article is suffixed and base appears in downstream (PCSJMO-T-WH article, PCSJMO-T fabric)
+  //   - article is base and downstream has a suffixed variant (rare; reverse case)
+  const articleMatchesAny = (articleCode, downstreamSet) => {
+    if (downstreamSet.has(articleCode)) return true;
+    const base = stripSuffix(articleCode);
+    if (base && downstreamSet.has(base)) return true;
+    return false;
+  };
+
+  // For orphan check (downstream sheet -> article), reverse logic:
+  // a fabric row's item_code matches if articles has it OR has a suffixed variant of it.
+  const articleSet = articleCodes;
+  const articleBaseToVariants = new Map();
+  articleCodes.forEach(ac => {
+    const b = stripSuffix(ac);
+    if (b) {
+      if (!articleBaseToVariants.has(b)) articleBaseToVariants.set(b, []);
+      articleBaseToVariants.get(b).push(ac);
+    }
+  });
+  const orphanMatches = (code) => {
+    if (articleSet.has(code)) return true;
+    if (articleBaseToVariants.has(code)) return true; // fabric uses base; articles have variants
+    const base = stripSuffix(code);
+    if (base && articleSet.has(base)) return true;
+    return false;
+  };
+
   const checkOrphans = (sheetName, rows) => {
     if (!rows || rows.length === 0) return;
     rows.forEach((r, i) => {
+      if (isNoteOnlyRow(r)) return;
       const rowNum = i + 2;
       const code = normKey(r.item_code);
-      if (code && !articleCodes.has(code)) {
+      if (code && !orphanMatches(code)) {
         out.push(
           issue(
             WARN,
@@ -302,7 +355,7 @@ function validateCrossSheet(sheets) {
     const rowNum = i + 2;
     const code = normKey(r.item_code);
     if (!code) return;
-    if (!fabricCodes.has(code)) {
+    if (!articleMatchesAny(code, fabricCodes)) {
       out.push(
         issue(
           INFO,
@@ -314,7 +367,7 @@ function validateCrossSheet(sheets) {
         )
       );
     }
-    if (!accCodes.has(code)) {
+    if (!articleMatchesAny(code, accCodes)) {
       out.push(
         issue(
           INFO,
