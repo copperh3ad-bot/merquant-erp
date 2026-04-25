@@ -60,6 +60,7 @@ function findDuplicates(sheetName, rows, keyCols, itemCodeCol = "item_code") {
 function requireField(sheetName, rows, field, severity = ERROR) {
   const issues = [];
   rows.forEach((r, i) => {
+    if (isNoteOnlyRow(r)) return; // skip rows that are pure annotations
     const rowNum = i + 2;
     const v = r[field];
     if (v == null || String(v).trim() === "") {
@@ -76,6 +77,21 @@ function requireField(sheetName, rows, field, severity = ERROR) {
     }
   });
   return issues;
+}
+
+// Note-only row: ALL fields empty/null EXCEPT 'remarks' or 'notes'.
+// Used to allow annotation rows in xlsx without tripping required-field checks.
+function isNoteOnlyRow(r) {
+  if (!r || typeof r !== "object") return false;
+  const NOTE_COLS = new Set(["remarks", "notes", "comment", "comments"]);
+  let hasNote = false;
+  let hasOther = false;
+  for (const [k, v] of Object.entries(r)) {
+    if (v == null || String(v).trim() === "") continue;
+    if (NOTE_COLS.has(k.toLowerCase())) hasNote = true;
+    else hasOther = true;
+  }
+  return hasNote && !hasOther;
 }
 
 // Numeric range check
