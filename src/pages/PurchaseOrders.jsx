@@ -204,27 +204,24 @@ export default function PurchaseOrders() {
           return dp[m][n];
         };
 
-        // Try fuzzy match for any code that didn't match exactly
         const allMasterCodes = [...hasFabricNorm];
-        const fuzzyResolutions = new Map();  // raw -> resolved norm
+        const baseSkuResolutions = new Map();  // raw -> resolved norm (deterministic, auto-apply)
+        const fuzzyResolutions = new Map();    // raw -> resolved norm (OCR, needs confirmation)
         const stillMissing = [];
-        // Strip a trailing color/variant suffix like -WH, -CG, -MB (1-4 alphanumeric chars
-        // after final hyphen). Used as a deterministic match before fuzzy search since
-        // master data fabric is often shared across colors.
         const stripVariantSuffix = (code) => {
           const m = /^(.+)-([A-Z0-9]{1,4})$/i.exec(code);
           return m ? m[1] : null;
         };
         for (const { raw, norm } of itemCodeNorm) {
           if (hasFabricNorm.has(norm)) continue;
-          // 1) Try base-SKU match (strip color/variant suffix)
+          // 1) Deterministic: strip color/variant suffix and check exact match
           const base = stripVariantSuffix(norm);
           if (base && hasFabricNorm.has(base)) {
-            fuzzyResolutions.set(raw, base);
-            console.log(`[PO Import] Base-SKU match: "${raw}" → "${canonicalFor.get(base)}" (stripped variant suffix)`);
+            baseSkuResolutions.set(raw, base);
+            console.log(`[PO Import] Base-SKU match (auto): "${raw}" → "${canonicalFor.get(base)}"`);
             continue;
           }
-          // 2) Fall back to Levenshtein fuzzy match (handles OCR errors)
+          // 2) Fuzzy: Levenshtein for likely OCR errors
           const maxDist = Math.max(2, Math.floor(norm.length / 5));
           let best = null, bestDist = Infinity;
           for (const md of allMasterCodes) {
@@ -237,6 +234,25 @@ export default function PurchaseOrders() {
             console.log(`[PO Import] Fuzzy match: "${raw}" → "${canonicalFor.get(best)}" (distance ${bestDist})`);
           } else {
             stillMissing.push(raw);
+          }
+        }
+
+        // Auto-apply deterministic base-SKU matches (no user confirmation)
+        for (const item of enrichedItems) {
+          const raw = item.item_code?.trim();
+          const baseNorm = baseSkuResolutions.get(raw);
+          if (baseNorm) item.item_code = canonicalFor.get(baseNorm);
+        }
+        // Rebuild itemCodeNorm with corrected codes for downstream
+        if (baseSkuResolutions.size > 0) {
+          itemCodeNorm.length = 0;
+          itemCodesRaw.length = 0;
+          for (const i of enrichedItems) {
+            const trimmed = i.item_code?.trim();
+            if (trimmed && !itemCodesRaw.includes(trimmed)) {
+              itemCodesRaw.push(trimmed);
+              itemCodeNorm.push({ raw: trimmed, norm: normalizeCode(trimmed) });
+            }
           }
         }
 
