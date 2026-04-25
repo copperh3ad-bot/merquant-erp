@@ -843,7 +843,9 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                 po_number:        po?.po_number || "",
                 customer_name:    po?.customer_name || bob.header.brand || "",
                 article_code:     sku.item_code,
-                article_name:     `${bob.header.product_type || ""} — ${sku.size}`.trim() || sku.item_code,
+                article_name:     sku.is_set
+                  ? `${bob.header.product_name || bob.header.product_type || "Set"} — ${sku.size}`.trim()
+                  : `${bob.header.product_type || ""} — ${sku.size}`.trim() || sku.item_code,
                 file_name:        file.name,
                 file_url:         blobUrl,
                 file_type:        fileType,
