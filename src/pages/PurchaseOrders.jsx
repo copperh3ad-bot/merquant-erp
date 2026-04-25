@@ -214,11 +214,12 @@ export default function PurchaseOrders() {
         };
         for (const { raw, norm } of itemCodeNorm) {
           if (hasFabricNorm.has(norm)) continue;
-          // 1) Deterministic: strip color/variant suffix and check exact match
-          const base = stripVariantSuffix(norm);
-          if (base && hasFabricNorm.has(base)) {
-            baseSkuResolutions.set(raw, base);
-            console.log(`[PO Import] Base-SKU match (auto): "${raw}" → "${canonicalFor.get(base)}"`);
+          // 1) Deterministic: strip color/variant suffix from RAW (preserves hyphens), then normalize
+          const baseRaw = stripVariantSuffix(raw);
+          const baseNorm = baseRaw ? normalizeCode(baseRaw) : null;
+          if (baseNorm && hasFabricNorm.has(baseNorm)) {
+            baseSkuResolutions.set(raw, baseNorm);
+            console.log(`[PO Import] Base-SKU match (auto): "${raw}" → "${canonicalFor.get(baseNorm)}"`);
             continue;
           }
           // 2) Fuzzy: Levenshtein for likely OCR errors
@@ -369,8 +370,22 @@ export default function PurchaseOrders() {
           };
         });
 
+        // Dedupe by article_code (3 colors → 1 article); sum quantities and total_fabric_required
+        const dedupedArticles = Object.values(
+          articleRecords.reduce((acc, r) => {
+            const k = r.article_code;
+            if (!acc[k]) {
+              acc[k] = { ...r };
+            } else {
+              acc[k].order_quantity = (acc[k].order_quantity || 0) + (r.order_quantity || 0);
+              acc[k].total_fabric_required = +((acc[k].total_fabric_required || 0) + (r.total_fabric_required || 0)).toFixed(4);
+            }
+            return acc;
+          }, {})
+        );
+
         // Authoritative upsert: replaces components[] on every import
-        await supabase.from("articles").upsert(articleRecords, {
+        await supabase.from("articles").upsert(dedupedArticles, {
           onConflict: "article_code", ignoreDuplicates: false,
         });
 

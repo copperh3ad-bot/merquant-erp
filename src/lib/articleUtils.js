@@ -5,7 +5,11 @@
  * color/base-code parsing, and recalculation logic stay in lockstep.
  */
 
-// Known short-code → human label mapping for article_code color suffixes
+// Known short-code → human label mapping for article_code color suffixes.
+// IMPORTANT: This is the *only* allowlist for what counts as a color suffix.
+// Suffixes NOT in this map are treated as part of the base code (e.g. size
+// codes like -CK / -SCK / -SHK on PCSJMO sheet sets). Add new colors here
+// when buyers introduce them; do NOT widen the regex.
 const COLOR_CODE_MAP = {
   CG: "Cloud Gray",
   MB: "Misty Blue",
@@ -19,13 +23,13 @@ const COLOR_CODE_MAP = {
 
 /**
  * Derive a display-friendly color label for an article.
- * Preference order: explicit color field → suffix on article_code → fallback to article_name.
+ * Preference order: explicit color field → KNOWN color suffix on article_code → fallback to article_name.
  */
 export function getColorLabel(art) {
   if (!art) return "—";
   if (art.color) return art.color;
   const m = art.article_code?.match(/-([A-Z]{2,3})$/);
-  if (m) return COLOR_CODE_MAP[m[1]] || m[1];
+  if (m && COLOR_CODE_MAP[m[1]]) return COLOR_CODE_MAP[m[1]];
   return art.article_name || "—";
 }
 
@@ -33,12 +37,22 @@ export function getColorLabel(art) {
  * Extract the base article code (color suffix stripped) so that
  * colorway siblings of the same style group together.
  *
- * Example: "GP-KIMONO-WHT-M-CG" → "GP-KIMONO-WHT-M"
+ * Only strips suffixes that are KNOWN colors per COLOR_CODE_MAP.
+ * Size codes (e.g. -CK, -SCK, -SHK, -TX, -FXL) are preserved because
+ * they identify distinct articles, not colorways.
+ *
+ * Examples:
+ *   "GP-KIMONO-WHT-M-CG" → "GP-KIMONO-WHT-M"   (CG is a color, stripped)
+ *   "PCSJMO-CK"          → "PCSJMO-CK"          (CK is NOT a color, kept)
+ *   "PCSJMO-T"           → "PCSJMO-T"           (1-letter, regex doesn't match anyway)
  */
 export function getBaseCode(art) {
   if (!art) return "";
-  const code = art.article_code?.replace(/-[A-Z]{2,3}$/, "") || "";
-  if (code) return code;
+  const m = art.article_code?.match(/^(.+)-([A-Z]{2,3})$/);
+  if (m && COLOR_CODE_MAP[m[2]]) {
+    return m[1];
+  }
+  if (art.article_code) return art.article_code;
   // Fallback: strip common color words from article_name
   return (art.article_name || "")
     .replace(/\b(Cloud Gray|Misty Blue|White|Navy|Black|Red|Green|Blue|Gray|Grey)\b/gi, "")
