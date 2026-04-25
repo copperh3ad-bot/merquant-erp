@@ -213,7 +213,15 @@ function parseSizeSheet(rows, headerProductSku = "") {
       component_type: row.item_code,
       product_dimensions: row.product_dimensions || null,
     });
-    // First non-empty value wins for the SKU-level dimensions
+    // Per-part dimensions: keyed by component_type (e.g. "Flat Sheet",
+    // "Fitted Sheet", "Pillow Case"). Preserves all three rows for sheet
+    // sets where each part has its own product dimension.
+    if (!g.part_dimensions) g.part_dimensions = {};
+    if (row.item_code && row.product_dimensions && !g.part_dimensions[row.item_code]) {
+      g.part_dimensions[row.item_code] = row.product_dimensions;
+    }
+    // First non-empty value wins for the SKU-level dimensions (kept for
+    // backward compat — represents the Flat Sheet dimension typically).
     for (const k of ["product_dimensions","zipper_length","insert_dimensions","pvc_bag_dimensions","stiffener_size"]) {
       if (row[k] && !g[k]) g[k] = row[k];
     }
@@ -227,6 +235,7 @@ function parseSizeSheet(rows, headerProductSku = "") {
       item_code: itemCode,
       color: g.color,
       product_dimensions: g.product_dimensions,
+      part_dimensions: g.part_dimensions || null,
       zipper_length: g.zipper_length,
       insert_dimensions: g.insert_dimensions,
       pvc_bag_dimensions: g.pvc_bag_dimensions,

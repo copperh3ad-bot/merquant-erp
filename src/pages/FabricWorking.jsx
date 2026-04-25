@@ -74,27 +74,54 @@ export default function FabricWorking() {
         .order("created_at", { ascending: false });
       if (error) throw error;
 
-      // byItemCode: Map<ITEM_CODE, product_dimensions>
-      // byCodeSize: Map<ARTICLE_CODE, Map<SIZE, product_dimensions>>
+      // byItemCode:    Map<ITEM_CODE, product_dimensions string>
+      // byCodeSize:    Map<ARTICLE_CODE, Map<SIZE, product_dimensions string>>
+      // byItemPart:    Map<ITEM_CODE, Map<PART_NAME, product_dimensions string>>
+      // byCodeSizePart: Map<ARTICLE_CODE, Map<SIZE, Map<PART_NAME, product_dimensions string>>>
+      // The "Part" indexes are populated when size_chart entries include
+      // `part_dimensions` (sheet-set tech packs where each part — Flat Sheet,
+      // Fitted Sheet, Pillow Case — has its own dimension).
       const byItemCode = new Map();
       const byCodeSize = new Map();
+      const byItemPart = new Map();
+      const byCodeSizePart = new Map();
 
       for (const tp of data || []) {
         const chart = tp?.extracted_measurements?.size_chart;
         if (!chart || typeof chart !== "object") continue;
 
         if (!byCodeSize.has(tp.article_code)) byCodeSize.set(tp.article_code, new Map());
+        if (!byCodeSizePart.has(tp.article_code)) byCodeSizePart.set(tp.article_code, new Map());
         const sizeMap = byCodeSize.get(tp.article_code);
+        const sizePartMap = byCodeSizePart.get(tp.article_code);
 
         for (const [sizeRaw, row] of Object.entries(chart)) {
           const dim = row?.product_dimensions;
-          if (!dim) continue;
+          const parts = row?.part_dimensions;
           const sizeKey = normalizeSizeKey(sizeRaw);
-          // First-seen wins (results are ordered by created_at DESC so most
-          // recent tech pack is authoritative).
-          if (!sizeMap.has(sizeKey)) sizeMap.set(sizeKey, String(dim));
           const itemCode = row?.item_code;
-          if (itemCode && !byItemCode.has(itemCode)) byItemCode.set(itemCode, String(dim));
+
+          if (dim) {
+            // First-seen wins (results are ordered by created_at DESC so most
+            // recent tech pack is authoritative).
+            if (!sizeMap.has(sizeKey)) sizeMap.set(sizeKey, String(dim));
+            if (itemCode && !byItemCode.has(itemCode)) byItemCode.set(itemCode, String(dim));
+          }
+
+          if (parts && typeof parts === "object") {
+            if (!sizePartMap.has(sizeKey)) sizePartMap.set(sizeKey, new Map());
+            const partMap = sizePartMap.get(sizeKey);
+            for (const [partName, partDim] of Object.entries(parts)) {
+              if (!partDim) continue;
+              const partKey = normalizeSizeKey(partName);
+              if (!partMap.has(partKey)) partMap.set(partKey, String(partDim));
+              if (itemCode) {
+                if (!byItemPart.has(itemCode)) byItemPart.set(itemCode, new Map());
+                const ipm = byItemPart.get(itemCode);
+                if (!ipm.has(partKey)) ipm.set(partKey, String(partDim));
+              }
+            }
+          }
         }
 
         // Fallback: some older tech packs only populate a single this_sku row.
@@ -109,24 +136,47 @@ export default function FabricWorking() {
           }
         }
       }
-      return { byItemCode, byCodeSize };
+      return { byItemCode, byCodeSize, byItemPart, byCodeSizePart };
     },
   });
 
   // Resolve product_dimensions for an article/component pair using the layered
   // priority described at the top of the file. Returns "" if nothing is known,
-  // which renders as a dash in the UI.
-  const resolveDims = (article, productSize) => {
+  // which renders as a dash in the UI. The optional `part` argument (e.g.
+  // "Flat Sheet", "Fitted Sheet", "Pillow Case") narrows the lookup to that
+  // specific component for sheet-set tech packs that store per-part dimensions.
+  const resolveDims = (article, productSize, part) => {
     // Layer 1: direct manual override on the article row.
     if (article?.product_dimensions) return String(article.product_dimensions);
     if (!dimsIndex) return "";
 
-    // Layer 2: item_code match — handles family tech packs.
+    const partKey = part ? normalizeSizeKey(part) : null;
+
+    // Layer 2a: per-part item_code match (sheet-set tech packs).
+    if (partKey && article?.article_code && dimsIndex.byItemPart?.has(article.article_code)) {
+      const partMap = dimsIndex.byItemPart.get(article.article_code);
+      const hit = partMap.get(partKey);
+      if (hit) return hit;
+    }
+
+    // Layer 2b: item_code match (whole-SKU dimension, family tech packs).
     if (article?.article_code && dimsIndex.byItemCode.has(article.article_code)) {
       return dimsIndex.byItemCode.get(article.article_code);
     }
 
-    // Layer 3: legacy (article_code, size) match.
+    // Layer 3a: per-part (article_code, size) match.
+    if (partKey && article?.article_code && productSize) {
+      const sizePartMap = dimsIndex.byCodeSizePart?.get(article.article_code);
+      if (sizePartMap) {
+        const partMap = sizePartMap.get(normalizeSizeKey(productSize));
+        if (partMap) {
+          const hit = partMap.get(partKey);
+          if (hit) return hit;
+        }
+      }
+    }
+
+    // Layer 3b: legacy (article_code, size) match.
     if (article?.article_code && productSize) {
       const sizeMap = dimsIndex.byCodeSize.get(article.article_code);
       if (sizeMap) {
@@ -287,7 +337,7 @@ export default function FabricWorking() {
     rows.push(["Article", "Colors", "Total Qty", "Part", "Prod Size", "Dimensions", "Direction", "Fabrication", "Width cm", "Cut/Unit m", "Net Mtrs", "Wastage%", "Total Mtrs"]);
     combinedGroups.forEach(g => {
       g.components.forEach((comp, i) => {
-        const dims = resolveDims(g.template, comp.product_size);
+        const dims = resolveDims(g.template, comp.product_size, comp.component_type);
         rows.push([
           i===0?g.displayName:"",
           i===0?g.colors:"",
@@ -497,7 +547,7 @@ export default function FabricWorking() {
       combinedGroups.forEach((g, gi) => {
         g.components.forEach((comp, ci) => {
           const isFirst = ci === 0;
-          const dims = resolveDims(g.template, comp.product_size);
+          const dims = resolveDims(g.template, comp.product_size, comp.component_type);
           const values = [
             isFirst ? g.displayName : "",
             isFirst ? g.colors : "",
@@ -548,7 +598,7 @@ export default function FabricWorking() {
             const isFirst = ci === 0;
             const net = (comp.consumption_per_unit || 0) * (art.order_quantity || 0);
             const total = comp.total_required || net * (1 + (comp.wastage_percent || 0) / 100);
-            const dims = resolveDims(art, comp.product_size);
+            const dims = resolveDims(art, comp.product_size, comp.component_type);
             const values = [
               isFirst ? (art.article_name || "") : "",
               isFirst ? (art.article_code || "") : "",
@@ -728,7 +778,7 @@ export default function FabricWorking() {
                           </td>}
                         </tr>
                       ) : g.components.map((comp, ci) => {
-                        const dims = resolveDims(g.template, comp.product_size);
+                        const dims = resolveDims(g.template, comp.product_size, comp.component_type);
                         return (
                         <tr key={ci} style={{ backgroundColor: gi%2===0?"#EBF0FA":"#fff" }}>
                           {ci===0 && <>
@@ -805,7 +855,7 @@ export default function FabricWorking() {
                               ) : comps.map((comp, idx) => {
                                 const net = (comp.consumption_per_unit||0)*(article.order_quantity||0);
                                 const total = comp.total_required || net*(1+(comp.wastage_percent||0)/100);
-                                const dims = resolveDims(article, comp.product_size);
+                                const dims = resolveDims(article, comp.product_size, comp.component_type);
                                 return (
                                   <tr key={idx} style={{ backgroundColor:artBg }}>
                                     {idx===0 && <>

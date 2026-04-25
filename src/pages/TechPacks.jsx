@@ -889,6 +889,7 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                       item_code: s.item_code,
                       color: s.color,
                       product_dimensions: s.product_dimensions,
+                      part_dimensions: s.part_dimensions || null,
                       insert_dimensions: s.insert_dimensions,
                       pvc_bag_dimensions: s.pvc_bag_dimensions,
                       stiffener_size: s.stiffener_size,
