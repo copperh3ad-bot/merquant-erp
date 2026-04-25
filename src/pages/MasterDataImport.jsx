@@ -104,20 +104,53 @@ const SHEETS = {
     },
   },
   "5. Price List": {
-    table: "price_list", matchBy: ["item_code"], required: ["item_code","price_usd","effective_from"],
+    table: "price_list", matchBy: ["item_code"], required: ["item_code"],
     columns: ["item_code","item_description","price_usd","currency","effective_from","effective_to","pieces_per_carton","carton_length_cm","carton_width_cm","carton_height_cm","cbm_per_carton","is_active","notes"],
     transform: (r) => {
       const L = toNum(r.carton_length_cm), W = toNum(r.carton_width_cm), H = toNum(r.carton_height_cm);
       const cbm = toNum(r.cbm_per_carton) ?? (L && W && H ? +((L*W*H)/1e6).toFixed(4) : null);
+      const price = toNum(r.price_usd);
+      const effFrom = toDate(r.effective_from);
+      const effTo = toDate(r.effective_to);
+      // Determine pricing_status:
+      //   - has price + has effective_from → 'active' as given
+      //   - has price, no effective_from   → 'active', set effective_from = today
+      //   - missing price, has effective_to → INVALID (caller validates)
+      //   - missing price, no dates        → 'pending', set effective_from = today
+      const today = new Date().toISOString().slice(0, 10);
+      let status = "active";
+      let finalEffFrom = effFrom;
+      if (price == null) {
+        // No price provided
+        if (effTo != null) {
+          // Has end date but no price/start — invalid; let validator block
+          status = "invalid";
+        } else {
+          status = "pending";
+          finalEffFrom = today;
+        }
+      } else {
+        // Has price
+        if (effFrom == null) finalEffFrom = today;
+      }
       return {
         item_code: toStr(r.item_code), description: toStr(r.item_description),
-        price_usd: toNum(r.price_usd), currency: toStr(r.currency) || "USD",
+        price_usd: price, currency: toStr(r.currency) || "USD",
         qty_per_carton: toNum(r.pieces_per_carton),
         carton_length: L, carton_width: W, carton_height: H, cbm_per_carton: cbm,
-        effective_from: toDate(r.effective_from), effective_to: toDate(r.effective_to),
+        effective_from: finalEffFrom, effective_to: effTo,
         is_active: toBool(r.is_active) ?? true,
+        pricing_status: status === "invalid" ? "active" : status,  // 'invalid' rejected pre-import; never reaches DB
         notes: toStr(r.notes),
       };
+    },
+    // Custom validator: reject only when price is missing AND effective_to is set
+    validate: (row) => {
+      if (!row.item_code) return "missing item_code";
+      if (row.price_usd == null && row.effective_to != null) {
+        return "missing price_usd but has effective_to (cannot determine when price expires from no price)";
+      }
+      return null;
     },
   },
   "6. Suppliers": {
@@ -327,10 +360,39 @@ export default function MasterData() {
       ["suppliers","buyerContacts","seasons","prodLines","priceList","allArticles","consumptionLibrary"]
         .forEach(k => qc.invalidateQueries({ queryKey: [k] }));
 
+      // After import: check if any rows landed with pricing_status='pending'
+      // and email the owner so they know to fill prices.
+      let pendingCount = 0;
+      try {
+        const importedItemCodes = (preview["5. Price List"]?.valid || [])
+          .map(v => v.payload?.item_code)
+          .filter(Boolean);
+        if (importedItemCodes.length > 0) {
+          const { data: pendingRows } = await supabase
+            .from("price_list")
+            .select("item_code,description,effective_from")
+            .eq("pricing_status", "pending")
+            .in("item_code", importedItemCodes);
+          pendingCount = pendingRows?.length || 0;
+          if (pendingCount > 0) {
+            // Fire-and-forget notification to owner via edge function.
+            // Don't block the success message on email delivery.
+            supabase.functions.invoke("notify-pricing-pending", {
+              body: { rows: pendingRows },
+            }).catch(err => console.warn("[notify-pricing-pending] failed:", err));
+          }
+        }
+      } catch (err) {
+        console.warn("[pricing-status check] failed:", err);
+      }
+
       setStage("done");
-      setMessage(result.failures.length
+      const baseMsg = result.failures.length
         ? `Imported ${result.totalIns} rows · ${result.failures.length} chunk(s) failed (see console)`
-        : `Imported ${result.totalIns} rows`);
+        : `Imported ${result.totalIns} rows`;
+      setMessage(pendingCount > 0
+        ? `${baseMsg} · ${pendingCount} item(s) flagged for pricing — owner notified`
+        : baseMsg);
       if (result.failures.length) console.warn("Import warnings:", result.failures);
     } catch (e) {
       setStage("error"); setMessage(e.message || "Import failed");
