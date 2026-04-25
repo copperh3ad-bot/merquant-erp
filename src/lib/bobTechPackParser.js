@@ -76,11 +76,46 @@ function parseInfoSheet(rows) {
   return { header, fabrications, trims };
 }
 
+// Component-type whitelist used to detect sheet-set / multi-component layouts
+// where column C ("Item Code") actually holds component names like "Flat Sheet"
+// instead of real SKU codes. When we see this, we synthesize the SKU code from
+// header.product_sku + a size suffix and group the component rows under it.
+const COMPONENT_TYPE_TOKENS = new Set([
+  "flat sheet", "fitted sheet", "pillow case", "pillowcase", "sham",
+  "top fabric", "lining", "binding", "skirt", "front", "bottom",
+  "piping", "filling", "lamination", "fabric bag", "quilting",
+  "pillow compression", "platform", "evalon membrane", "sleeper flap",
+]);
+
+// Compact size tokens used for synthesized item codes.
+const SIZE_CODE_MAP = {
+  "twin": "T", "twin xl": "TX", "twinxl": "TX",
+  "full": "F", "full xl": "FXL", "fullxl": "FXL",
+  "queen": "Q", "split queen": "SQ",
+  "king": "K", "split king": "SK",
+  "cal king": "CK", "california king": "CK", "ck": "CK",
+  "twin/twin xl": "T", "split cal king": "SCK",
+};
+function sizeToCode(size) {
+  const k = (size || "").toLowerCase().trim().replace(/\s+/g, " ");
+  if (SIZE_CODE_MAP[k]) return SIZE_CODE_MAP[k];
+  // Fallback: take first letters of each word, max 3 chars
+  return k.split(/\s+/).map(w => w[0]).filter(Boolean).join("").toUpperCase().slice(0, 3) || "X";
+}
+
 // Parse the SKU table on the Size & Workmanship sheet. Column layout varies
 // by product type (e.g. FT9 encasements add a "Zipper Length" column that
 // FT2/FT4 mattress protectors don't have), so we read the header row first
 // and map each SKU field against whichever column actually has that label.
-function parseSizeSheet(rows) {
+//
+// Two layouts are supported:
+//   (a) standard: column C ("Item Code") contains the real SKU code
+//       (e.g. FT2 mattress protectors: GPFRIOMP33, GPFRIOMP38, ...)
+//   (b) sheet-set: column C contains component names ("Flat Sheet", "Fitted
+//       Sheet", "Pillow Case") repeating per size. In this case we synthesize
+//       item_code = `${headerProductSku}-${sizeCode}` and roll the component
+//       rows into one SKU entry with components[].
+function parseSizeSheet(rows, headerProductSku = "") {
   const skus = [];
   // Find the header row. It always has "Size" at col A and "Item Code" at col C.
   let headerRow = -1;
@@ -93,8 +128,6 @@ function parseSizeSheet(rows) {
   }
   if (headerRow < 0) return skus;
 
-  // Build a column -> field map from the header row. Keys normalized for
-  // matching; values are the SKU object field names we emit.
   const header = rows[headerRow] || [];
   const fieldFor = (label) => {
     const s = (label || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -114,32 +147,93 @@ function parseSizeSheet(rows) {
     if (f) colToField.set(c, f);
   }
 
-  // Iterate data rows. The table may contain blank spacer rows that separate
-  // product variants (e.g. mattress protectors from pillow protectors in FT2),
-  // so we must not break on the first blank row. Continue until we hit either
-  // the end of the sheet or two consecutive blank rows, or a row whose first
-  // column clearly starts a new section (all-caps heading longer than 12 chars
-  // with no item_code).
+  // First pass: collect raw rows (size, item_code, etc.) so we can detect layout.
+  const rawRows = [];
   let blankStreak = 0;
   for (let i = headerRow + 1; i < rows.length; i++) {
     const r = rows[i] || [];
     const first = (r[0] || "").trim();
     const third = (r[2] || "").trim();
     if (!first && !third) {
-      if (++blankStreak >= 2 && skus.length > 0) break;
+      if (++blankStreak >= 2 && rawRows.length > 0) break;
       continue;
     }
     blankStreak = 0;
-    // A row with text in col A but nothing resembling an item_code means
-    // we've fallen out of the SKU table into narrative text below it.
     if (!third) {
-      if (skus.length > 0) break;
+      if (rawRows.length > 0) break;
       continue;
     }
-    const sku = {};
-    for (const [c, field] of colToField) sku[field] = (r[c] || "").trim() || null;
-    if (!sku.size || !sku.item_code) continue;
-    skus.push(sku);
+    const row = {};
+    for (const [c, field] of colToField) row[field] = (r[c] || "").trim() || null;
+    if (!row.item_code) continue;
+    rawRows.push(row);
+  }
+  if (rawRows.length === 0) return skus;
+
+  // Detect layout: if a majority of item_code values are component-type tokens,
+  // treat this as a sheet-set layout and synthesize real SKU codes.
+  const componentLikeCount = rawRows.filter(r =>
+    COMPONENT_TYPE_TOKENS.has((r.item_code || "").toLowerCase().trim())
+  ).length;
+  const isSheetSetLayout = componentLikeCount >= Math.ceil(rawRows.length * 0.6);
+
+  if (!isSheetSetLayout) {
+    // Standard layout: each row is its own SKU. Drop rows with no size.
+    for (const row of rawRows) {
+      if (!row.size || !row.item_code) continue;
+      skus.push(row);
+    }
+    return skus;
+  }
+
+  // Sheet-set layout: rows are grouped by size. The size column is filled only
+  // on the first row of each group; subsequent component rows have empty size
+  // (we filled them with null above). Group consecutive rows by carrying the
+  // last seen size, then collapse each group into one SKU.
+  let currentSize = null;
+  const groups = new Map(); // size -> { size, color, components: [], dims: {...} }
+  for (const row of rawRows) {
+    if (row.size) currentSize = row.size;
+    if (!currentSize) continue;
+    if (!groups.has(currentSize)) {
+      groups.set(currentSize, {
+        size: currentSize,
+        color: row.color || null,
+        components: [],
+        product_dimensions: null,
+        zipper_length: null,
+        insert_dimensions: null,
+        pvc_bag_dimensions: null,
+        stiffener_size: null,
+      });
+    }
+    const g = groups.get(currentSize);
+    if (row.color && !g.color) g.color = row.color;
+    g.components.push({
+      component_type: row.item_code,
+      product_dimensions: row.product_dimensions || null,
+    });
+    // First non-empty value wins for the SKU-level dimensions
+    for (const k of ["product_dimensions","zipper_length","insert_dimensions","pvc_bag_dimensions","stiffener_size"]) {
+      if (row[k] && !g[k]) g[k] = row[k];
+    }
+  }
+
+  for (const g of groups.values()) {
+    const sizeCode = sizeToCode(g.size);
+    const itemCode = headerProductSku ? `${headerProductSku}-${sizeCode}` : `SET-${sizeCode}`;
+    skus.push({
+      size: g.size,
+      item_code: itemCode,
+      color: g.color,
+      product_dimensions: g.product_dimensions,
+      zipper_length: g.zipper_length,
+      insert_dimensions: g.insert_dimensions,
+      pvc_bag_dimensions: g.pvc_bag_dimensions,
+      stiffener_size: g.stiffener_size,
+      components: g.components,
+      is_set: true,
+    });
   }
   return skus;
 }
@@ -391,7 +485,7 @@ export async function parseBobTechPack(file) {
   if (!infoSheet.length) throw new Error("Not a BOB tech pack - missing 'Product & Fabric Information' sheet");
 
   const { header, fabrications, trims } = parseInfoSheet(infoSheet);
-  const skus = parseSizeSheet(sizeSheet);
+  const skus = parseSizeSheet(sizeSheet, header.product_sku || header.product_no || "");
   const { carton, upc } = parseShippingSheet(shipSheet);
   const labels = parseLabellingSheet(labelSheet);
   const packaging = parsePackagingSheet(pkgSheet);
