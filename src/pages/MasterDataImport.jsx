@@ -227,11 +227,25 @@ function readSheet(XLSX, wb, sheetName) {
 
 function validate(row, cfg) {
   const errs = [];
+  // Skip note-only rows (only 'remarks'/'notes' filled) — treated as comments
+  if (isNoteOnlyRow(row)) return errs;
   for (const req of cfg.required) {
     const v = row[req];
     if (v == null || String(v).trim() === "") errs.push(`missing ${req}`);
   }
   return errs;
+}
+
+function isNoteOnlyRow(r) {
+  if (!r || typeof r !== "object") return false;
+  const NOTE_COLS = new Set(["remarks", "notes", "comment", "comments"]);
+  let hasNote = false, hasOther = false;
+  for (const [k, v] of Object.entries(r)) {
+    if (v == null || String(v).trim() === "") continue;
+    if (NOTE_COLS.has(k.toLowerCase())) hasNote = true;
+    else hasOther = true;
+  }
+  return hasNote && !hasOther;
 }
 
 export default function MasterData() {
