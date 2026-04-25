@@ -166,20 +166,25 @@ function validateAccessoryConsumption(rows) {
   // matchBy in importer: ["item_code","kind","component_type","material"]
   // kind=accessory constant, component_type = category, material = item_name || material
   // Here we use category + material as the distinguishing pair (what importer uses)
-  // matchBy in importer: ["item_code","kind","component_type","material"]
-  // The importer concatenates item_name + material when both are present and
-  // distinct, so we mirror that here — otherwise the validator flags rows
-  // as duplicates that the importer would actually accept as distinct.
-  const rowsForDupCheck = rows.map(r => {
+  // Mirror importer: combine name+material+size+placement, then drop byte-identical dupes
+  const seen = new Set();
+  const rowsForDupCheck = [];
+  rows.forEach(r => {
     const itemName = (r.item_name == null ? "" : String(r.item_name).trim());
     const rawMat = (r.material == null ? "" : String(r.material).trim());
-    let effectiveMaterial;
-    if (itemName && rawMat && itemName !== rawMat) {
-      effectiveMaterial = `${itemName} — ${rawMat}`;
-    } else {
-      effectiveMaterial = itemName || rawMat || "";
-    }
-    return { ...r, material: effectiveMaterial };
+    const sizeSpec = (r.size_spec == null ? "" : String(r.size_spec).trim());
+    const placement = (r.placement == null ? "" : String(r.placement).trim());
+    const parts = [itemName, rawMat, sizeSpec, placement].filter(Boolean);
+    const unique = parts.filter((p, i) => p !== parts[i - 1]);
+    const material = unique.join(" — ");
+    // Match importer's postProcess: skip byte-identical duplicates entirely
+    const ic = (r.item_code == null ? "" : String(r.item_code).trim());
+    const cat = (r.category == null ? "" : String(r.category).trim());
+    const cons = r.consumption_per_unit;
+    const dedupKey = `${ic}||${cat}||${material}||${sizeSpec}||${placement}||${cons}`;
+    if (seen.has(dedupKey)) return;
+    seen.add(dedupKey);
+    rowsForDupCheck.push({ ...r, material });
   });
   out.push(...findDuplicates(s, rowsForDupCheck, ["item_code", "category", "material"]));
   out.push(...requireNumericRange(s, rows, "consumption_per_unit", 0.001, 100, WARN));
