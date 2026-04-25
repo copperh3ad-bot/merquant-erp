@@ -73,20 +73,33 @@ const SHEETS = {
     matchBy: ["item_code","kind","component_type","material"],
     required: ["item_code","category"],
     columns: ["tech_pack_code","item_code","size","category","item_name","material","size_spec","placement","variant","consumption_per_unit","unit","wastage_percent","total_required","supplier"],
-    transform: (r) => ({
-      item_code: toStr(r.item_code), size: toStr(r.size),
-      kind: "accessory",
-      component_type: toStr(r.category) || toStr(r.item_name),
-      // Upsert key requires non-null for stable matching (see 2026-04-24 cleanup migration)
-      color: "",
-      material: (toStr(r.item_name) || toStr(r.material)) ?? "",
-      size_spec: toStr(r.size_spec),
-      placement: toStr(r.placement),
-      consumption_per_unit: toNum(r.consumption_per_unit),
-      wastage_percent: toNum(r.wastage_percent) || 0,
-      supplier: toStr(r.supplier), tech_pack_code: toStr(r.tech_pack_code),
-      notes: [toStr(r.variant), toStr(r.unit) ? `unit: ${toStr(r.unit)}` : null].filter(Boolean).join(" · ") || null,
-    }),
+    transform: (r) => {
+      const itemName = toStr(r.item_name) || "";
+      const rawMaterial = toStr(r.material) || "";
+      // Disambiguate: include both item_name AND material in the material field
+      // so e.g. (Care Label, "3M non-woven") and (Size Label, "3M non-woven")
+      // become distinct upsert keys. Within a single SKU+category, duplicates
+      // only collide if BOTH item_name and material are identical (a true dup).
+      let material;
+      if (itemName && rawMaterial && itemName !== rawMaterial) {
+        material = `${itemName} — ${rawMaterial}`;
+      } else {
+        material = itemName || rawMaterial || "";
+      }
+      return {
+        item_code: toStr(r.item_code), size: toStr(r.size),
+        kind: "accessory",
+        component_type: toStr(r.category) || itemName,
+        color: "",
+        material,
+        size_spec: toStr(r.size_spec),
+        placement: toStr(r.placement),
+        consumption_per_unit: toNum(r.consumption_per_unit),
+        wastage_percent: toNum(r.wastage_percent) || 0,
+        supplier: toStr(r.supplier), tech_pack_code: toStr(r.tech_pack_code),
+        notes: [toStr(r.variant), toStr(r.unit) ? `unit: ${toStr(r.unit)}` : null].filter(Boolean).join(" · ") || null,
+      };
+    },
   },
   "4. Carton Master": {
     table: "price_list", matchBy: ["item_code"], required: ["item_code"],
