@@ -162,60 +162,17 @@ export default function PurchaseOrders() {
         setImportMsg("Verifying all SKUs exist in Master Data…");
         // Normalize to uppercase and strip whitespace/dashes so 'gpte-78' matches 'GPTE78'
         const normalizeCode = (c) => (c || "").trim().toUpperCase().replace(/[\s\-_]+/g, "");
-        // Strip a trailing color-suffix segment to derive the "base SKU". Used
-        // for family tech packs where fabric consumption is keyed by base code
-        // (e.g. PCSJMO-T) while accessories are keyed by full SKU with color
-        // (e.g. PCSJMO-T-WH). Only strips if the tail is 1-4 uppercase letters.
-        const COLOR_SUFFIX_RE = /^[A-Z]{1,4}$/;
-        const baseSkuOf = (code) => {
-          if (!code) return null;
-          const trimmed = code.trim();
-          const lastDash = trimmed.lastIndexOf("-");
-          if (lastDash < 1) return trimmed;
-          const tail = trimmed.slice(lastDash + 1).toUpperCase();
-          if (COLOR_SUFFIX_RE.test(tail)) return trimmed.slice(0, lastDash);
-          return trimmed;
-        };
         const itemCodesRaw = [...new Set(enrichedItems.map(i => i.item_code?.trim()).filter(Boolean))];
         const itemCodeNorm = itemCodesRaw.map(c => ({ raw: c, norm: normalizeCode(c) }));
         if (!itemCodesRaw.length) {
           throw new Error("PO has no item codes — cannot import without line items.");
         }
 
-        // Fetch only the consumption_library rows we actually need for this PO's SKUs.
-        // PostgREST enforces a hard max-rows cap (default 1000) that .limit() can't exceed,
-        // so we (a) filter server-side by item_code, and (b) paginate via .range() in case
-        // the filtered result still exceeds 1000 rows (a big PO + many accessories per SKU
-        // can push past the cap).
-        const lookupCodes = new Set();
-        for (const { raw } of itemCodeNorm) {
-          if (!raw) continue;
-          lookupCodes.add(raw);
-          const base = baseSkuOf(raw);
-          if (base && base !== raw) lookupCodes.add(base);
-          // Also try case variants in case spreadsheet stored differently
-          lookupCodes.add(raw.toUpperCase());
-          if (base) lookupCodes.add(base.toUpperCase());
-        }
-        const lookupArr = [...lookupCodes];
-
-        const PAGE = 1000;
-        const MAX_PAGES = 20;  // safety cap at 20,000 rows
-        const cl = [];
-        for (let page = 0; page < MAX_PAGES; page++) {
-          const from = page * PAGE;
-          const to = from + PAGE - 1;
-          const { data, error } = await supabase
-            .from("consumption_library")
-            .select("item_code, kind, component_type, fabric_type, material, gsm, color, construction, treatment, width_cm, consumption_per_unit, wastage_percent, supplier, placement, size_spec, size")
-            .in("item_code", lookupArr)
-            .range(from, to);
-          if (error) throw error;
-          if (!data || data.length === 0) break;
-          cl.push(...data);
-          if (data.length < PAGE) break;  // last page
-        }
-        console.log(`[PO Import] Loaded ${cl.length} consumption_library rows for ${lookupArr.length} lookup codes`);
+        // Widen query: pull by raw codes AND normalized forms (in case Master Data has variants)
+        const { data: cl, error: clErr } = await supabase
+          .from("consumption_library")
+          .select("item_code, kind, component_type, fabric_type, material, gsm, color, construction, treatment, width_cm, consumption_per_unit, wastage_percent, supplier, placement, size_spec, size");
+        if (clErr) throw clErr;
 
         // Index master data by normalized item_code so we can match loosely
         const clByNorm = new Map();       // norm -> [rows]
@@ -247,29 +204,30 @@ export default function PurchaseOrders() {
           return dp[m][n];
         };
 
-        // Try exact → base-code → fuzzy match, in that order.
+        // Try fuzzy match for any code that didn't match exactly
         const allMasterCodes = [...hasFabricNorm];
         const fuzzyResolutions = new Map();  // raw -> resolved norm
-        const baseResolutions = new Map();   // raw -> normalized base code (fabric lookup only; full SKU still used for accessories)
         const stillMissing = [];
+        // Strip a trailing color/variant suffix like -WH, -CG, -MB (1-4 alphanumeric chars
+        // after final hyphen). Used as a deterministic match before fuzzy search since
+        // master data fabric is often shared across colors.
+        const stripVariantSuffix = (code) => {
+          const m = /^(.+)-([A-Z0-9]{1,4})$/i.exec(code);
+          return m ? m[1] : null;
+        };
         for (const { raw, norm } of itemCodeNorm) {
-          // 1. Exact fabric match on full SKU
           if (hasFabricNorm.has(norm)) continue;
-
-          // 2. Family-tech-pack pattern: try the base SKU (strip color suffix)
-          const baseRaw = baseSkuOf(raw);
-          const baseNorm = baseRaw === raw ? null : normalizeCode(baseRaw);
-          if (baseNorm && hasFabricNorm.has(baseNorm)) {
-            baseResolutions.set(raw, baseNorm);
-            console.log(`[PO Import] Base SKU fabric match: "${raw}" → "${canonicalFor.get(baseNorm)}" + accessories from full SKU`);
+          // 1) Try base-SKU match (strip color/variant suffix)
+          const base = stripVariantSuffix(norm);
+          if (base && hasFabricNorm.has(base)) {
+            fuzzyResolutions.set(raw, base);
+            console.log(`[PO Import] Base-SKU match: "${raw}" → "${canonicalFor.get(base)}" (stripped variant suffix)`);
             continue;
           }
-
-          // 3. Fuzzy match (OCR tolerance)
+          // 2) Fall back to Levenshtein fuzzy match (handles OCR errors)
           const maxDist = Math.max(2, Math.floor(norm.length / 5));
           let best = null, bestDist = Infinity;
           for (const md of allMasterCodes) {
-            // Quick filter: lengths must be similar
             if (Math.abs(md.length - norm.length) > maxDist) continue;
             const d = levenshtein(norm, md);
             if (d < bestDist && d <= maxDist) { best = md; bestDist = d; }
@@ -321,23 +279,10 @@ export default function PurchaseOrders() {
           );
         }
 
-        // Build clByCode in the raw-code shape callers expect downstream.
-        // For family tech packs, merge base-SKU fabric rows into the full-SKU's
-        // accessory rows so the BOM contains both fabric (from base) and
-        // accessories (from full SKU).
+        // Build clByCode in the raw-code shape callers expect downstream
         const clByCode = new Map();
         for (const { raw, norm } of itemCodeNorm) {
-          const ownRows = clByNorm.get(norm) || [];
-          const baseNorm = baseResolutions.get(raw);
-          const baseFabric = baseNorm
-            ? (clByNorm.get(baseNorm) || []).filter(r => r.kind === "fabric")
-            : [];
-          if (baseFabric.length) {
-            clByCode.set(raw, [...baseFabric, ...ownRows]);
-            console.log(`[PO Import] Merged BOM for ${raw}: ${baseFabric.length} fabric rows from base + ${ownRows.length} rows from full SKU`);
-          } else {
-            clByCode.set(raw, ownRows);
-          }
+          clByCode.set(raw, clByNorm.get(norm) || []);
         }
 
         // Build authoritative BOM from consumption_library — replaces any existing article.components[]
