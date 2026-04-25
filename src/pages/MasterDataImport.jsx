@@ -282,6 +282,7 @@ export default function MasterData() {
         const rows = readSheet(XLSX, wb, sheetName);
         const valid = [], invalid = [];
         for (const raw of rows) {
+          if (isNoteOnlyRow(raw)) continue; // skip annotation rows entirely
           const errs = validate(raw, cfg);
           if (errs.length) invalid.push({ raw, errors: errs });
           else {
