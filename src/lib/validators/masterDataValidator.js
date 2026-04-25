@@ -166,7 +166,22 @@ function validateAccessoryConsumption(rows) {
   // matchBy in importer: ["item_code","kind","component_type","material"]
   // kind=accessory constant, component_type = category, material = item_name || material
   // Here we use category + material as the distinguishing pair (what importer uses)
-  out.push(...findDuplicates(s, rows, ["item_code", "category", "material"]));
+  // matchBy in importer: ["item_code","kind","component_type","material"]
+  // The importer concatenates item_name + material when both are present and
+  // distinct, so we mirror that here — otherwise the validator flags rows
+  // as duplicates that the importer would actually accept as distinct.
+  const rowsForDupCheck = rows.map(r => {
+    const itemName = (r.item_name == null ? "" : String(r.item_name).trim());
+    const rawMat = (r.material == null ? "" : String(r.material).trim());
+    let effectiveMaterial;
+    if (itemName && rawMat && itemName !== rawMat) {
+      effectiveMaterial = `${itemName} — ${rawMat}`;
+    } else {
+      effectiveMaterial = itemName || rawMat || "";
+    }
+    return { ...r, material: effectiveMaterial };
+  });
+  out.push(...findDuplicates(s, rowsForDupCheck, ["item_code", "category", "material"]));
   out.push(...requireNumericRange(s, rows, "consumption_per_unit", 0.001, 100, WARN));
   return out;
 }
