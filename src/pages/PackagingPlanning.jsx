@@ -6,8 +6,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Save, Plus, Trash2, Upload, Download, Printer, Package, Settings } from "lucide-react";
 import UploadPackagingSheet from "@/components/packaging/UploadPackagingSheet";
 import { db, mfg, accessoryTemplates, supabase } from "@/api/supabaseClient";
+import { resolveDescription, findTechPackForArticle } from "@/lib/descriptionResolver";
 
 // ── Tab configuration ─────────────────────────────────────────────────────
+
 const TAB_CONFIG = {
   Labels: {
     category: "Label",
@@ -95,6 +97,7 @@ const TAB_CONFIG = {
 const SUB_TABS = Object.keys(TAB_CONFIG);
 
 // ── Helpers ───────────────────────────────────────────────────────────────
+
 const inputCls = "w-full text-xs border border-gray-300 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400";
 const numInputCls = "w-16 text-center text-xs border border-gray-300 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400";
 
@@ -114,6 +117,7 @@ const defaultRow = (cfg) => ({
 });
 
 // ── Article Block ─────────────────────────────────────────────────────────
+
 function ArticleBlock({ art, cfg, rows, onChange, templates = [], cartonSize = "" }) {
   const qty = art.order_quantity || 0;
   const artRows = rows[art.id] || [defaultRow(cfg)];
@@ -123,7 +127,9 @@ function ArticleBlock({ art, cfg, rows, onChange, templates = [], cartonSize = "
     if (cfg.autoFillSize && cartonSize) newRow.size = cartonSize;
     onChange(art.id, [...artRows, newRow]);
   };
+
   const remove = (idx) => onChange(art.id, artRows.filter((_, i) => i !== idx));
+
   const update = (idx, field, val) =>
     onChange(art.id, artRows.map((r, i) => i === idx ? { ...r, [field]: val } : r));
 
@@ -274,6 +280,7 @@ function ArticleBlock({ art, cfg, rows, onChange, templates = [], cartonSize = "
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────
+
 export default function PackagingPlanning() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -292,14 +299,17 @@ export default function PackagingPlanning() {
       if (error) return []; return data || [];
     }
   });
+
   const { data: existingItems = [] } = useQuery({
     queryKey: ["accessoryItems"],
     queryFn: async () => { const { data, error } = await supabase.from("accessory_items").select("*").order("category").limit(5000); if (error) throw error; return data; }
   });
-  // Master data accessory specs (from consumption_library). Used as a fallback
-  // to seed Packaging Planning rows when there are no saved accessory_items
-  // yet for a given PO article — so the production team sees the specs they
-  // uploaded in Master Data without re-typing them.
+
+  // Master data accessory specs (consumption_library). Tier-1 of the fallback
+  // chain: seeded into rows when no saved accessory_items exist yet for a PO
+  // article. If material is empty, resolveDescription falls through to the
+  // tech-pack tier — but for Packaging, techPack is always null (Path A), so
+  // consumption_library is the only fallback source for this page.
   const { data: masterAccessorySpecs = [] } = useQuery({
     queryKey: ["masterAccessorySpecs"],
     queryFn: async () => {
@@ -312,6 +322,24 @@ export default function PackagingPlanning() {
       return data || [];
     }
   });
+
+  // Tech packs — fetched for future Trims/Accessory wiring. Packaging passes
+  // techPack: null to resolveDescription (Path A), so this data is not used on
+  // this page today. The query is cheap (5 columns, extracted-only rows) and
+  // including it here means the dependency key already accounts for it.
+  const { data: techPacks = [] } = useQuery({
+    queryKey: ["techPacksExtracted"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("tech_packs")
+        .select("id,article_code,po_id,extracted_accessory_specs,extracted_trim_specs,extracted_label_specs")
+        .eq("extraction_status", "extracted")
+        .limit(500);
+      if (error) return [];
+      return data || [];
+    }
+  });
+
   const { data: allTemplates = [] } = useQuery({
     queryKey: ["accessoryTemplates"],
     queryFn: () => accessoryTemplates.list(),
@@ -348,61 +376,14 @@ export default function PackagingPlanning() {
   const poArticleIds = poArticles.map(a => a.id).sort().join(",");
   const itemIds = existingItems.map(i => i.id).sort().join(",");
   const masterSpecsKey = masterAccessorySpecs.length;
+  const techPacksKey = techPacks.length;
 
   // Initialise rows from existing DB data when PO / articles change
   useEffect(() => {
     if (!activePo || poArticles.length === 0) return;
-    const key = `${activePo.id}|${poArticleIds}|${itemIds}|${masterSpecsKey}`;
+    const key = `${activePo.id}|${poArticleIds}|${itemIds}|${masterSpecsKey}|${techPacksKey}`;
     if (initKeyRef.current === key) return;
     initKeyRef.current = key;
-
-    // Helper: seed rows from master data (consumption_library) when no saved
-    // accessory_items exist yet for this article+category. Returns null if no
-    // matching master-data rows found (so caller can fall back to default empty row).
-    const seedFromMasterData = (articleCode, tabCategory, cfg) => {
-      if (!articleCode) return null;
-      const rows = masterAccessorySpecs.filter(
-        m => m.item_code === articleCode && m.component_type === tabCategory
-      );
-      if (rows.length === 0) return null;
-      return rows.map(m => {
-        // Master data wastage is stored as decimal (0.02 = 2%). Packaging
-        // Planning stores wastage as a percent (2). Convert if needed.
-        const wastage = m.wastage_percent != null
-          ? (m.wastage_percent <= 1 ? m.wastage_percent * 100 : m.wastage_percent)
-          : cfg.defaultWastage;
-        // Map master-data fields to Packaging Planning row shape:
-        //   - type    ← material (the descriptive name of the item)
-        //   - quality ← material (repeated so it shows in the Quality column)
-        //   - size    ← size_spec (dimensions from master data)
-        // For tabs with splitDescSize=true (Polybag/Stiffener/Carton):
-        //   - description ← material, size ← size_spec
-        if (cfg.splitDescSize) {
-          return {
-            type: cfg.typeOptions[0],
-            quality: "",
-            description: m.material || "",
-            size: m.size_spec || "",
-            wastage_percent: wastage,
-            multiplier: 1,
-            pc_ean_code: "",
-            carton_ean_code: "",
-            existing_id: null,
-          };
-        }
-        return {
-          type: cfg.typeOptions[0],
-          quality: m.material || "",
-          description: "",
-          size: m.size_spec || "",
-          wastage_percent: wastage,
-          multiplier: 1,
-          pc_ean_code: "",
-          carton_ean_code: "",
-          existing_id: null,
-        };
-      });
-    };
 
     const init = {};
     SUB_TABS.forEach(tab => {
@@ -412,6 +393,7 @@ export default function PackagingPlanning() {
         const existing = existingItems.filter(
           i => i.po_id === activePo.id && i.article_code === art.article_code && i.category === cfg.category
         );
+
         if (existing.length > 0) {
           init[tab][art.id] = existing.map(e => ({
             type: cfg.category === "Insert Card" ? (e.size_spec || "") : e.item_description,
@@ -425,17 +407,24 @@ export default function PackagingPlanning() {
             existing_id: e.id,
           }));
         } else {
-          // Try to seed from master data before falling back to a blank row.
-          // This restores the "descriptions should auto-fill from what I
-          // uploaded in Master Data" expectation.
-          const seeded = seedFromMasterData(art.article_code, cfg.category, cfg);
-          init[tab][art.id] = seeded || [defaultRow(cfg)];
+          // No saved rows for this article+category — try to seed from master data.
+          // For Packaging Planning, techPack is explicitly null (Path A): this page
+          // only falls back to consumption_library, never to the tech pack.
+          const seeded = resolveDescription({
+            articleCode: art.article_code,
+            tabCategory: cfg.category,
+            cfg,
+            masterSpecs: masterAccessorySpecs,
+            techPack: null,
+          });
+          init[tab][art.id] = seeded ?? [defaultRow(cfg)];
         }
       });
     });
+
     setAllRows(init);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePo?.id, poArticleIds, itemIds, masterSpecsKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePo?.id, poArticleIds, itemIds, masterSpecsKey, techPacksKey]);
 
   const handleChange = (tab, artId, newRows) =>
     setAllRows(prev => ({ ...prev, [tab]: { ...prev[tab], [artId]: newRows } }));
@@ -600,4 +589,3 @@ export default function PackagingPlanning() {
     </div>
   );
 }
-
