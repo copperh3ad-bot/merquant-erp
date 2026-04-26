@@ -1,35 +1,51 @@
 // supabase/functions/extract-document/index.ts
 //
-// Phase C of the unified AI extraction pipeline (spec 2026-04-25-ai-extraction).
+// Phase E2 of the unified AI extraction pipeline (spec 2026-04-25-ai-extraction).
 //
-// Adds on top of Phase B:
-//   - XLSX parsing via SheetJS (CSV blocks per sheet)
-//   - Anthropic call with tool_use for structured output
-//   - Persistence of the ai_extractions row with raw response, tokens, and cost
-//   - Cost computation per model (constants below; verify if Anthropic publishes new rates)
+// Adds on top of Phase D:
+//   - PDF and image input (Anthropic document/image content blocks)
+//   - BOB fast path: deterministic XLSX parser tried first for kind=tech_pack;
+//     when it succeeds, no LLM call is made and cost is $0.
+//   - Haiku-first / Sonnet fallback: every kind starts on Haiku; if the model
+//     returns _confidence.overall below CONFIDENCE_FALLBACK_THRESHOLD,
+//     the same input is retried with Sonnet. The kept result reports the
+//     final model; cost_usd sums across all attempts.
 //
-// Validation (Phase D) is intentionally not run here. New rows land with
-// validation_status='skipped' and cannot be applied until Phase D ships and
-// either re-validates them or applies inline going forward.
+// File-type detection: file_mime first, file extension as fallback.
+// Supported MIME prefixes (Phase E2):
+//   xlsx: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel
+//   pdf:  application/pdf
+//   image: image/jpeg, image/png, image/webp
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as XLSX from "https://esm.sh/xlsx@0.18.5";
 import { getPromptForKind, type ExtractionKind } from "./prompts.ts";
 import { validateExtraction } from "./extractionValidator.js";
+import { parseBobTechPack } from "./bobTechPackParser.js";
+import { bobToTechPackShape } from "./bobAdapter.js";
 
 const SUPABASE_URL      = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
 
-const MAX_FILE_BYTES   = 10 * 1024 * 1024;        // 10 MB
-const DEDUP_WINDOW_MS  = 6 * 60 * 60 * 1000;      // 6 hours
-const ANTHROPIC_TIMEOUT_MS = 60_000;              // 60s
+const MAX_FILE_BYTES = 10 * 1024 * 1024;      // 10 MB
+const DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000;   // 6 hours
+const ANTHROPIC_TIMEOUT_MS = 60_000;          // 60s per attempt
 const ANTHROPIC_MAX_TOKENS = 16_000;
-const SOURCES_BUCKET   = "ai-extraction-sources";
-const ALLOWED_KINDS    = new Set<ExtractionKind>(["tech_pack", "master_data"]);
+const SOURCES_BUCKET = "ai-extraction-sources";
+const ALLOWED_KINDS = new Set<ExtractionKind>(["tech_pack", "master_data"]);
+const CONFIDENCE_FALLBACK_THRESHOLD = 0.7;    // Phase E2 P1=B
 
-// USD per million tokens. Update if Anthropic changes published rates.
-// Cache reads are billed at ~10% of base input rate; cache writes at ~125%.
+type FileFormat = "xlsx" | "pdf" | "image";
+const IMAGE_MIMES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
+const PDF_MIMES   = new Set(["application/pdf"]);
+const XLSX_MIMES  = new Set([
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+]);
+
+// USD per million tokens. Update if Anthropic publishes new rates.
+// Cache reads ~10% of base input rate; cache writes ~125%.
 const COST_RATES: Record<string, { in: number; out: number; cacheRead: number; cacheWrite: number }> = {
   "claude-sonnet-4-6":          { in: 3.00, out: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
   "claude-haiku-4-5-20251001":  { in: 1.00, out:  5.00, cacheRead: 0.10, cacheWrite: 1.25 },
@@ -68,10 +84,29 @@ function decodeBase64(b64: string): Uint8Array {
   return out;
 }
 
-// Render every sheet of an XLSX as labelled CSV blocks. This is the format
-// the LLM reads — each sheet becomes:
-//   === Sheet: "<name>" ===
-//   row1,row2,row3...
+function bytesToBase64(bytes: Uint8Array): string {
+  // Chunked to avoid call-stack overflow on String.fromCharCode for large inputs
+  let s = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return btoa(s);
+}
+
+function detectFormat(fileMime: string, fileName: string): FileFormat | null {
+  const mime = (fileMime || "").toLowerCase();
+  if (XLSX_MIMES.has(mime)) return "xlsx";
+  if (PDF_MIMES.has(mime))  return "pdf";
+  if (IMAGE_MIMES.has(mime)) return "image";
+  // Extension fallback
+  const ext = (fileName.split(".").pop() || "").toLowerCase();
+  if (ext === "xlsx" || ext === "xls") return "xlsx";
+  if (ext === "pdf") return "pdf";
+  if (ext === "jpg" || ext === "jpeg" || ext === "png" || ext === "webp") return "image";
+  return null;
+}
+
 function xlsxToText(bytes: Uint8Array): string {
   const wb = XLSX.read(bytes, { type: "array" });
   const blocks: string[] = [];
@@ -88,23 +123,57 @@ function xlsxToText(bytes: Uint8Array): string {
 function computeCostUsd(
   model: string,
   usage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number },
-): number | null {
+): number {
   const r = COST_RATES[model];
-  if (!r) return null;
-  const baseIn      = (usage.input_tokens ?? 0)               * r.in        / 1_000_000;
-  const cacheRead   = (usage.cache_read_input_tokens ?? 0)    * r.cacheRead / 1_000_000;
-  const cacheWrite  = (usage.cache_creation_input_tokens ?? 0)* r.cacheWrite/ 1_000_000;
-  const out         = (usage.output_tokens ?? 0)              * r.out       / 1_000_000;
-  return Number((baseIn + cacheRead + cacheWrite + out).toFixed(4));
+  if (!r) return 0;
+  const baseIn     = (usage.input_tokens ?? 0)               * r.in        / 1_000_000;
+  const cacheRead  = (usage.cache_read_input_tokens ?? 0)    * r.cacheRead / 1_000_000;
+  const cacheWrite = (usage.cache_creation_input_tokens ?? 0)* r.cacheWrite/ 1_000_000;
+  const out        = (usage.output_tokens ?? 0)              * r.out       / 1_000_000;
+  return baseIn + cacheRead + cacheWrite + out;
 }
 
-type AnthropicResult =
-  | { kind: "ok"; raw: unknown; extracted: unknown; usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } }
-  | { kind: "timeout" }
-  | { kind: "http_error"; status: number; body: unknown }
-  | { kind: "no_tool_use"; raw: unknown };
+// Build the user-message content array per file format. Anthropic accepts an
+// array mixing text/image/document blocks; XLSX is sent as text after SheetJS
+// rendering, PDF as document, images as image.
+function buildUserContent(format: FileFormat, fileName: string, fileMime: string, bytes: Uint8Array, kind: ExtractionKind): unknown[] {
+  if (format === "xlsx") {
+    const xlsxText = xlsxToText(bytes);
+    return [{ type: "text", text: `File: ${fileName} (${bytes.length} bytes, kind=${kind})\n\n${xlsxText}` }];
+  }
+  const b64 = bytesToBase64(bytes);
+  if (format === "pdf") {
+    return [
+      { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } },
+      { type: "text", text: `Extract per the tool schema. File: ${fileName} (${bytes.length} bytes, kind=${kind}).` },
+    ];
+  }
+  // image
+  return [
+    { type: "image", source: { type: "base64", media_type: fileMime || "image/jpeg", data: b64 } },
+    { type: "text", text: `Extract per the tool schema. File: ${fileName} (${bytes.length} bytes, kind=${kind}).` },
+  ];
+}
 
-async function callAnthropic(model: string, systemPrompt: string, tool: unknown, userText: string): Promise<AnthropicResult> {
+type AttemptResult =
+  | { kind: "ok"; raw: unknown; extracted: unknown; usage: AnthropicUsage; model: string }
+  | { kind: "timeout"; model: string }
+  | { kind: "http_error"; status: number; body: unknown; model: string }
+  | { kind: "no_tool_use"; raw: unknown; model: string };
+
+type AnthropicUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+};
+
+async function callAnthropicOnce(
+  model: string,
+  systemPrompt: string,
+  tool: { name: string; [k: string]: unknown },
+  userContent: unknown[],
+): Promise<AttemptResult> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), ANTHROPIC_TIMEOUT_MS);
   try {
@@ -120,37 +189,63 @@ async function callAnthropic(model: string, systemPrompt: string, tool: unknown,
         model,
         max_tokens: ANTHROPIC_MAX_TOKENS,
         system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
-        messages: [{ role: "user", content: userText }],
+        messages: [{ role: "user", content: userContent }],
         tools: [tool],
-        // deno-lint-ignore no-explicit-any
-        tool_choice: { type: "tool", name: (tool as any).name },
+        tool_choice: { type: "tool", name: tool.name },
       }),
     });
 
     const data = await resp.json();
-    if (!resp.ok) return { kind: "http_error", status: resp.status, body: data };
+    if (!resp.ok) return { kind: "http_error", status: resp.status, body: data, model };
 
-    const usage = (data?.usage ?? {}) as AnthropicResult extends { usage: infer U } ? U : never;
+    const usage: AnthropicUsage = data?.usage ?? {};
     const block = (data?.content ?? []).find((c: { type?: string }) => c.type === "tool_use");
-    if (!block) return { kind: "no_tool_use", raw: data };
-
-    return {
-      kind: "ok",
-      raw: data,
-      extracted: block.input,
-      usage: {
-        input_tokens: usage.input_tokens ?? 0,
-        output_tokens: usage.output_tokens ?? 0,
-        cache_read_input_tokens: usage.cache_read_input_tokens,
-        cache_creation_input_tokens: usage.cache_creation_input_tokens,
-      },
-    };
+    if (!block) return { kind: "no_tool_use", raw: data, model };
+    return { kind: "ok", raw: data, extracted: block.input, usage, model };
   } catch (e) {
-    if ((e as Error).name === "AbortError") return { kind: "timeout" };
+    if ((e as Error).name === "AbortError") return { kind: "timeout", model };
     throw e;
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Try each model in order; if a successful call returns confidence below the
+// threshold AND there is a stronger model behind it, re-try. Returns the
+// final attempt plus the cumulative cost across all attempts.
+type ChainResult =
+  | { kind: "ok"; attempts: AttemptResult[]; final: Extract<AttemptResult, { kind: "ok" }>; total_cost_usd: number }
+  | { kind: "exhausted"; attempts: AttemptResult[]; total_cost_usd: number };
+
+async function callAnthropicChain(
+  models: string[],
+  systemPrompt: string,
+  tool: { name: string; [k: string]: unknown },
+  userContent: unknown[],
+): Promise<ChainResult> {
+  const attempts: AttemptResult[] = [];
+  let totalCost = 0;
+  for (let i = 0; i < models.length; i++) {
+    const isLast = i === models.length - 1;
+    const result = await callAnthropicOnce(models[i], systemPrompt, tool, userContent);
+    attempts.push(result);
+    if (result.kind === "ok") {
+      totalCost += computeCostUsd(result.model, result.usage);
+      const conf = (result.extracted as { _confidence?: { overall?: number } })?._confidence?.overall;
+      const lowConfidence = typeof conf === "number" && conf < CONFIDENCE_FALLBACK_THRESHOLD;
+      if (!lowConfidence || isLast) {
+        return { kind: "ok", attempts, final: result, total_cost_usd: totalCost };
+      }
+      console.log(`[extract-document] confidence ${conf} below ${CONFIDENCE_FALLBACK_THRESHOLD}; escalating ${result.model} -> ${models[i + 1]}`);
+      continue;
+    }
+    if (result.kind === "http_error" || result.kind === "no_tool_use" || result.kind === "timeout") {
+      // Non-recoverable per-attempt failure: don't escalate (likely the whole
+      // chain would fail similarly).
+      return { kind: "exhausted", attempts, total_cost_usd: totalCost };
+    }
+  }
+  return { kind: "exhausted", attempts, total_cost_usd: totalCost };
 }
 
 // -------- handler --------
@@ -200,6 +295,15 @@ Deno.serve(async (req) => {
 
   const fileName = sanitiseFileName(body.file_name ?? "upload");
   const fileMime = (body.file_mime ?? "application/octet-stream").slice(0, 200);
+  const format = detectFormat(fileMime, fileName);
+  if (!format) {
+    return err(
+      "EXTRACTION_UNSUPPORTED_FORMAT",
+      "We don't support this file type yet. Please upload an XLSX, PDF, JPG, PNG, or WEBP file.",
+      `mime=${fileMime}, name=${fileName}`,
+      415,
+    );
+  }
   const fileHash = await sha256Hex(bytes);
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -207,14 +311,13 @@ Deno.serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Resolve current user (RLS enforces auth_all but we still need created_by)
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   if (userErr || !userData?.user) {
     return err("UNAUTHORISED", "You need to be signed in to extract documents.", userErr?.message ?? "no user", 401);
   }
   const userId = userData.user.id;
 
-  // Dedup: same hash within 6h that hasn't been rejected/superseded
+  // Dedup
   const sinceIso = new Date(Date.now() - DEDUP_WINDOW_MS).toISOString();
   const { data: dupRows, error: dupErr } = await supabase
     .from("ai_extractions")
@@ -224,7 +327,6 @@ Deno.serve(async (req) => {
     .not("review_status", "in", "(rejected,superseded)")
     .order("created_at", { ascending: false })
     .limit(1);
-
   if (dupErr) {
     console.error("[extract-document] dedup query failed:", dupErr.message);
     return err("DEDUP_QUERY_FAILED", "We hit an internal problem checking for duplicates. Please try again.", dupErr.message, 500);
@@ -239,10 +341,8 @@ Deno.serve(async (req) => {
     }, 409);
   }
 
-  // Reserve uuid + storage path so the eventual ai_extractions.id matches the path
   const extractionId = crypto.randomUUID();
   const storagePath = `${extractionId}/${fileName}`;
-
   const { error: uploadErr } = await supabase.storage
     .from(SOURCES_BUCKET)
     .upload(storagePath, bytes, { contentType: fileMime, upsert: false });
@@ -251,64 +351,11 @@ Deno.serve(async (req) => {
     return err("STORAGE_UPLOAD_FAILED", "We couldn't save the uploaded file. Please try again.", uploadErr.message, 500);
   }
 
-  const { systemPrompt, tool, version: promptVersion, model } = getPromptForKind(kind);
-
-  // Parse XLSX
-  let xlsxText: string;
-  try {
-    xlsxText = xlsxToText(bytes);
-  } catch (e) {
-    const msg = (e as Error).message ?? String(e);
-    console.error("[extract-document] xlsx parse failed:", msg);
-    await supabase.from("ai_extractions").insert({
-      id: extractionId,
-      kind,
-      prompt_version: promptVersion,
-      model,
-      file_name: fileName,
-      file_mime: fileMime,
-      file_size_bytes: bytes.length,
-      file_hash: fileHash,
-      storage_path: storagePath,
-      validation_status: "skipped",
-      review_status: "pending_review",
-      error_code: "EXTRACTION_PARSE_FAILED",
-      error_message: msg,
-      created_by: userId,
-    });
-    return err("EXTRACTION_PARSE_FAILED", "We couldn't read this XLSX file. It may be corrupt or password-protected.", `sheetjs threw: ${msg}`, 422);
-  }
-
-  if (!xlsxText.trim()) {
-    await supabase.from("ai_extractions").insert({
-      id: extractionId,
-      kind,
-      prompt_version: promptVersion,
-      model,
-      file_name: fileName,
-      file_mime: fileMime,
-      file_size_bytes: bytes.length,
-      file_hash: fileHash,
-      storage_path: storagePath,
-      validation_status: "skipped",
-      review_status: "pending_review",
-      error_code: "EXTRACTION_PARSE_FAILED",
-      error_message: "no usable sheets found",
-      created_by: userId,
-    });
-    return err("EXTRACTION_PARSE_FAILED", "This file appears to be empty.", "no usable sheets after parse", 422);
-  }
-
-  // Build user message and call Claude
-  const userText = `File: ${fileName} (${bytes.length} bytes, kind=${kind})\n\n${xlsxText}`;
-  const result = await callAnthropic(model, systemPrompt, tool, userText);
-
-  // Common fields written on every outcome (success and failure)
+  const { systemPrompt, tool, version: promptVersion, models } = getPromptForKind(kind);
   const baseRow = {
     id: extractionId,
     kind,
     prompt_version: promptVersion,
-    model,
     file_name: fileName,
     file_mime: fileMime,
     file_size_bytes: bytes.length,
@@ -318,51 +365,132 @@ Deno.serve(async (req) => {
     created_by: userId,
   };
 
-  if (result.kind === "timeout") {
-    await supabase.from("ai_extractions").insert({ ...baseRow, validation_status: "skipped", error_code: "EXTRACTION_LLM_TIMEOUT", error_message: `aborted at ${ANTHROPIC_TIMEOUT_MS}ms` });
-    return err("EXTRACTION_LLM_TIMEOUT", "The AI took too long to respond. Please try again in a minute.", `fetch aborted at ${ANTHROPIC_TIMEOUT_MS}ms`, 504);
+  // ---------------------------------------------------------------- BOB fast path
+  // Tech_pack + XLSX + sheet structure matches BOB → deterministic parse, $0.
+  if (kind === "tech_pack" && format === "xlsx") {
+    try {
+      const bob = parseBobTechPack(bytes);
+      if (bob && Array.isArray(bob.skus) && bob.skus.length > 0) {
+        const extracted = bobToTechPackShape(bob);
+        const validation = validateExtraction(kind, extracted) as {
+          issues: Array<Record<string, unknown>>;
+          status: "passed" | "warned" | "failed";
+          error_count: number;
+          warning_count: number;
+        };
+        const { error: insertErr } = await supabase.from("ai_extractions").insert({
+          ...baseRow,
+          model: "bob_parser",
+          validation_status: validation.status,
+          validation_issues: validation.issues,
+          extracted_data: extracted as Record<string, unknown>,
+          tokens_input: 0,
+          tokens_output: 0,
+          cost_usd: 0,
+        });
+        if (insertErr) {
+          console.error("[extract-document] insert (bob path) failed:", insertErr.message);
+          return err("PERSIST_FAILED", "Extraction worked but we couldn't save the result. Please try again.", insertErr.message, 500);
+        }
+        const summary: Record<string, unknown> = {
+          model: "bob_parser",
+          source: "bob_fast_path",
+          errors: validation.error_count,
+          warnings: validation.warning_count,
+          skus: extracted.skus.length,
+          confidence_overall: extracted._confidence.overall,
+        };
+        return j({ ok: true, extraction_id: extractionId, validation_status: validation.status, summary }, 200);
+      }
+    } catch (e) {
+      // Not a BOB-format file or parse error — silently fall through to the LLM.
+      console.log("[extract-document] BOB fast path skipped:", (e as Error).message ?? String(e));
+    }
   }
 
-  if (result.kind === "http_error") {
-    await supabase.from("ai_extractions").insert({ ...baseRow, validation_status: "skipped", raw_llm_response: result.body as Record<string, unknown>, error_code: "EXTRACTION_LLM_ERROR", error_message: `Anthropic ${result.status}` });
-    console.error("[extract-document] anthropic error", result.status, JSON.stringify(result.body).slice(0, 200));
-    return err("EXTRACTION_LLM_ERROR", "The AI service returned an error. Please try again, or contact support if it keeps happening.", `Anthropic returned status ${result.status}`, 502);
+  // ---------------------------------------------------------------- LLM path
+  // For XLSX we parse to text first (reused as user-content); for PDF/image
+  // we send raw base64 to Anthropic.
+  if (format === "xlsx") {
+    try { xlsxToText(bytes); }
+    catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      console.error("[extract-document] xlsx parse failed:", msg);
+      await supabase.from("ai_extractions").insert({
+        ...baseRow,
+        model: models[0],
+        validation_status: "skipped",
+        error_code: "EXTRACTION_PARSE_FAILED",
+        error_message: msg,
+      });
+      return err("EXTRACTION_PARSE_FAILED", "We couldn't read this XLSX file. It may be corrupt or password-protected.", `sheetjs threw: ${msg}`, 422);
+    }
   }
 
-  if (result.kind === "no_tool_use") {
-    await supabase.from("ai_extractions").insert({ ...baseRow, validation_status: "skipped", raw_llm_response: result.raw as Record<string, unknown>, error_code: "EXTRACTION_LLM_INVALID_JSON", error_message: "tool_use block missing" });
+  const userContent = buildUserContent(format, fileName, fileMime, bytes, kind);
+  const chain = await callAnthropicChain(models, systemPrompt, tool, userContent);
+
+  if (chain.kind === "exhausted") {
+    const lastFailure = chain.attempts[chain.attempts.length - 1];
+    const lastModel = (lastFailure as { model?: string })?.model ?? models[0];
+    if (lastFailure.kind === "timeout") {
+      await supabase.from("ai_extractions").insert({
+        ...baseRow, model: lastModel, validation_status: "skipped",
+        error_code: "EXTRACTION_LLM_TIMEOUT", error_message: `aborted at ${ANTHROPIC_TIMEOUT_MS}ms`,
+        cost_usd: chain.total_cost_usd,
+      });
+      return err("EXTRACTION_LLM_TIMEOUT", "The AI took too long to respond. Please try again in a minute.", `fetch aborted at ${ANTHROPIC_TIMEOUT_MS}ms`, 504);
+    }
+    if (lastFailure.kind === "http_error") {
+      await supabase.from("ai_extractions").insert({
+        ...baseRow, model: lastModel, validation_status: "skipped",
+        raw_llm_response: lastFailure.body as Record<string, unknown>,
+        error_code: "EXTRACTION_LLM_ERROR", error_message: `Anthropic ${lastFailure.status}`,
+        cost_usd: chain.total_cost_usd,
+      });
+      console.error("[extract-document] anthropic error", lastFailure.status, JSON.stringify(lastFailure.body).slice(0, 200));
+      return err("EXTRACTION_LLM_ERROR", "The AI service returned an error. Please try again, or contact support if it keeps happening.", `Anthropic returned status ${lastFailure.status}`, 502);
+    }
+    // no_tool_use
+    await supabase.from("ai_extractions").insert({
+      ...baseRow, model: lastModel, validation_status: "skipped",
+      raw_llm_response: (lastFailure as { raw?: Record<string, unknown> }).raw,
+      error_code: "EXTRACTION_LLM_INVALID_JSON", error_message: "tool_use block missing",
+      cost_usd: chain.total_cost_usd,
+    });
     return err("EXTRACTION_LLM_INVALID_JSON", "The AI couldn't produce a structured result for this file. Please review the raw output or try a clearer source.", "tool_use block missing or invalid", 502);
   }
 
-  // Success — run the deterministic validator before persisting
-  const validation = validateExtraction(kind, result.extracted) as {
+  // Success
+  const final = chain.final;
+  const validation = validateExtraction(kind, final.extracted) as {
     issues: Array<Record<string, unknown>>;
     status: "passed" | "warned" | "failed";
     error_count: number;
     warning_count: number;
   };
 
-  const cost = computeCostUsd(model, result.usage);
   const { error: insertErr } = await supabase.from("ai_extractions").insert({
     ...baseRow,
+    model: final.model,
     validation_status: validation.status,
     validation_issues: validation.issues,
-    raw_llm_response: result.raw as Record<string, unknown>,
-    extracted_data: result.extracted as Record<string, unknown>,
-    tokens_input: result.usage.input_tokens,
-    tokens_output: result.usage.output_tokens,
-    cost_usd: cost,
+    raw_llm_response: final.raw as Record<string, unknown>,
+    extracted_data: final.extracted as Record<string, unknown>,
+    tokens_input: final.usage.input_tokens,
+    tokens_output: final.usage.output_tokens,
+    cost_usd: Number(chain.total_cost_usd.toFixed(4)),
   });
-
   if (insertErr) {
     console.error("[extract-document] insert failed:", insertErr.message);
     return err("PERSIST_FAILED", "Extraction worked but we couldn't save the result. Please try again.", insertErr.message, 500);
   }
 
-  // Build a small summary for the response. Counts per top-level array, plus
-  // confidence overall if the model returned it.
-  const ed = (result.extracted ?? {}) as Record<string, unknown>;
+  const ed = (final.extracted ?? {}) as Record<string, unknown>;
   const summary: Record<string, unknown> = {
+    model: final.model,
+    source: chain.attempts.length > 1 ? "llm_with_fallback" : "llm",
+    attempts: chain.attempts.length,
     errors: validation.error_count,
     warnings: validation.warning_count,
   };

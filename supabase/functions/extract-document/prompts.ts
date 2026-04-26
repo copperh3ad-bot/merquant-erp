@@ -14,9 +14,17 @@ export const PROMPT_VERSION_BY_KIND: Record<ExtractionKind, string> = {
   master_data: "master_data.v1",
 };
 
+// Phase E2: every kind starts on Haiku and escalates to Sonnet on low
+// confidence (see CONFIDENCE_FALLBACK_THRESHOLD in index.ts). MODEL_BY_KIND
+// is kept as the *primary* model only; the fallback chain is in MODEL_CHAIN_BY_KIND.
 export const MODEL_BY_KIND: Record<ExtractionKind, string> = {
-  tech_pack: "claude-sonnet-4-6",
+  tech_pack: "claude-haiku-4-5-20251001",
   master_data: "claude-haiku-4-5-20251001",
+};
+
+export const MODEL_CHAIN_BY_KIND: Record<ExtractionKind, string[]> = {
+  tech_pack: ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
+  master_data: ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
 };
 
 // Tone and rules shared by every prompt. Folded into each system message so
@@ -322,13 +330,13 @@ export function getPromptForKind(kind: ExtractionKind) {
       systemPrompt: TECH_PACK_SYSTEM_PROMPT,
       tool: TECH_PACK_TOOL,
       version: PROMPT_VERSION_BY_KIND.tech_pack,
-      model: MODEL_BY_KIND.tech_pack,
+      models: MODEL_CHAIN_BY_KIND.tech_pack,
     };
   }
   return {
     systemPrompt: MASTER_DATA_SYSTEM_PROMPT,
     tool: MASTER_DATA_TOOL,
     version: PROMPT_VERSION_BY_KIND.master_data,
-    model: MODEL_BY_KIND.master_data,
+    models: MODEL_CHAIN_BY_KIND.master_data,
   };
 }
