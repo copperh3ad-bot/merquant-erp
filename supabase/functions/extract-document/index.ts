@@ -15,6 +15,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as XLSX from "https://esm.sh/xlsx@0.18.5";
 import { getPromptForKind, type ExtractionKind } from "./prompts.ts";
+import { validateExtraction } from "./extractionValidator.js";
 
 const SUPABASE_URL      = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
@@ -333,11 +334,19 @@ Deno.serve(async (req) => {
     return err("EXTRACTION_LLM_INVALID_JSON", "The AI couldn't produce a structured result for this file. Please review the raw output or try a clearer source.", "tool_use block missing or invalid", 502);
   }
 
-  // Success
+  // Success — run the deterministic validator before persisting
+  const validation = validateExtraction(kind, result.extracted) as {
+    issues: Array<Record<string, unknown>>;
+    status: "passed" | "warned" | "failed";
+    error_count: number;
+    warning_count: number;
+  };
+
   const cost = computeCostUsd(model, result.usage);
   const { error: insertErr } = await supabase.from("ai_extractions").insert({
     ...baseRow,
-    validation_status: "skipped", // Phase D will run the validator and update this
+    validation_status: validation.status,
+    validation_issues: validation.issues,
     raw_llm_response: result.raw as Record<string, unknown>,
     extracted_data: result.extracted as Record<string, unknown>,
     tokens_input: result.usage.input_tokens,
@@ -353,7 +362,10 @@ Deno.serve(async (req) => {
   // Build a small summary for the response. Counts per top-level array, plus
   // confidence overall if the model returned it.
   const ed = (result.extracted ?? {}) as Record<string, unknown>;
-  const summary: Record<string, unknown> = {};
+  const summary: Record<string, unknown> = {
+    errors: validation.error_count,
+    warnings: validation.warning_count,
+  };
   for (const [k, v] of Object.entries(ed)) {
     if (Array.isArray(v)) summary[k] = v.length;
   }
@@ -363,7 +375,7 @@ Deno.serve(async (req) => {
   return j({
     ok: true,
     extraction_id: extractionId,
-    validation_status: "skipped",
+    validation_status: validation.status,
     summary,
   }, 200);
 });
