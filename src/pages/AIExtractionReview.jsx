@@ -319,18 +319,8 @@ function DetailView({ extractionId }) {
     })();
   }, [ext, extractionId]);
 
-  if (isLoading || !ext) {
-    return (
-      <div className="p-6 max-w-7xl mx-auto">
-        <Skeleton className="h-10 w-72 mb-4" />
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
-  }
-
-  const issues = ext.validation_issues ?? [];
-  const errCount = issues.filter(i => i.severity === "error").length;
-  const warnCount = issues.filter(i => i.severity === "warn").length;
+  // Hooks must run in the same order every render — keep useMemo before any early return.
+  const issues = ext?.validation_issues ?? [];
   const issuesByPath = useMemo(() => {
     const m = new Map();
     for (const i of issues) {
@@ -350,6 +340,18 @@ function DetailView({ extractionId }) {
     }
     return m;
   }, [conflicts]);
+
+  if (isLoading || !ext) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto">
+        <Skeleton className="h-10 w-72 mb-4" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
+  const errCount = issues.filter(i => i.severity === "error").length;
+  const warnCount = issues.filter(i => i.severity === "warn").length;
 
   async function handleApply({ overwriteConflicts = false } = {}) {
     setApplying(true);
