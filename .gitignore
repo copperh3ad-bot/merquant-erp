@@ -59,3 +59,7 @@ merquant-repo-backup-*/
 # Supabase CLI local state
 supabase/.temp/
 supabase/.branches/
+
+# Buyer artifacts (don't commit)
+*.zip
+merquant-master-data-*.xlsx
