@@ -7,6 +7,7 @@ import { Database, Upload, Download, FileSpreadsheet, Loader2, CheckCircle2, Ale
 import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import ValidationReport from "@/components/masterdata/ValidationReport";
+import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
 
 async function loadSheetJS() {
   if (window.XLSX) return window.XLSX;
@@ -532,6 +533,7 @@ export default function MasterData() {
           <Button size="sm" variant="outline" onClick={handleExport}>
             <Download className="h-3.5 w-3.5 mr-1.5"/>Export Current
           </Button>
+          <TryAIExtractionButton kind="master_data" size="sm" label="Try AI Extraction" />
         </div>
       </div>
 
