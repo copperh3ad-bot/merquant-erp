@@ -135,9 +135,18 @@ export const db = {
       const { data, error } = await supabase.from('po_items').insert(cleaned).select();
       if (error) throw error; return data;
     },
+    /** @returns {Promise<Array>} Up to 2000 items (hard cap). For truncation-aware reads use listWithMeta(). */
     list: async () => {
       const { data, error } = await supabase.from('po_items').select('*').order('created_at', { ascending: false }).limit(2000);
       if (error) throw error; return data || [];
+    },
+    /** @returns {Promise<{data: Array, truncated: boolean}>} Same data plus a truncated flag. */
+    listWithMeta: async () => {
+      const limit = 2000;
+      const { data, error } = await supabase.from('po_items').select('*').order('created_at', { ascending: false }).limit(limit);
+      if (error) throw error;
+      const rows = data || [];
+      return { data: rows, truncated: rows.length === limit };
     },
   },
   suppliers: {
@@ -227,9 +236,18 @@ export const mfg = {
       const { data, error } = await supabase.from('articles').insert(rows).select();
       if (error) throw error; return data;
     },
+    /** @returns {Promise<Array>} Up to 2000 items (hard cap). For truncation-aware reads use listWithMeta(). */
     list: async () => {
       const { data, error } = await supabase.from('articles').select('*').order('article_name').limit(2000);
       if (error) throw error; return data || [];
+    },
+    /** @returns {Promise<{data: Array, truncated: boolean}>} Same data plus a truncated flag. */
+    listWithMeta: async () => {
+      const limit = 2000;
+      const { data, error } = await supabase.from('articles').select('*').order('article_name').limit(limit);
+      if (error) throw error;
+      const rows = data || [];
+      return { data: rows, truncated: rows.length === limit };
     },
   },
   fabricTemplates: {
@@ -285,9 +303,18 @@ export const mfg = {
     delete: async (id) => { const { error } = await supabase.from('trim_items').delete().eq('id', id); if (error) throw error; },
   },
   accessories: {
+    /** @returns {Promise<Array>} Up to 5000 items (hard cap). For truncation-aware reads use listWithMeta(). */
     list: async () => {
       const { data, error } = await supabase.from('accessory_items').select('*').order('category').limit(5000);
       if (error) throw error; return data;
+    },
+    /** @returns {Promise<{data: Array, truncated: boolean}>} Same data plus a truncated flag. */
+    listWithMeta: async () => {
+      const limit = 5000;
+      const { data, error } = await supabase.from('accessory_items').select('*').order('category').limit(limit);
+      if (error) throw error;
+      const rows = data || [];
+      return { data: rows, truncated: rows.length === limit };
     },
     listByPO: async (poId) => {
       const { data, error } = await supabase.from('accessory_items').select('*').eq('po_id', poId).order('category');
@@ -458,7 +485,16 @@ export const tna = {
   },
   milestones: {
     listByPO: async (poId) => { const { data, error } = await supabase.from('tna_milestones').select('*').eq('po_id', poId).order('target_date'); if (error) throw error; return data; },
+    /** @returns {Promise<Array>} Up to 2000 items (hard cap). For truncation-aware reads use listAllWithMeta(). */
     listAll: async () => { const { data, error } = await supabase.from('tna_milestones').select('*').order('target_date').limit(2000); if (error) throw error; return data; },
+    /** @returns {Promise<{data: Array, truncated: boolean}>} Same data plus a truncated flag. */
+    listAllWithMeta: async () => {
+      const limit = 2000;
+      const { data, error } = await supabase.from('tna_milestones').select('*').order('target_date').limit(limit);
+      if (error) throw error;
+      const rows = data || [];
+      return { data: rows, truncated: rows.length === limit };
+    },
     bulkCreate: async (rows) => { const { data, error } = await supabase.from('tna_milestones').insert(rows).select(); if (error) throw error; return data; },
     update: async (id, p) => { const { data, error } = await supabase.from('tna_milestones').update(p).eq('id', id).select().single(); if (error) throw error; return data; },
     delete: async (id) => { const { error } = await supabase.from('tna_milestones').delete().eq('id', id); if (error) throw error; },
@@ -748,7 +784,7 @@ export const batchItems = {
     if (error) throw error; return data;
   },
   update: async (id, patch) => {
-    const { data, error } = await supabase.from('email_crawl_log').update(patch).eq('id', id).select().maybeSingle();
+    const { data, error } = await supabase.from('batch_items').update(patch).eq('id', id).select().maybeSingle();
     if (error) throw error;
     return data;
   },
