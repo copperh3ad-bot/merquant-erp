@@ -30,7 +30,7 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;      // 10 MB
 const DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000;   // 6 hours
-const ANTHROPIC_TIMEOUT_MS = 120_000;         // 120s per attempt (master_data with many sections can take 60-90s on Haiku)
+const ANTHROPIC_TIMEOUT_MS = 240_000;         // 240s per attempt (large master_data with many sections can take 2-3 minutes on Haiku)
 const ANTHROPIC_MAX_TOKENS = 32_000;       // master_data XLSX with 8 sections needs more headroom; was 16k
 const SOURCES_BUCKET = "ai-extraction-sources";
 const ALLOWED_KINDS = new Set<ExtractionKind>(["tech_pack", "master_data"]);
