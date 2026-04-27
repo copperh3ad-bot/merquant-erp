@@ -19,11 +19,12 @@ Phases A → F of the spec are **shipped to live Supabase** (project ref `ecjqdy
 | E2 — PDF/image, BOB fast path, Haiku→Sonnet fallback | `0f1e1d2` | ✅ deployed |
 | F — review UI + entry points | `9131127` | ✅ committed (Netlify deploys on push to main) |
 | F runtime fixes | `7fa7141` | ✅ extract-document redeployed; UI awaiting Netlify |
+| G — tests + CI | `1da568d` | ✅ 17 new unit tests (56 total); DB stubs in `tests/db/`; no CI change needed |
 
 ## What's not done
 
-- **Phase G — tests + CI.** Not started. Recommended path picked but not built (P1=B, P2=A, P3=no CI change). Adds prompt snapshot tests, bobAdapter tests, and `tests/db/*.sql` stubs.
 - **Bug — packaging planning missing descriptions.** User reported, paused for example SKU. Three possible diagnoses: (1) data gap, (2) Path A by design (Packaging doesn't fall back to tech pack), (3) resolver defect. Need a SKU + tab name to investigate.
+- **End-to-end verification of a successful AI extraction.** First master_data attempt timed out at 60s (now bumped to 120s). Retest tomorrow.
 
 ## Where you left off
 
