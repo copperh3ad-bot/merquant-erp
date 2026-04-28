@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import ValidationReport from "@/components/masterdata/ValidationReport";
 import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
+import { buildBulkTemplate, buildPerProgramTemplate } from "@/lib/masterDataTemplates";
 
 async function loadSheetJS() {
   if (window.XLSX) return window.XLSX;
@@ -264,11 +265,43 @@ export default function MasterData() {
     if (fileRef.current) fileRef.current.value = "";
   };
 
-  const downloadTemplate = () => {
+  // Generate templates at runtime from the canonical column config in
+  // src/lib/masterDataTemplates.js — guarantees the download always matches
+  // what the importer expects (no static file drift).
+  const downloadXlsx = (bytes, fileName) => {
+    const blob = new Blob([bytes], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = "/bob-techpack-master-data.xlsx";
-    a.download = "merquant-master-data-template.xlsx";
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const downloadTemplate = async () => {
+    try {
+      const XLSX = await loadSheetJS();
+      const bytes = buildBulkTemplate(XLSX);
+      downloadXlsx(bytes, "merquant-master-data-template.xlsx");
+    } catch (e) {
+      setStage("error");
+      setMessage(`Could not generate the bulk template: ${e.message || e}`);
+    }
+  };
+
+  const downloadPerProgramTemplate = async () => {
+    try {
+      const XLSX = await loadSheetJS();
+      const bytes = buildPerProgramTemplate(XLSX);
+      downloadXlsx(bytes, "merquant-master-data-per-program-template.xlsx");
+    } catch (e) {
+      setStage("error");
+      setMessage(`Could not generate the per-program template: ${e.message || e}`);
+    }
   };
 
   const handleFile = async (f) => {
@@ -528,7 +561,10 @@ export default function MasterData() {
         </div>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={downloadTemplate}>
-            <Download className="h-3.5 w-3.5 mr-1.5"/>Blank Template
+            <Download className="h-3.5 w-3.5 mr-1.5"/>Bulk Template
+          </Button>
+          <Button size="sm" variant="outline" onClick={downloadPerProgramTemplate}>
+            <Download className="h-3.5 w-3.5 mr-1.5"/>Per-Program AI Template
           </Button>
           <Button size="sm" variant="outline" onClick={handleExport}>
             <Download className="h-3.5 w-3.5 mr-1.5"/>Export Current
