@@ -7,6 +7,7 @@ import { Database, Upload, Download, FileSpreadsheet, Loader2, CheckCircle2, Ale
 import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import ValidationReport from "@/components/masterdata/ValidationReport";
+import { callClaude } from "@/lib/aiProxy";
 
 async function loadSheetJS() {
   if (window.XLSX) return window.XLSX;
@@ -17,6 +18,94 @@ async function loadSheetJS() {
     document.head.appendChild(s);
   });
   return window.XLSX;
+}
+
+// AI extraction for non-XLSX formats (PDF, images, text, CSV)
+// Returns an object structured like { sheet_name: [row_objects] }
+async function extractMasterDataFromAI(file) {
+  const fileName = file.name;
+  const ext = fileName.split('.').pop().toLowerCase();
+  const isImage = /^(png|jpg|jpeg|gif|webp|bmp)$/.test(ext);
+  const isPDF = ext === 'pdf';
+  const isCSV = /^(csv|txt|tsv)$/.test(ext);
+
+  const SYSTEM = `You are a master data extraction expert. Extract structured data from master data files.
+Normalize column names to match these patterns exactly:
+- Articles sheet: item_code, product_type, product_category, size, color, tech_pack_code, bob_sku, brand, product_length_in, product_width_in, product_depth_in
+- Fabric sheet: item_code, component_type, fabric_type, gsm, construction, color, width_cm, consumption_per_unit, wastage_percent, supplier, remarks
+- Accessory sheet: item_code, category, item_name, material, size_spec, placement, consumption_per_unit, supplier
+- Carton sheet: item_code, units_per_carton, carton_length_cm, carton_width_cm, carton_height_cm, cbm_per_carton, weight_per_carton_kg
+- Price sheet: item_code, effective_from (YYYY-MM-DD), effective_to (YYYY-MM-DD), usd_per_unit
+
+Return ONLY valid JSON in this exact structure:
+{
+  "1. Articles (SKUs)": [{ item_code, product_type, ... }],
+  "2. SKU Fabric Consumption": [{ item_code, component_type, ... }],
+  "3. SKU Accessory Consumption": [{ item_code, category, ... }],
+  "4. Carton Master": [{ item_code, units_per_carton, ... }],
+  "5. Price List": [{ item_code, effective_from, ... }]
+}
+
+Include only sheets that have data. Return empty object {} if no data found.`;
+
+  const textPrompt = `Extract all master data rows from this file: ${fileName}
+Return ONLY the JSON structure, no markdown fences.`;
+
+  let messages;
+
+  if (isImage) {
+    const b64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(',')[1]);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+    const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+    messages = [{ role: 'user', content: [
+      { type: 'image', source: { type: 'base64', media_type: mimeMap[ext] || 'image/jpeg', data: b64 } },
+      { type: 'text', text: textPrompt }
+    ] }];
+
+  } else if (isPDF) {
+    const b64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(',')[1]);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+    messages = [{ role: 'user', content: [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } },
+      { type: 'text', text: textPrompt }
+    ] }];
+
+  } else {
+    // CSV, TXT, or other text format
+    const text = await file.text();
+    messages = [{ role: 'user', content: `${textPrompt}\n\nFile content:\n${text.substring(0, 20000)}` }];
+  }
+
+  const data = await callClaude({
+    system: SYSTEM,
+    messages,
+    max_tokens: 8000,
+    cacheSystem: true // Reusable for similar templates
+  });
+
+  const raw = data.content?.find(b => b.type === 'text')?.text || '{}';
+  try {
+    const clean = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(clean);
+
+    // Normalize: ensure parsed result has array values
+    const result = {};
+    for (const [sheetName, rows] of Object.entries(parsed)) {
+      result[sheetName] = Array.isArray(rows) ? rows : [];
+    }
+    return result;
+  } catch (e) {
+    console.error('Master Data AI extraction parse error:', e);
+    throw new Error(`Could not parse extracted data: ${e.message}`);
+  }
 }
 
 const toStr  = (v) => v == null ? null : (String(v).trim() || null);
@@ -274,12 +363,37 @@ export default function MasterData() {
     if (!f) return;
     setStage("parsing"); setMessage(`Reading ${f.name}…`);
     try {
-      const XLSX = await loadSheetJS();
-      const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+      const ext = f.name.split('.').pop().toLowerCase();
+      const isXLSX = /^(xlsx|xls)$/.test(ext);
+      const isImage = /^(png|jpg|jpeg|gif|webp|bmp)$/.test(ext);
+      const isPDF = ext === 'pdf';
+      const isText = /^(csv|txt|tsv|json)$/.test(ext);
+
+      let rowsBySheet = {};
+
+      // Detect format and extract accordingly
+      if (isXLSX) {
+        // Original XLSX path
+        setMessage(`Parsing ${f.name}…`);
+        const XLSX = await loadSheetJS();
+        const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+        for (const sheetName of SHEET_ORDER) {
+          const rows = readSheet(XLSX, wb, sheetName);
+          rowsBySheet[sheetName] = rows;
+        }
+      } else if (isImage || isPDF || isText) {
+        // AI extraction path
+        setMessage(`Extracting data from ${f.name} (AI-assisted)…`);
+        rowsBySheet = await extractMasterDataFromAI(f);
+      } else {
+        throw new Error(`Unsupported file format: .${ext}. Use XLSX, PDF, PNG/JPG, CSV, or TXT.`);
+      }
+
+      // Process all rows uniformly through validation
       const report = {};
       for (const sheetName of SHEET_ORDER) {
         const cfg = SHEETS[sheetName];
-        const rows = readSheet(XLSX, wb, sheetName);
+        const rows = rowsBySheet[sheetName] || [];
         const valid = [], invalid = [];
         for (const raw of rows) {
           if (isNoteOnlyRow(raw)) continue; // skip annotation rows entirely
@@ -541,9 +655,9 @@ export default function MasterData() {
             <div onClick={() => fileRef.current?.click()}
                  className="border-2 border-dashed border-border rounded-xl p-10 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30">
               <Upload className="h-10 w-10 mx-auto mb-3 text-muted-foreground"/>
-              <p className="text-sm font-medium">Click to upload master data workbook</p>
-              <p className="text-xs text-muted-foreground mt-1">.xlsx only · dry-run preview before writes</p>
-              <input ref={fileRef} type="file" accept=".xlsx,.xlsm" className="hidden"
+              <p className="text-sm font-medium">Click to upload master data file</p>
+              <p className="text-xs text-muted-foreground mt-1">XLSX, PDF, PNG/JPG, CSV, or TXT · AI-assisted extraction · dry-run preview before writes</p>
+              <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.pdf,.png,.jpg,.jpeg,.csv,.txt,.tsv" className="hidden"
                      onChange={e => handleFile(e.target.files[0])}/>
             </div>
             <p className="text-xs text-muted-foreground">
