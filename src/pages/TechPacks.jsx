@@ -973,6 +973,57 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
               createdTps.push(tp);
             }
 
+            // ── Article dimension sync ──
+            // The BOB tech pack carries rich per-SKU dimensions in each
+            // tp.extracted_measurements.this_sku that the articles table
+            // doesn't get from PO upload alone. Backfill them onto matching
+            // articles rows so the Articles UI, Packaging Planning's
+            // article-fallback, and any downstream consumer see populated
+            // dimensions without requiring the user to re-enter them via
+            // the master Articles sheet. Only fills columns that are
+            // currently NULL — never clobbers user edits or master-data values.
+            try {
+              for (const tp of createdTps) {
+                if (!tp.article_code) continue;
+                const sku = tp.extracted_measurements?.this_sku;
+                if (!sku) continue;
+
+                // Look up the article row by article_code (typically created
+                // by a prior PO upload). If no article exists, skip — the
+                // article will be created by future PO upload, at which
+                // point this sync wouldn't run anyway.
+                const { data: existingArt } = await supabase
+                  .from("articles")
+                  .select("id, product_dimensions, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
+                  .eq("article_code", tp.article_code)
+                  .maybeSingle();
+                if (!existingArt) continue;
+
+                const onlyIfBlank = (currentVal, newVal) =>
+                  (currentVal == null || String(currentVal).trim() === "") && newVal ? newVal : null;
+
+                // sku.zipper_length → articles.zipper_length_cm (column rename).
+                const patch = {
+                  product_dimensions: onlyIfBlank(existingArt.product_dimensions, sku.product_dimensions),
+                  pvc_bag_dimensions: onlyIfBlank(existingArt.pvc_bag_dimensions, sku.pvc_bag_dimensions),
+                  stiffener_size:     onlyIfBlank(existingArt.stiffener_size,     sku.stiffener_size),
+                  insert_dimensions:  onlyIfBlank(existingArt.insert_dimensions,  sku.insert_dimensions),
+                  zipper_length_cm:   onlyIfBlank(existingArt.zipper_length_cm,   sku.zipper_length),
+                  carton_size_cm:     onlyIfBlank(existingArt.carton_size_cm,     sku.carton_size_cm),
+                };
+                const filtered = Object.fromEntries(
+                  Object.entries(patch).filter(([_, v]) => v != null)
+                );
+                if (Object.keys(filtered).length > 0) {
+                  await supabase.from("articles").update(filtered).eq("id", existingArt.id);
+                }
+              }
+            } catch (artSyncErr) {
+              // Non-blocking: tech_packs rows are saved, this is just a
+              // convenience backfill. Log and move on.
+              console.warn("[article dim sync] failed (non-blocking):", artSyncErr?.message || artSyncErr);
+            }
+
             // ── Barcode OCR enrichment ──
             // BOB tech packs render the UPC table as a barcode IMAGE, not as
             // text cells, so the BOB parser can't read the digits. Send the

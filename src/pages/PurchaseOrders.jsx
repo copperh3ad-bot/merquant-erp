@@ -384,10 +384,68 @@ export default function PurchaseOrders() {
           }, {})
         );
 
-        // Authoritative upsert: replaces components[] on every import
+        // Authoritative upsert: replaces components[] on every import.
+        // Note: only the columns in dedupedArticles are written; existing
+        // dimension columns (carton_size_cm, stiffener_size, etc.) are
+        // preserved on UPDATE because they're not in the SET clause.
         await supabase.from("articles").upsert(dedupedArticles, {
           onConflict: "article_code", ignoreDuplicates: false,
         });
+
+        // ── Article dimension backfill from tech_packs ──
+        // When a tech pack was uploaded BEFORE the PO, the article row
+        // doesn't exist yet at tech-pack time so the tech-pack→article sync
+        // (in TechPacks.jsx) couldn't fire. Now that the articles exist,
+        // pull the per-SKU dimensions out of any matching tech_packs and
+        // fill any NULL dimension columns.
+        try {
+          const articleCodes = dedupedArticles.map(a => a.article_code).filter(Boolean);
+          if (articleCodes.length > 0) {
+            const { data: tps } = await supabase
+              .from("tech_packs")
+              .select("article_code, extracted_measurements")
+              .in("article_code", articleCodes);
+            if (Array.isArray(tps) && tps.length > 0) {
+              // Pick the most recent tech pack per article_code (the array
+              // already ordered newest-first by default, but we don't rely
+              // on that — first-seen-wins is fine for backfill).
+              const byCode = new Map();
+              for (const tp of tps) {
+                if (!byCode.has(tp.article_code)) byCode.set(tp.article_code, tp);
+              }
+              for (const [code, tp] of byCode) {
+                const sku = tp.extracted_measurements?.this_sku;
+                if (!sku) continue;
+
+                const { data: art } = await supabase
+                  .from("articles")
+                  .select("id, product_dimensions, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
+                  .eq("article_code", code)
+                  .maybeSingle();
+                if (!art) continue;
+
+                const fillIfBlank = (cur, nv) =>
+                  (cur == null || String(cur).trim() === "") && nv ? nv : null;
+
+                const patch = {
+                  product_dimensions: fillIfBlank(art.product_dimensions, sku.product_dimensions),
+                  pvc_bag_dimensions: fillIfBlank(art.pvc_bag_dimensions, sku.pvc_bag_dimensions),
+                  stiffener_size:     fillIfBlank(art.stiffener_size,     sku.stiffener_size),
+                  insert_dimensions:  fillIfBlank(art.insert_dimensions,  sku.insert_dimensions),
+                  zipper_length_cm:   fillIfBlank(art.zipper_length_cm,   sku.zipper_length),
+                  carton_size_cm:     fillIfBlank(art.carton_size_cm,     sku.carton_size_cm),
+                };
+                const filtered = Object.fromEntries(Object.entries(patch).filter(([_, v]) => v != null));
+                if (Object.keys(filtered).length > 0) {
+                  await supabase.from("articles").update(filtered).eq("id", art.id);
+                }
+              }
+            }
+          }
+        } catch (dimBackfillErr) {
+          // Non-blocking — articles are already saved, this is enrichment.
+          console.warn("[PO upload article dim backfill] failed (non-blocking):", dimBackfillErr?.message || dimBackfillErr);
+        }
 
         // Auto-copy accessories from most recent previous PO for same articles
         setImportMsg("Copying accessories from history…");
