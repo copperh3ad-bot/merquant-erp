@@ -119,6 +119,20 @@ const RULES = [
     },
   },
 
+  // ── Trim — placement-instruction rows that mention "zipper" but describe
+  //    a small fabric piece sewn at zipper ends. Must be checked BEFORE the
+  //    Zipper rule so these don't get classified as the zipper itself.
+  //    Examples seen in real BOB tech packs:
+  //      "Please add a cut piecing at both zipper end and size of piece is ½"X1""
+  //      "Stopper piece at zipper end"
+  //      "Fabric tab piece for zipper closure"
+  {
+    type: "Trim",
+    confidence: 0.92,
+    test: (h) => /\b(cut piec|piecing|piec.{0,15}zipper end|zipper.{0,15}piece|tab piece|stopper piece|please add)\b/.test(h)
+              && /\bzipper\b/.test(h),
+  },
+
   // ── Zipper (standalone zipper item — must come AFTER Polybag so that
   //    "bag with zipper" descriptions are classified as Polybag, not Zipper)
   {
@@ -127,6 +141,9 @@ const RULES = [
     test: (h) => {
       // Veto when the item is clearly a bag with a zipper feature
       if (/\b(bag|polybag|pvc bag|opp bag|pe bag)\b/.test(h)) return false;
+      // Veto when the description is an instruction about pieces attached
+      // to the zipper, not the zipper itself.
+      if (/\b(cut piec|piecing|tab piece|stopper piece|please add)\b/.test(h)) return false;
       return /\b(zipper|zip slider|coil zipper|nylon zipper|sbs zipper|metal zipper|ykk)\b/.test(h);
     },
   },

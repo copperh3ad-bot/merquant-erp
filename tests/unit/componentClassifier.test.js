@@ -113,6 +113,17 @@ const FIXTURES = [
     expected: "Zipper",
   },
 
+  // Cut-piecing instruction tagged as "Zipper" by source XLSX —
+  // should reroute to Trim (it's a fabric tab piece, not a zipper).
+  {
+    name: "cut piecing at zipper end (instruction, not a zipper)",
+    item: {
+      raw_category: "Zipper",
+      material: 'Please add a cut piecing at both zipper end and size of piece is ½"X1"',
+    },
+    expected: "Trim",
+  },
+
   // Trim
   {
     name: "elastic binding",
