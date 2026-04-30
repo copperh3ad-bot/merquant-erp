@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { db, techPacks, discrepancies, mfg, supabase } from "@/api/supabaseClient";
@@ -751,11 +751,17 @@ function TechPackDetail({ tp, onClose }) {
 }
 
 // ── Upload & Extract Dialog ────────────────────────────────────────────────
-function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
+function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
   const { profile } = useAuth();
   const qc = useQueryClient();
   const [files, setFiles] = useState([]);
-  const [poId, setPoId] = useState("");
+  const [poId, setPoId] = useState(defaultPoId || "");
+  // When the dialog is opened from a per-row "Re-upload" button, defaultPoId
+  // arrives pre-filled. Sync it whenever it changes so the user doesn't have
+  // to re-pick the PO.
+  useEffect(() => {
+    if (defaultPoId) setPoId(defaultPoId);
+  }, [defaultPoId]);
   const [articleCode, setArticleCode] = useState("");
   const [articleName, setArticleName] = useState("");
   const [notes, setNotes] = useState("");
@@ -1398,6 +1404,10 @@ function FileProgressRow({ p }) {
 export default function TechPacks() {
   const [searchParams] = useSearchParams();
   const [showUpload, setShowUpload] = useState(false);
+  // Pre-fills the upload dialog's PO when triggered from a per-row Re-upload
+  // button on a legacy `blob:` tech pack. After upload completes, any blob:
+  // row whose SKU now has a storage:// sibling is auto-deleted.
+  const [reuploadDefaultPoId, setReuploadDefaultPoId] = useState("");
   const [viewing, setViewing] = useState(null);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -1504,6 +1514,44 @@ export default function TechPacks() {
     }
   };
 
+  // ── Cleanup: delete legacy `blob:` rows that have been superseded ──
+  // After a successful upload, find any tech_pack rows with file_url like
+  // `blob:` whose article_code now also has a sibling row with file_url
+  // like `storage://`. The blob: rows are stale (the file isn't reachable
+  // and OCR can't run on them), so we delete them so the UI shows the new
+  // storage-persisted row instead. Triggered by UploadDialog's onSuccess.
+  const handlePostUploadCleanup = async () => {
+    try {
+      const { data: allTps } = await supabase
+        .from("tech_packs")
+        .select("id, article_code, file_url");
+      if (!Array.isArray(allTps)) return;
+      // SKUs that have at least one storage:// row
+      const skusWithStorage = new Set(
+        allTps
+          .filter((t) => (t.file_url || "").startsWith("storage://"))
+          .map((t) => String(t.article_code || "").toUpperCase())
+      );
+      // SKUs to clean: blob: rows whose SKU now has a storage:// sibling
+      const stale = allTps.filter(
+        (t) =>
+          (t.file_url || "").startsWith("blob:") &&
+          skusWithStorage.has(String(t.article_code || "").toUpperCase())
+      );
+      if (stale.length === 0) return;
+      const ids = stale.map((t) => t.id);
+      const { error } = await supabase.from("tech_packs").delete().in("id", ids);
+      if (!error) {
+        console.info(`[TechPacks cleanup] removed ${stale.length} legacy blob: row(s) superseded by storage:// uploads`);
+        qc.invalidateQueries({ queryKey: ["techPacks"] });
+      } else {
+        console.warn("[TechPacks cleanup] delete failed:", error.message);
+      }
+    } catch (e) {
+      console.warn("[TechPacks cleanup] threw (non-blocking):", e?.message || e);
+    }
+  };
+
   if (isLoading) return <div className="space-y-3">{[1,2,3].map(i=><Skeleton key={i} className="h-20 rounded-xl"/>)}</div>;
 
   return (
@@ -1607,6 +1655,22 @@ export default function TechPacks() {
                       Barcodes
                     </Button>
                   )}
+                  {/* Re-upload button on legacy blob: rows so the user can
+                      replace this stale tech-pack with a storage-persisted
+                      copy (which will get OCR'd, populate EANs, and replace
+                      the blob: row automatically via post-upload cleanup). */}
+                  {tp.extraction_status==="extracted" && (tp.file_url||"").startsWith("blob:") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs gap-1 h-7 border-amber-300 text-amber-700 hover:bg-amber-50"
+                      title="This tech-pack file is no longer reachable (legacy upload). Re-upload the source XLSX to enable barcode extraction."
+                      onClick={() => { setReuploadDefaultPoId(tp.po_id || ""); setShowUpload(true); }}
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      Re-upload
+                    </Button>
+                  )}
                   {tp.extraction_status==="extracted"&&<Button size="sm" variant="outline" className="text-xs gap-1 h-7" onClick={()=>setViewing(tp)}><Eye className="h-3.5 w-3.5"/>View</Button>}
                   <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={async()=>{if(!confirm("Delete?"))return;await techPacks.delete(tp.id);qc.invalidateQueries({queryKey:["techPacks"]});}}><Trash2 className="h-3.5 w-3.5 text-muted-foreground"/></Button>
                 </div>
@@ -1616,7 +1680,23 @@ export default function TechPacks() {
         </div>
       )}
 
-      {showUpload&&<UploadDialog open={showUpload} onOpenChange={setShowUpload} pos={pos} onSuccess={()=>setShowUpload(false)}/>}
+      {showUpload && (
+        <UploadDialog
+          open={showUpload}
+          onOpenChange={(v) => {
+            setShowUpload(v);
+            if (!v) setReuploadDefaultPoId("");
+          }}
+          pos={pos}
+          defaultPoId={reuploadDefaultPoId}
+          onSuccess={() => {
+            setShowUpload(false);
+            setReuploadDefaultPoId("");
+            // Sweep stale blob: rows that the new upload superseded.
+            handlePostUploadCleanup();
+          }}
+        />
+      )}
       {viewing&&<TechPackDetail tp={viewing} onClose={()=>setViewing(null)}/>}
 
       <BulkActionsBar selection={selection} allItems={filtered} />
