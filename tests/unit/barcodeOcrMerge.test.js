@@ -289,26 +289,140 @@ describe("matchOcrResultsToTechPacks — real-world FT2 Cool-S Frio cases", () =
 
   it("matches all 12 SKUs with the lenient rules", () => {
     const pairs = matchOcrResultsToTechPacks(frioOcr, frioTechPacks);
-    // First 11 unambiguous pairs. The "QUEEN" entry (idx 3) and "KING" entry (idx 4)
-    // are both valid for KING-only PP because of greedy first-match; that's fine —
-    // the important assertion is no SKU is left without a match.
+    // 1:1 assignment: every SKU pairs to a unique OCR result.
     const matchedIds = pairs.map((p) => p.tp.id);
-    expect(matchedIds).toContain("tp-1");
-    expect(matchedIds).toContain("tp-2");
-    expect(matchedIds).toContain("tp-3");
-    expect(matchedIds).toContain("tp-4");
-    expect(matchedIds).toContain("tp-5");
-    expect(matchedIds).toContain("tp-6");
-    expect(matchedIds).toContain("tp-7");
-    expect(matchedIds).toContain("tp-8");
-    expect(matchedIds).toContain("tp-9");
-    expect(matchedIds).toContain("tp-10");
-    expect(matchedIds).toContain("tp-12");
-    // tp-11 (KING PILLOW PROTECTOR) only matches if the OCR's literal "KING"
-    // entry resolves to it — current greedy finder picks the first OCR row
-    // whose size matches, which is "KING" → grabs tp-5 first. tp-11 still
-    // pairs because there's a second "KING" OCR row at idx 10.
-    expect(matchedIds).toContain("tp-11");
+    for (let i = 1; i <= 12; i++) expect(matchedIds).toContain(`tp-${i}`);
     expect(pairs.length).toBe(12);
+    // No barcode is assigned to more than one SKU.
+    const barcodes = pairs.map((p) => p.match.barcode);
+    expect(new Set(barcodes).size).toBe(barcodes.length);
+  });
+});
+
+// ── v3 improvements: 1:1 assignment + word-set + CALIFORNIA KING alias ──
+// Production data showed Vision returns the FULL printed label
+// ("CALIFORNIA KING", "QUEEN SPLIT HEAD") rather than the abbreviated
+// SKU-side form ("CAL KING", "SPLIT HEAD QUEEN"). Also, with multiple
+// SKUs sharing a common word ("KING", "CAL KING", "KING PILLOW PROTECTOR"),
+// per-tp greedy matching let one OCR result get assigned to multiple SKUs.
+// 1:1 assignment + score priority fix both.
+
+describe("sizesMatch — v3 additions", () => {
+  it("matches 'CAL KING' ↔ 'CALIFORNIA KING' (Vision-side full name)", () => {
+    expect(sizesMatch("CAL KING", "CALIFORNIA KING")).toBe(true);
+    expect(sizesMatch("CALIFORNIA KING", "CAL KING")).toBe(true);
+  });
+
+  it("matches 'SPLIT CAL KING' ↔ 'SPLIT CALIFORNIA KING'", () => {
+    expect(sizesMatch("SPLIT CAL KING", "SPLIT CALIFORNIA KING")).toBe(true);
+  });
+
+  it("matches word-set permutations: 'SPLIT HEAD QUEEN' ↔ 'QUEEN SPLIT HEAD'", () => {
+    expect(sizesMatch("SPLIT HEAD QUEEN", "QUEEN SPLIT HEAD")).toBe(true);
+    expect(sizesMatch("QUEEN SPLIT HEAD", "SPLIT HEAD QUEEN")).toBe(true);
+  });
+
+  it("matches word-set permutations: 'SPLIT HEAD KING' ↔ 'KING SPLIT HEAD'", () => {
+    expect(sizesMatch("SPLIT HEAD KING", "KING SPLIT HEAD")).toBe(true);
+  });
+});
+
+describe("matchOcrResultsToTechPacks — 1:1 assignment", () => {
+  // Real production scenario: Vision returned 11 entries for 12 SKUs in the
+  // FT2 Cool-S Frio upload. The bed-size sub-products (KING, CAL KING,
+  // SPLIT HEAD KING, KING PILLOW PROTECTOR) all contain "KING" — and per-tp
+  // greedy matching previously assigned the same barcode to all 4. v3's
+  // 1:1 assignment with score priority fixes this.
+  it("assigns each OCR result to AT MOST one tech pack (no duplicate barcodes)", () => {
+    const ocr = [
+      { size: "TWIN",                  barcode: "001" },
+      { size: "QUEEN",                 barcode: "002" },
+      { size: "KING",                  barcode: "003" },
+      { size: "CALIFORNIA KING",       barcode: "004" }, // → CAL KING SKU via alias
+      { size: "QUEEN SPLIT HEAD",      barcode: "005" }, // → SPLIT HEAD QUEEN via word-set
+      { size: "KING SPLIT HEAD",       barcode: "006" }, // → SPLIT HEAD KING via word-set
+      { size: "QUEEN",                 barcode: "007" }, // 2nd QUEEN → QUEEN PP via containment
+      { size: "KING",                  barcode: "008" }, // 2nd KING → KING PP via containment
+    ];
+    const tps = [
+      { id: "t1", article_code: "A1", extracted_data: { this_sku: { size: "TWIN" } } },
+      { id: "t2", article_code: "A2", extracted_data: { this_sku: { size: "QUEEN" } } },
+      { id: "t3", article_code: "A3", extracted_data: { this_sku: { size: "KING" } } },
+      { id: "t4", article_code: "A4", extracted_data: { this_sku: { size: "CAL KING" } } },
+      { id: "t5", article_code: "A5", extracted_data: { this_sku: { size: "SPLIT HEAD QUEEN" } } },
+      { id: "t6", article_code: "A6", extracted_data: { this_sku: { size: "SPLIT HEAD KING" } } },
+      { id: "t7", article_code: "A7", extracted_data: { this_sku: { size: "QUEEN PILLOW PROTECTOR" } } },
+      { id: "t8", article_code: "A8", extracted_data: { this_sku: { size: "KING PILLOW PROTECTOR" } } },
+    ];
+    const pairs = matchOcrResultsToTechPacks(ocr, tps);
+    // Every barcode should be assigned to exactly one SKU (no duplicates).
+    const barcodes = pairs.map((p) => p.match.barcode);
+    expect(new Set(barcodes).size).toBe(barcodes.length); // all unique
+    expect(pairs.length).toBe(8); // all 8 SKUs got matched
+  });
+
+  it("a generic OCR label does NOT shadow a specific OCR label for the specific SKU", () => {
+    // Two OCR results: "QUEEN" (generic) and "SLEEPER QUEEN" (specific).
+    // The Sleeper Queen SKU should get the specific entry, not the generic.
+    const ocr = [
+      { size: "QUEEN",          barcode: "GEN-Q" },
+      { size: "SLEEPER QUEEN",  barcode: "SLEEP-Q" },
+    ];
+    const tps = [
+      { id: "tq",  extracted_data: { this_sku: { size: "QUEEN" } } },
+      { id: "tsq", extracted_data: { this_sku: { size: "SLEEPER QUEEN" } } },
+    ];
+    const pairs = matchOcrResultsToTechPacks(ocr, tps);
+    const queenBarcode   = pairs.find((p) => p.tp.id === "tq")?.match.barcode;
+    const sleeperBarcode = pairs.find((p) => p.tp.id === "tsq")?.match.barcode;
+    expect(queenBarcode).toBe("GEN-Q");
+    expect(sleeperBarcode).toBe("SLEEP-Q");
+  });
+
+  it("real-world FT2 Cool-S Frio: Vision-shape OCR (with full names + word-order swaps + duplicate KINGs) pairs 11/12 cleanly", () => {
+    // Mirrors the exact OCR output observed in production.
+    const ocr = [
+      { size: "TWIN",                  barcode: "10001731001" },
+      { size: "TWIN XL",               barcode: "10001731002" },
+      { size: "FULL",                  barcode: "10001731003" },
+      { size: "QUEEN",                 barcode: "10001731004" },
+      { size: "KING",                  barcode: "10001731005" },
+      { size: "CALIFORNIA KING",       barcode: "10001731006" },
+      { size: "SPLIT CALIFORNIA KING", barcode: "10001731007" },
+      { size: "QUEEN SPLIT HEAD",      barcode: "10001731008" },
+      { size: "KING SPLIT HEAD",       barcode: "10001731009" },
+      { size: "QUEEN",                 barcode: "10001731010" },
+      { size: "KING",                  barcode: "10001731011" },
+    ];
+    const tps = [
+      { id: "1",  extracted_data: { this_sku: { size: "TWIN" } } },
+      { id: "2",  extracted_data: { this_sku: { size: "TWIN XL" } } },
+      { id: "3",  extracted_data: { this_sku: { size: "FULL" } } },
+      { id: "4",  extracted_data: { this_sku: { size: "FULL XL" } } }, // genuinely missing from OCR
+      { id: "5",  extracted_data: { this_sku: { size: "QUEEN" } } },
+      { id: "6",  extracted_data: { this_sku: { size: "KING" } } },
+      { id: "7",  extracted_data: { this_sku: { size: "CAL KING" } } },
+      { id: "8",  extracted_data: { this_sku: { size: "SPLIT  CAL KING" } } }, // double space
+      { id: "9",  extracted_data: { this_sku: { size: "SPLIT HEAD QUEEN" } } },
+      { id: "10", extracted_data: { this_sku: { size: "SPLIT HEAD KING" } } },
+      { id: "11", extracted_data: { this_sku: { size: "QUEEN PILLOW PROTECTOR" } } },
+      { id: "12", extracted_data: { this_sku: { size: "KING PILLOW PROTECTOR" } } },
+    ];
+    const pairs = matchOcrResultsToTechPacks(ocr, tps);
+    expect(pairs.length).toBe(11);
+    // FULL XL should NOT match anything (Vision missed that image).
+    const matchedIds = pairs.map((p) => p.tp.id);
+    expect(matchedIds).not.toContain("4");
+    // Every barcode is unique.
+    const barcodes = pairs.map((p) => p.match.barcode);
+    expect(new Set(barcodes).size).toBe(barcodes.length);
+    // Spot-check the harder pairings.
+    const get = (id) => pairs.find((p) => p.tp.id === id)?.match.barcode;
+    expect(get("7")).toBe("10001731006");  // CAL KING ↔ CALIFORNIA KING
+    expect(get("8")).toBe("10001731007");  // SPLIT  CAL KING ↔ SPLIT CALIFORNIA KING
+    expect(get("9")).toBe("10001731008");  // SPLIT HEAD QUEEN ↔ QUEEN SPLIT HEAD
+    expect(get("10")).toBe("10001731009"); // SPLIT HEAD KING ↔ KING SPLIT HEAD
+    expect(get("11")).toBe("10001731010"); // QUEEN PP gets 2nd QUEEN
+    expect(get("12")).toBe("10001731011"); // KING PP gets 2nd KING
   });
 });
