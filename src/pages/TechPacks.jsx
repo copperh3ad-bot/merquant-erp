@@ -837,22 +837,33 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
             }
 
             // ── Duplicate-upload guard ──
-            // If this exact (file_name, article_code) combination already exists,
-            // we'd be creating duplicate tech_packs rows that fragment downstream
-            // resolver lookups (a real issue we cleaned up in 2026-04-30 — 23
-            // duplicate rows from re-uploaded files). Skip SKUs already in DB
-            // for this file unless the user explicitly chose to re-upload.
+            // Skip SKUs already in DB for this same file. Compare against the
+            // articles in this BOB upload. We match BOTH on file_name AND on
+            // article_code (case-insensitive) because filenames sometimes
+            // differ only in whitespace ("BOB - X.xlsx" vs "BOB_-_X.xlsx" —
+            // a real bug seen in production where two uploads of the same
+            // physical file slipped past the earlier exact-match guard).
             const existingPairs = new Set();
             try {
-              const { data: existingTps } = await supabase
-                .from("tech_packs")
-                .select("article_code")
-                .eq("file_name", file.name);
-              for (const t of (existingTps || [])) {
-                if (t.article_code) existingPairs.add(String(t.article_code).toUpperCase());
+              const skuCodesUpper = bob.skus
+                .map(s => String(s.item_code || "").toUpperCase())
+                .filter(Boolean);
+              if (skuCodesUpper.length > 0) {
+                const { data: existingTps } = await supabase
+                  .from("tech_packs")
+                  .select("article_code, file_name")
+                  .in("article_code", skuCodesUpper);
+                // Filename normalization: collapse non-alphanumeric runs to "_"
+                const normFn = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+                const myFn = normFn(file.name);
+                for (const t of (existingTps || [])) {
+                  if (t.article_code && normFn(t.file_name) === myFn) {
+                    existingPairs.add(String(t.article_code).toUpperCase());
+                  }
+                }
               }
               if (existingPairs.size > 0) {
-                console.info(`[TechPacks] file '${file.name}' already has ${existingPairs.size} tech_pack rows — skipping duplicate SKU creates. To re-extract barcodes for these rows, use the ⟳ Barcodes button on the existing rows.`);
+                console.info(`[TechPacks] file '${file.name}' already has ${existingPairs.size} tech_pack row(s) for the same SKU(s). Skipping duplicate creates — use the ⟳ Barcodes button on existing rows to re-extract.`);
               }
             } catch (dupErr) {
               console.warn("[TechPacks duplicate-guard] check failed (non-blocking):", dupErr?.message || dupErr);

@@ -76,12 +76,16 @@ const RULES = [
     test: (h) => /\b(sticker|barcode|upc|qr code|ean|adhesive label|carton mark)\b/.test(h),
   },
 
-  // ── Insert Card (printed card placed inside packaging)
+  // ── Insert Card (printed card placed inside packaging).
+  // Also catches "Direct print on insert" — a description that refers to
+  // SIZE info being printed directly on the insert card (no separate
+  // sticker), which the BOB parser sometimes mis-categorizes as Sticker.
   {
     type: "Insert Card",
     confidence: 0.93,
     test: (h) => /\b(insert card|insert paper|art card|color paper insert|bleach card|info card|booklet|leaflet)\b/.test(h)
-              || (/\binsert\b/.test(h) && /\b(paper|card)\b/.test(h)),
+              || (/\binsert\b/.test(h) && /\b(paper|card)\b/.test(h))
+              || /\bdirect print on insert\b/.test(h),
   },
 
   // ── Stiffener (cardboard insert that maintains shape)

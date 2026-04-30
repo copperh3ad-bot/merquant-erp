@@ -497,11 +497,29 @@ export function resolveDescription({
   // Dedupe each group with its own key strategy, then merge. Labels need
   // section-aware keys (see labelKey comment); trims/accessories collapse
   // duplicate descriptions across naming variants (Stiffener case).
-  const merged = [
+  let merged = [
     ...dedupeBy(accessoryCandidates, trimAccessoryKey),
     ...dedupeBy(trimCandidates,      trimAccessoryKey),
     ...dedupeBy(labelCandidates,     labelKey),
   ];
+
+  // Sticker / Insert Card consolidation: BOB tech packs often parse the
+  // sticker spec into 3 rows ("Direct print on insert", "All barcode...
+  // must be stick on PVC bag", "White ground / 76mmx23mm") even though
+  // they describe ONE physical sticker. When multiple rows surface for
+  // these tabs, prefer rows that carry physical dimensions (e.g. "76mm")
+  // over instruction-only rows. Only apply when at least one spec-row
+  // exists — otherwise leave the rows alone (better instructions than
+  // nothing).
+  if ((cfg.category === "Sticker" || cfg.category === "Insert Card") && merged.length > 1) {
+    const hasPhysicalDims = (e) => {
+      const text = String(e.description || e.material || "").toLowerCase();
+      return /\d+\s*(mm|cm|in|inch|")\b/.test(text)
+          || /\d+\s*x\s*\d+/.test(text);  // matches 76mmx23mm, 4x7cm, 3X5
+    };
+    const specRows = merged.filter(hasPhysicalDims);
+    if (specRows.length > 0) merged = specRows;
+  }
 
   if (merged.length > 0) {
     const usable = merged.filter((e) => !isTechPackElementEmpty(e));
