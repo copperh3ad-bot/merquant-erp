@@ -595,3 +595,105 @@ describe("resolveDescription — real-world BOB tech-pack issues", () => {
     }
   });
 });
+
+// ── Item Type smart-default for non-Label tabs ────────────────────────────
+// These tests prove that Polybag / Stiffener / Carton rows pick a Type from
+// the description text instead of always defaulting to typeOptions[0]. Each
+// fixture deliberately puts the *correct* typeOption somewhere OTHER than
+// position 0 so a passing test cannot be explained by the old default behavior.
+
+describe("resolveDescription — Item Type smart-default for non-Label tabs", () => {
+  it("Polybag: picks 'PVC' from description even when typeOptions[0] is 'PE'", () => {
+    // Reorder typeOptions so PE is first, PVC is third — the helper must scan
+    // the description ("...Transparent PVC Bag...") and pick PVC anyway.
+    const cfg = { ...CFG_POLYBAG, typeOptions: ["PE", "PP", "PVC", "LDPE", "OPP"] };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Polybag",
+      cfg,
+      masterSpecs: [],
+      techPack: BOB_TECH_PACK,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("PVC");
+  });
+
+  it("Stiffener: row whose description mentions 'Cardboard' picks 'Cardboard' even when typeOptions[0] is 'MDF'", () => {
+    const cfg = { ...CFG_STIFFENER, typeOptions: ["MDF", "Foam Board", "Cardboard", "PVC Sheet", "Corrugated"] };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Stiffener",
+      cfg,
+      masterSpecs: [],
+      techPack: BOB_TECH_PACK,
+    });
+    expect(result).not.toBeNull();
+    // The "Stiffener" trim entry has "...White Cardboard" in its description,
+    // so its row's type should be "Cardboard" (not the typeOptions[0] of "MDF").
+    // Other rows ("Stiffener Size" — "Please refer spec sheet") have no keyword
+    // and legitimately fall back to "MDF", so we look up the specific row.
+    const cardboardRow = result.find((r) => /Cardboard/i.test(r.description));
+    expect(cardboardRow).toBeDefined();
+    expect(cardboardRow.type).toBe("Cardboard");
+  });
+
+  it("Carton: picks 'Brown' from description when typeOptions[0] is 'Printed'", () => {
+    // Add a Carton trim entry to the fixture whose description specifies "Brown 5-ply".
+    const tp = {
+      ...BOB_TECH_PACK,
+      extracted_trim_specs: [
+        ...BOB_TECH_PACK.extracted_trim_specs,
+        { trim_type: "Carton",     description: "Brown 5-ply B-flute corrugated outer carton" },
+      ],
+    };
+    const cfg = { ...CFG_CARTON, typeOptions: ["Printed", "Plain", "Brown", "White"] };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Carton",
+      cfg,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(result).not.toBeNull();
+    const types = result.map((r) => r.type);
+    expect(types).toContain("Brown");
+  });
+
+  it("falls back to typeOptions[0] when description carries no recognisable typeOption keyword", () => {
+    // Description doesn't contain any of the typeOptions verbatim — must
+    // default to typeOptions[0] rather than throw or pick something random.
+    const tp = {
+      ...BOB_TECH_PACK,
+      extracted_trim_specs: [
+        { trim_type: "Carton", description: "Generic outer packaging per spec sheet" },
+      ],
+    };
+    const cfg = { ...CFG_CARTON, typeOptions: ["Printed", "Plain", "Brown", "White"] };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Carton",
+      cfg,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Printed"); // typeOptions[0]
+  });
+
+  it("Label tab still uses pickLabelType (section-based), not the new helper", () => {
+    // Sanity: Label flow still derives type from section/label_type so the
+    // new non-Label helper doesn't take over its tab.
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Label",
+      cfg: CFG_LABEL,
+      masterSpecs: [],
+      techPack: BOB_TECH_PACK,
+      techPackLabelSpecs: BOB_TECH_PACK.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    const types = result.map((r) => r.type);
+    expect(types).toContain("Care Label");
+    expect(types).toContain("Size Label");
+  });
+});

@@ -97,6 +97,49 @@ function pickLabelType(elem, cfg) {
   return best;
 }
 
+// Smart-default for the Item Type dropdown on non-Label tabs. Scans the
+// element's description/material/type fields for a typeOption keyword and
+// picks the most specific match. Without this, every Polybag row defaults
+// to typeOptions[0] (e.g. "PVC") regardless of whether the tech pack says
+// "PE 60 micron" — forcing the user to fix it manually every time.
+function pickTypeFromDescription(elem, cfg) {
+  if (!Array.isArray(cfg?.typeOptions) || cfg.typeOptions.length === 0) return null;
+
+  // Combine the most likely material-bearing fields. Order doesn't matter —
+  // we're searching the union for a typeOption keyword.
+  const haystack = [
+    elem?.description,
+    elem?.material,
+    elem?.quality,
+    elem?.type,
+    elem?.trim_type,
+    elem?.accessory_type,
+    elem?.category,
+    elem?.section,
+  ]
+    .filter(Boolean)
+    .map((s) => String(s).toLowerCase())
+    .join(" | ");
+  if (!haystack) return null;
+
+  // For each typeOption, all words must appear in the haystack (handles
+  // multi-word options like "Brown Cardboard"). Among matches, pick the
+  // longest option string for specificity.
+  let best = null;
+  let bestLen = 0;
+  for (const opt of cfg.typeOptions) {
+    const optLower = opt.toLowerCase().trim();
+    if (!optLower) continue;
+    const words = optLower.split(/\s+/);
+    const allPresent = words.every((w) => haystack.includes(w));
+    if (allPresent && optLower.length > bestLen) {
+      best = opt;
+      bestLen = optLower.length;
+    }
+  }
+  return best;
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────
 
 function isEmptyMaterial(row) {
@@ -166,11 +209,15 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
     else if (cfg.category === "Zipper")    sizeText = sku.zipper_length || "";
   }
 
-  // Type: for Label tab, derive from section/label_type instead of defaulting
-  // to typeOptions[0] (which is "Brand Label" — wrong for Care/Size labels).
+  // Type: for Label tab, derive from section/label_type. For other tabs,
+  // scan the description/material text for a typeOption keyword (Polybag
+  // → "PE" / "PVC", Stiffener → "Cardboard", Carton → "Brown" / "White",
+  // etc.). Falls back to typeOptions[0] only when no signal is found.
   let typeText = base.type;
   if (cfg.category === "Label") {
     typeText = pickLabelType(elem, cfg) || base.type;
+  } else {
+    typeText = pickTypeFromDescription(elem, cfg) || base.type;
   }
 
   // pc_ean_code: for tabs with showEAN=true (Sticker, Insert Card), look up
