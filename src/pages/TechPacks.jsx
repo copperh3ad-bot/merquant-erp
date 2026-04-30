@@ -27,6 +27,7 @@ import POSelector from "@/components/shared/POSelector";
 import { runFullAudit, applyFix, AUDIT_STEPS } from "@/lib/techPackAudit";
 import { parseBobTechPack } from "@/lib/bobTechPackParser";
 import { classifyArticle, componentApplies } from "@/lib/articleTypes";
+import { computeBarcodeUpdates } from "@/lib/barcodeOcrMerge";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import SelectionCheckbox from "@/components/shared/SelectionCheckbox";
 import BulkActionsBar from "@/components/techpack/BulkActionsBar";
@@ -795,6 +796,31 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
           if (bob?.skus?.length) {
             updateProg(idx, { status: "extracting", message: `BOB file · ${bob.skus.length} SKUs…` });
 
+            // ── Persist the original XLSX to storage ──
+            // Without this, file_url is a blob: URL that dies when the browser
+            // tab closes — meaning we can't re-OCR the embedded barcode images
+            // later. Upload to ai-extraction-sources/tech-packs/<batch>/<name>
+            // so the Re-extract barcodes button can fetch the bytes back.
+            // Failure here is non-blocking — tech_packs rows are still created
+            // with the legacy blob URL so the user's upload doesn't break.
+            const uploadBatchId = (typeof crypto !== "undefined" && crypto.randomUUID)
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            let storagePath = null;
+            try {
+              const path = `tech-packs/${uploadBatchId}/${file.name}`;
+              const { error: upErr } = await supabase.storage
+                .from("ai-extraction-sources")
+                .upload(path, file, {
+                  contentType: file.type || "application/octet-stream",
+                  upsert: false,
+                });
+              if (!upErr) storagePath = path;
+              else console.warn("[tech-pack storage upload] failed (non-blocking):", upErr.message);
+            } catch (storeErr) {
+              console.warn("[tech-pack storage upload] threw (non-blocking):", storeErr?.message || storeErr);
+            }
+
             // Pull per-SKU consumption from consumption_library if already imported
             const skuCodes = bob.skus.map(s => s.item_code).filter(Boolean);
             let consBySku = {};
@@ -848,7 +874,11 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                   ? `${bob.header.product_name || bob.header.product_type || "Set"} — ${sku.size}`.trim()
                   : `${bob.header.product_type || ""} — ${sku.size}`.trim() || sku.item_code,
                 file_name:        file.name,
-                file_url:         blobUrl,
+                // storage:// scheme → "ai-extraction-sources/<path>", read by
+                // the Re-extract barcodes action. blob: fallback only fires
+                // when the storage upload above failed; will be skipped by
+                // re-extract logic.
+                file_url:         storagePath ? `storage://ai-extraction-sources/${storagePath}` : blobUrl,
                 file_type:        fileType,
                 file_size_kb:     Math.round(file.size / 1024),
                 extraction_status: "extracted",
@@ -970,19 +1000,12 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
               );
 
               if (!ocrErr && ocrData?.ok && Array.isArray(ocrData.results) && ocrData.results.length > 0) {
-                for (const tp of createdTps) {
-                  const skuSize = String(tp.extracted_data?.this_sku?.size || "").toUpperCase().trim();
-                  if (!skuSize) continue;
-                  const match = ocrData.results.find(r =>
-                    r.size && r.barcode &&
-                    String(r.size).toUpperCase().trim() === skuSize
-                  );
-                  if (match) {
-                    const upc = [{ size: match.size, our_sku: tp.article_code, bob_sku: match.barcode }];
-                    const merged = { ...(tp.extracted_data || {}), upc };
-                    await supabase.from("tech_packs").update({ extracted_data: merged }).eq("id", tp.id);
-                    tp.extracted_data = merged;
-                  }
+                const updates = computeBarcodeUpdates(ocrData.results, createdTps);
+                for (const u of updates) {
+                  await supabase.from("tech_packs").update({ extracted_data: u.extracted_data }).eq("id", u.id);
+                  // Mutate the in-memory copy too so downstream cross-check uses fresh data
+                  const tp = createdTps.find((t) => t.id === u.id);
+                  if (tp) tp.extracted_data = u.extracted_data;
                 }
               }
             } catch (ocrErr) {
@@ -1245,6 +1268,9 @@ export default function TechPacks() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterPoId, setFilterPoId] = useState(searchParams.get("po_id") || "__all");
+  // Track which tech-pack rows are currently re-extracting barcodes so the
+  // button can show a spinner and we can disable double-clicks.
+  const [reextractingByUrl, setReextractingByUrl] = useState({}); // { [storageUrl]: true }
   const qc = useQueryClient();
 
   const { data: pos = [] } = useQuery({ queryKey:["purchaseOrders"], queryFn:()=>db.purchaseOrders.list("-created_at") });
@@ -1266,6 +1292,83 @@ export default function TechPacks() {
     discrepancies: tps.filter(t=>t.crosscheck_status==="discrepancies").length,
     pending: tps.filter(t=>["pending","processing"].includes(t.extraction_status)).length,
   }),[tps]);
+
+  // ── Re-extract barcodes from a previously-uploaded XLSX ────────────────
+  // Re-runs extract-barcodes against the original file we persisted to the
+  // ai-extraction-sources bucket on upload. Updates extracted_data.upc on
+  // every sibling tech_packs row that shares the same file_url (i.e. came
+  // from the same multi-SKU upload). Surfaces a single toast at the end
+  // showing how many rows got new EAN data.
+  const handleReextractBarcodes = async (tp) => {
+    const fileUrl = tp.file_url || "";
+    if (!fileUrl.startsWith("storage://")) {
+      alert("This tech pack was uploaded before barcode persistence was enabled. Please re-upload it to read embedded barcodes.");
+      return;
+    }
+    if (reextractingByUrl[fileUrl]) return;
+    setReextractingByUrl((prev) => ({ ...prev, [fileUrl]: true }));
+    try {
+      // file_url shape: storage://<bucket>/<path>
+      const withoutScheme = fileUrl.slice("storage://".length); // "<bucket>/<path>"
+      const slash = withoutScheme.indexOf("/");
+      const bucket = withoutScheme.slice(0, slash);
+      const objectPath = withoutScheme.slice(slash + 1);
+
+      // Download file bytes from storage
+      const { data: blob, error: dlErr } = await supabase.storage.from(bucket).download(objectPath);
+      if (dlErr || !blob) throw new Error(dlErr?.message || "Could not download tech-pack file from storage");
+
+      // Encode to base64 for the edge function (chunked to avoid stack overflow on large files)
+      const arrayBuf = await blob.arrayBuffer();
+      const fileBytes = new Uint8Array(arrayBuf);
+      const CHUNK = 0x8000;
+      let binary = "";
+      for (let i = 0; i < fileBytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, Array.from(fileBytes.subarray(i, i + CHUNK)));
+      }
+      const fileBase64 = btoa(binary);
+
+      const fileName = objectPath.split("/").pop() || tp.file_name || "tech-pack.xlsx";
+      const { data: ocrData, error: ocrErr } = await supabase.functions.invoke(
+        "extract-barcodes",
+        { body: { file_base64: fileBase64, file_name: fileName } }
+      );
+      if (ocrErr) throw new Error(ocrErr.message || "extract-barcodes call failed");
+      if (!ocrData?.ok || !Array.isArray(ocrData.results) || ocrData.results.length === 0) {
+        alert("No barcode images were found in this tech pack.");
+        return;
+      }
+
+      // Find all sibling rows from the same upload — same file_url means
+      // same XLSX, which means the OCR results apply to all of them.
+      const siblings = (tps || []).filter((row) => row.file_url === fileUrl);
+      const updates = computeBarcodeUpdates(ocrData.results, siblings);
+      let updatedCount = 0;
+      for (const u of updates) {
+        const { error: updErr } = await supabase
+          .from("tech_packs")
+          .update({ extracted_data: u.extracted_data })
+          .eq("id", u.id);
+        if (!updErr) updatedCount += 1;
+      }
+
+      qc.invalidateQueries({ queryKey: ["techPacks"] });
+      alert(
+        updatedCount > 0
+          ? `Re-extracted ${ocrData.results.length} barcode image(s); updated EAN on ${updatedCount} tech-pack row(s).`
+          : `Read ${ocrData.results.length} barcode image(s), but none matched any SKU sizes on these tech packs. (Manual entry still possible.)`
+      );
+    } catch (err) {
+      console.error("[re-extract barcodes]", err);
+      alert(`Could not re-extract barcodes: ${err?.message || err}`);
+    } finally {
+      setReextractingByUrl((prev) => {
+        const n = { ...prev };
+        delete n[fileUrl];
+        return n;
+      });
+    }
+  };
 
   if (isLoading) return <div className="space-y-3">{[1,2,3].map(i=><Skeleton key={i} className="h-20 rounded-xl"/>)}</div>;
 
@@ -1354,6 +1457,22 @@ export default function TechPacks() {
                   )}
                 </div>
                 <div className="flex gap-1.5 shrink-0">
+                  {/* Re-read barcodes from the persisted XLSX. Only shown
+                      when we have a storage:// file_url (i.e. uploaded
+                      after barcode persistence shipped). */}
+                  {tp.extraction_status==="extracted" && (tp.file_url||"").startsWith("storage://") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs gap-1 h-7"
+                      title="Re-read barcode images from this tech pack"
+                      disabled={!!reextractingByUrl[tp.file_url]}
+                      onClick={() => handleReextractBarcodes(tp)}
+                    >
+                      <RefreshCw className={cn("h-3.5 w-3.5", reextractingByUrl[tp.file_url] && "animate-spin")} />
+                      Barcodes
+                    </Button>
+                  )}
                   {tp.extraction_status==="extracted"&&<Button size="sm" variant="outline" className="text-xs gap-1 h-7" onClick={()=>setViewing(tp)}><Eye className="h-3.5 w-3.5"/>View</Button>}
                   <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={async()=>{if(!confirm("Delete?"))return;await techPacks.delete(tp.id);qc.invalidateQueries({queryKey:["techPacks"]});}}><Trash2 className="h-3.5 w-3.5 text-muted-foreground"/></Button>
                 </div>
