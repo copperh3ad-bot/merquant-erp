@@ -232,6 +232,69 @@ function shouldFallThrough(rows) {
 // that field. Mirrors the per-tab mapping used for tech-pack measurements
 // so that articleSizes acts as a 4th-tier size fallback after element /
 // measurements / blank.
+// When a tech-pack description combines specs for multiple product families
+// in one row (e.g. "76mmx23mm (mattress protector) / 64mmX23mm (Pillow Protector)"),
+// keep only the segments relevant to THIS SKU's product type. Drops segments
+// that explicitly tag a different product family. Untagged segments stay
+// (they're descriptive headers like "White ground with black fonts").
+//
+// Inferred from the SKU's article_code via PRODUCT_TYPE_PATTERNS in
+// componentClassifier.js — but we re-implement the lookup inline here to
+// avoid pulling that whole module into the resolver's import graph.
+const PRODUCT_TYPE_KEYWORDS = {
+  "Pillow Protector":   ["pillow protector", "pillow protect"],
+  "Mattress Protector": ["mattress protector", "mattress protect"],
+  "Sleeper Encasement": ["sleeper encasement", "sleeper"],
+  "Total Encasement":   ["total encasement"],
+  "Sheet Set":          ["sheet set", "sheets"],
+  "Pillow Case":        ["pillow case", "pillowcase"],
+  "Comforter":          ["comforter"],
+  "Duvet Cover":        ["duvet cover", "duvet"],
+};
+
+function inferProductType(articleCode) {
+  if (!articleCode) return null;
+  const c = String(articleCode).toUpperCase();
+  if (/PP[KQ]\d*$/.test(c) || /PP\d/.test(c)) return "Pillow Protector";
+  if (/MP\d/.test(c))                          return "Mattress Protector";
+  if (/SE\d/.test(c))                          return "Sleeper Encasement";
+  if (/TE\d/.test(c))                          return "Total Encasement";
+  if (/(?:CSS|JFCSS|^SLP|SHTSET|SHEET)/.test(c)) return "Sheet Set";
+  if (/PC\d|PILLOWCASE/.test(c))               return "Pillow Case";
+  if (/COMF|CMFTR|COMFORTER/.test(c))          return "Comforter";
+  if (/DC\d|DUVET/.test(c))                    return "Duvet Cover";
+  return null;
+}
+
+export function extractSkuRelevantPortion(description, articleCode) {
+  if (!description || !articleCode) return description;
+  const productType = inferProductType(articleCode);
+  if (!productType) return description;
+
+  const myKWs = PRODUCT_TYPE_KEYWORDS[productType] || [];
+  const otherKWs = Object.entries(PRODUCT_TYPE_KEYWORDS)
+    .filter(([type]) => type !== productType)
+    .flatMap(([_, kws]) => kws);
+
+  // Split the description on " / " (or "/") — common separator in tech packs
+  // when one row carries specs for multiple products.
+  const parts = description.split(/\s*\/\s*/);
+  if (parts.length < 2) return description; // nothing to filter
+
+  // Drop segments that mention a DIFFERENT product type but not OURS.
+  const filtered = parts.filter((part) => {
+    const lower = part.toLowerCase();
+    const mentionsOurs   = myKWs.some((kw) => lower.includes(kw));
+    const mentionsOther  = otherKWs.some((kw) => lower.includes(kw));
+    if (mentionsOther && !mentionsOurs) return false;
+    return true;
+  });
+
+  if (filtered.length === parts.length) return description; // no filter applied
+  if (filtered.length === 0)             return description; // safety: don't blank everything
+  return filtered.join(" / ").trim();
+}
+
 function articleSizeForTab(cfg, articleSizes) {
   if (!articleSizes || !cfg) return "";
   if (cfg.category === "Polybag")          return articleSizes.pvc_bag_dimensions || "";
@@ -290,11 +353,15 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
   };
 
   // Description: try several field names because the BOB and AI shapes differ.
-  const descText =
+  // Then filter combined-product descriptions like
+  //   "76mmx23mm (mattress protector) / 64mmX23mm (Pillow Protector)"
+  // down to only the segments relevant to THIS SKU's product family.
+  const rawDescText =
     elem.description ||
     elem.material ||
     elem.section ||
     "";
+  const descText = extractSkuRelevantPortion(rawDescText, articleCode);
 
   // Size: prefer the element's own size_spec; otherwise fall back to per-SKU
   // dimensions stored in extracted_measurements.this_sku, picked by tab.
