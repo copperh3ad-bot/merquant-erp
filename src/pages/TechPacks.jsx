@@ -29,6 +29,7 @@ import { parseBobTechPack } from "@/lib/bobTechPackParser";
 import { classifyArticle, componentApplies } from "@/lib/articleTypes";
 import { computeBarcodeUpdates } from "@/lib/barcodeOcrMerge";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
+import { classifyComponent } from "@/lib/componentClassifier";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import SelectionCheckbox from "@/components/shared/SelectionCheckbox";
 import BulkActionsBar from "@/components/techpack/BulkActionsBar";
@@ -897,23 +898,46 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                   colours: l.color,
                   section: l.section,
                 })),
-                extracted_accessory_specs: (bob.accessories || []).map(a => ({
-                  accessory_type: a.accessory_type,
-                  description: a.description,
-                  material: a.material,
-                  placement: a.placement,
-                  source_label: a.source_label,
-                })),
+                // Re-classify each accessory through componentClassifier so
+                // the BOB-parser-supplied accessory_type (often verbatim from
+                // the spreadsheet's free-form category column) gets corrected
+                // when needed (e.g. small "Polybag" → "Accessory Bag").
+                extracted_accessory_specs: (bob.accessories || []).map(a => {
+                  const r = classifyComponent({
+                    raw_category: a.accessory_type,
+                    material: a.material || a.description,
+                    description: a.description,
+                    placement: a.placement,
+                  });
+                  const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : a.accessory_type;
+                  return {
+                    accessory_type: finalType,
+                    description: a.description,
+                    material: a.material,
+                    placement: a.placement,
+                    source_label: a.source_label,
+                  };
+                }),
                 // Packaging items live in extracted_trim_specs because the
                 // existing audit UI reads trim_type from that column. Terminology
                 // to be revisited when the Accessories page is rebuilt.
-                extracted_trim_specs: (bob.packaging || []).map(p => ({
-                  trim_type: p.category,
-                  description: p.value,
-                  size_spec: null,
-                  variant: p.variant,
-                  source_label: p.label,
-                })),
+                // Same classifier pass — the small "Polybag" accessory bag
+                // shouldn't surface on the Polybag tab.
+                extracted_trim_specs: (bob.packaging || []).map(p => {
+                  const r = classifyComponent({
+                    raw_category: p.category,
+                    material: p.value,
+                    description: p.value,
+                  });
+                  const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : p.category;
+                  return {
+                    trim_type: finalType,
+                    description: p.value,
+                    size_spec: null,
+                    variant: p.variant,
+                    source_label: p.label,
+                  };
+                }),
                 extracted_measurements: {
                   sizes: (bob.skus || []).map(s => s.size).filter(Boolean),
                   size_chart: Object.fromEntries(

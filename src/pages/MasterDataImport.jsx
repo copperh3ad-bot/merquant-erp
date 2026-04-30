@@ -7,6 +7,7 @@ import { Database, Upload, Download, FileSpreadsheet, Loader2, CheckCircle2, Ale
 import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
+import { classifyComponent } from "@/lib/componentClassifier";
 import ValidationReport from "@/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
 import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
@@ -200,17 +201,44 @@ const SHEETS = {
         notes: [toStr(r.variant), toStr(r.unit) ? `unit: ${toStr(r.unit)}` : null].filter(Boolean).join(" · ") || null,
       };
     },
-    // After transform, drop byte-identical duplicates (same SKU+category+material+size+placement+consumption).
-    // Source tech packs sometimes list the same accessory twice; we silently keep the first.
+    // 3-step pipeline:
+    //   1. Re-classify component_type via componentClassifier (rules-based).
+    //      Disambiguates user-typed categories like "Polybag" when the actual
+    //      item is a small hang-tag carrier ("Accessory Bag") or vice versa.
+    //   2. Drop byte-identical duplicates (same SKU+component_type+material+
+    //      size+placement+consumption).
+    //   3. Sort for deterministic ordering.
     postProcess: (rows) => {
+      // Step 1: smart re-classify
+      let reclassified = 0;
+      const classified = rows.map((row) => {
+        const result = classifyComponent({
+          raw_category: row.component_type,
+          item_name:    "",
+          material:     row.material,
+          size_spec:    row.size_spec,
+          placement:    row.placement,
+        });
+        // Only override when the classifier is confident AND disagrees.
+        if (result.component_type && result.confidence >= 0.85 && result.component_type !== row.component_type) {
+          reclassified += 1;
+          return { ...row, component_type: result.component_type, _classifier_reason: result.reason };
+        }
+        return row;
+      });
+      if (reclassified > 0) console.info(`[MasterDataImport] re-classified ${reclassified} accessory row(s) by componentClassifier`);
+
+      // Step 2: dedupe
       const seen = new Set();
       const out = [];
       let dropped = 0;
-      for (const row of rows) {
+      for (const row of classified) {
         const key = [row.item_code, row.component_type, row.material, row.size_spec, row.placement, row.consumption_per_unit].join("||");
         if (seen.has(key)) { dropped++; continue; }
         seen.add(key);
-        out.push(row);
+        // Strip transient classifier-reason field before insert
+        const { _classifier_reason, ...persistRow } = row;
+        out.push(persistRow);
       }
       if (dropped > 0) console.info(`[MasterDataImport] auto-dropped ${dropped} byte-identical accessory duplicate(s)`);
       return out;
