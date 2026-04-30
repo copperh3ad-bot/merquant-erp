@@ -326,14 +326,17 @@ export default function PackagingPlanning() {
 
   // Tech packs — Tier-2 of the fallback chain. Each PO article finds its
   // matching tech pack via findTechPackForArticle (article_code first, then
-  // po_id). Used to seed Trim, Accessory, Label, etc. tab rows when
-  // consumption_library has no usable description for that article+category.
+  // po_id). Used to seed Trim, Accessory, Label, Polybag, Stiffener, Carton,
+  // Sticker, etc. tab rows. The resolver reads from up to FIVE sources on
+  // each tech_pack row: the three spec JSONB arrays + extracted_measurements
+  // (per-SKU pvc_bag/stiffener/carton sizes) + extracted_data.upc (per-size
+  // EAN codes). All fetched in one query so the page only round-trips once.
   const { data: techPacks = [] } = useQuery({
     queryKey: ["techPacksExtracted"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("tech_packs")
-        .select("id,article_code,po_id,extracted_accessory_specs,extracted_trim_specs,extracted_label_specs")
+        .select("id,article_code,po_id,extracted_accessory_specs,extracted_trim_specs,extracted_label_specs,extracted_measurements,extracted_data")
         .eq("extraction_status", "extracted")
         .limit(500);
       if (error) return [];

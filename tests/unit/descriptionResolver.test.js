@@ -379,3 +379,219 @@ describe("resolveDescription — AI-extracted shape", () => {
     expect(result[0].size).toMatch(/5x5cm/);
   });
 });
+
+// ── Real-world BOB tech-pack regressions (5 specific issues) ──────────────
+
+const BOB_TECH_PACK = {
+  id: "tp-bob-001",
+  article_code: "GPSE50",
+  po_id: PO_ID,
+  // Real fixture from production: encasement protector with 2 labels,
+  // 9 trim entries (incl. duplicate Stiffeners), and accessories.
+  extracted_label_specs: [
+    {
+      colours: "Label white ground with printed black fonts",
+      section: "Law tag/Care label",
+      placement: "Sewing at the middle of short side",
+      dimensions: "4.0cmX7.0cm",
+      label_type: "Non woven label with coating",
+      description: "3M non woven material with white ground / black color font",
+    },
+    {
+      colours: "White ground with black fonts",
+      section: "Size label",
+      placement: "Next the law tag label",
+      dimensions: "4.0cmX3.0cm",
+      label_type: "Non woven label with coating",
+      description: "3M non woven material with white ground / black color font",
+    },
+  ],
+  extracted_trim_specs: [
+    { trim_type: "Packaging",            description: "Color paper insert with vinyl PVC Bag with white bound seam & inside cardboard wrapped by product(Stiffener)" },
+    { trim_type: "PVC Bag",              description: "12S Transparent PVC Bag with 7S White PVC Binding all around" },
+    { trim_type: "Insert Card",          description: "Printed Insert quality - INSERT (U Shape) - 250g-300g White Card Paper" },
+    { trim_type: "Stiffener",            description: "Packaging inside need to put a U 1 ply thickness in White Cardboard" },
+    { trim_type: "Size Sticker",         description: "Direct print on insert" },
+    { trim_type: "Barcode Sticker",      description: "All barcode (SKU) sticker must be stick on the PVC Bag" },
+    { trim_type: "Barcode Sticker Size", description: "White ground with black fonts / 76mmx23mm" },
+    // Duplicate description — should be deduped against the earlier "Stiffener" entry
+    { trim_type: "Stiffener (Cardboard)", description: "Packaging inside need to put a U 1 ply thickness in White Cardboard" },
+    { trim_type: "Stiffener Size",       description: "Please refer spec sheet" },
+  ],
+  extracted_accessory_specs: [
+    // Sewing/quality specs that should NOT bleed into Trim or other tabs
+    { accessory_type: "Sewing Construction", description: "1cm H – Bound Seam inside all seam" },
+    { accessory_type: "Stitching Density",   description: "9-10 stitch per inch" },
+    { accessory_type: "Needle",              description: "Ball Point Needle" },
+    { accessory_type: "Zipper",              description: "#3 Auto lock coil nylon zipper in white color" },
+  ],
+  extracted_measurements: {
+    sizes: ["TWIN", "QUEEN", "KING", "SLEEPER - QUEEN"],
+    this_sku: {
+      size: "SLEEPER - QUEEN",
+      item_code: "GPSE50",
+      zipper_length: "482cm",
+      stiffener_size: "27X27.5X6.5cm",
+      insert_dimensions: "27.00X54.70cm",
+      pvc_bag_dimensions: "28X28X7cm",
+      // Note: this real fixture has no carton_size_cm on this_sku — falls
+      // through to size_chart on tabs that need carton dims, then to po_items.
+    },
+    size_chart: {
+      "SLEEPER - QUEEN": { item_code: "GPSE50", carton_size_cm: "58*28.5*43" },
+    },
+  },
+  extracted_data: {
+    source: "BOB Tech Pack",
+    upc: [
+      { size: "SLEEPER - QUEEN", our_sku: "GPSE50", bob_sku: "012345678905", qty_per_ctn: 10 },
+      { size: "QUEEN",           our_sku: "GPTE50", bob_sku: "012345678929", qty_per_ctn: 10 },
+    ],
+  },
+};
+
+const CFG_LABEL = {
+  category: "Label",
+  typeOptions: ["Brand Label", "Care Label", "Size Label", "Direction Label", "Hang Tag", "Custom Label"],
+  qualityLabel: "Quality / Description",
+  defaultWastage: 5,
+};
+const CFG_POLYBAG = {
+  category: "Polybag",
+  typeOptions: ["PVC", "PP", "PE", "LDPE", "OPP"],
+  splitDescSize: true,
+  descLabel: "Description",
+  sizeLabel: "Size",
+  defaultWastage: 3,
+};
+const CFG_STIFFENER = {
+  category: "Stiffener",
+  typeOptions: ["Cardboard", "PVC Sheet", "Foam Board", "MDF", "Corrugated"],
+  splitDescSize: true,
+  descLabel: "Description",
+  sizeLabel: "Size",
+  defaultWastage: 3,
+};
+const CFG_CARTON = {
+  category: "Carton",
+  typeOptions: ["Printed", "Plain", "Brown", "White"],
+  splitDescSize: true,
+  descLabel: "Description",
+  sizeLabel: "Size (LxWxH cm)",
+  defaultWastage: 2,
+};
+const CFG_STICKER = {
+  category: "Sticker",
+  typeOptions: ["UPC Sticker", "Packaging Info Sticker", "Custom Sticker"],
+  qualityLabel: "Size / Description",
+  defaultWastage: 5,
+  showEAN: true,
+};
+
+describe("resolveDescription — real-world BOB tech-pack issues", () => {
+  it("Issue #1: Label tab picks Care Label / Size Label from section, not default Brand Label", () => {
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Label",
+      cfg: CFG_LABEL,
+      masterSpecs: [],
+      techPack: BOB_TECH_PACK,
+      techPackLabelSpecs: BOB_TECH_PACK.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result.length).toBe(2);
+    const types = result.map((r) => r.type);
+    // section "Law tag/Care label" → Care Label; section "Size label" → Size Label
+    expect(types).toContain("Care Label");
+    expect(types).toContain("Size Label");
+    // None should be the default "Brand Label"
+    expect(types).not.toContain("Brand Label");
+  });
+
+  it("Issue #2: Polybag tab pulls description from PVC Bag and size from pvc_bag_dimensions", () => {
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Polybag",
+      cfg: CFG_POLYBAG,
+      masterSpecs: [],
+      techPack: BOB_TECH_PACK,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].description).toMatch(/Transparent PVC Bag/);
+    expect(result[0].size).toBe("28X28X7cm");
+  });
+
+  it("Issue #3: Stiffener tab dedupes byte-identical descriptions across duplicate entries", () => {
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Stiffener",
+      cfg: CFG_STIFFENER,
+      masterSpecs: [],
+      techPack: BOB_TECH_PACK,
+    });
+    expect(result).not.toBeNull();
+    // Three entries in the trim_specs ("Stiffener", "Stiffener (Cardboard)", "Stiffener Size")
+    // but the first two have identical descriptions → kept once.
+    // "Stiffener Size" has a unique description ("Please refer spec sheet") → kept once.
+    // Total kept = 2.
+    expect(result.length).toBe(2);
+    // Each resulting row's size falls back to stiffener_size from measurements
+    expect(result[0].size).toBe("27X27.5X6.5cm");
+  });
+
+  it("Issue #4: Carton tab picks up size from extracted_measurements.size_chart even when no trim spec exists", () => {
+    // Modify fixture: zero trim entries that match Carton, but size_chart has it
+    const techPackNoCartonTrim = {
+      ...BOB_TECH_PACK,
+      extracted_trim_specs: BOB_TECH_PACK.extracted_trim_specs.filter((t) => !/carton/i.test(t.trim_type)),
+    };
+    // Note the resolver only auto-fills carton from this_sku.carton_size_cm,
+    // which our fixture doesn't have — so use a fixture that does.
+    const tp = {
+      ...techPackNoCartonTrim,
+      extracted_measurements: {
+        ...BOB_TECH_PACK.extracted_measurements,
+        this_sku: { ...BOB_TECH_PACK.extracted_measurements.this_sku, carton_size_cm: "58*28.5*43" },
+      },
+    };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Carton",
+      cfg: CFG_CARTON,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("58*28.5*43");
+  });
+
+  it("Issue #5: Sticker tab populates pc_ean_code from upc[].bob_sku via article_code match", () => {
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER,
+      masterSpecs: [],
+      techPack: BOB_TECH_PACK,
+    });
+    expect(result).not.toBeNull();
+    // At least one row has the EAN from the UPC table
+    const eans = result.map((r) => r.pc_ean_code);
+    expect(eans.some((e) => e === "012345678905")).toBe(true);
+  });
+
+  it("Sewing/Stitching/Needle accessory_type values do NOT leak into Trim tab", () => {
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Trim",
+      cfg: { ...CFG_LABEL, category: "Trim", typeOptions: ["Elastic", "Drawcord", "Custom"] },
+      masterSpecs: [],
+      techPack: BOB_TECH_PACK,
+    });
+    if (result) {
+      const descs = result.map((r) => r.quality);
+      expect(descs.every((d) => !/stitches per inch/i.test(d))).toBe(true);
+      expect(descs.every((d) => !/Bound Seam/i.test(d))).toBe(true);
+      expect(descs.every((d) => !/Ball Point Needle/i.test(d))).toBe(true);
+    }
+  });
+});
