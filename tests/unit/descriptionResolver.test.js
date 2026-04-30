@@ -697,3 +697,235 @@ describe("resolveDescription — Item Type smart-default for non-Label tabs", ()
     expect(types).toContain("Size Label");
   });
 });
+
+// ── Description-based label classification (issue: classify from description) ──
+// pickLabelType used to read only section/label_type/type. Real-world labels
+// often have generic section ("Hem", "Inside seam") with the actual intent
+// only in the description ("Wash care, machine wash cold"). These tests
+// verify the helper now reads description + material and falls back to a
+// synonym map when the typeOption literal isn't present.
+
+const CFG_LABEL_FULL = {
+  category: "Label",
+  typeOptions: [
+    "Brand Label", "Care Label", "Size Label", "Direction Label", "GOTS Label",
+    "Barcode Label", "Hang Tag", "Country of Origin Label", "Composition Label",
+    "Wash Label", "Price Ticket", "Compliance Label", "Retailer Label", "Eco Label",
+    "Custom Label",
+  ],
+  qualityLabel: "Quality / Description",
+  defaultWastage: 5,
+};
+
+describe("resolveDescription — description-based label classification", () => {
+  // ── Direct typeOption literal in description ────────────────────────────
+  it("classifies as Brand Label when description literally says 'brand label'", () => {
+    const tp = {
+      id: "tp-d1",
+      article_code: "X1",
+      extracted_label_specs: [
+        { section: "Hem", label_type: "Sewn-in", description: "Brand label, woven satin, navy on white" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X1",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Brand Label");
+  });
+
+  it("classifies as Hang Tag from description 'swing tag with brand logo'", () => {
+    const tp = {
+      id: "tp-d2",
+      article_code: "X2",
+      extracted_label_specs: [
+        { section: "Outside", description: "Swing tag with brand logo, printed on 300gsm card" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X2",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Hang Tag");
+  });
+
+  // ── Synonym fallback ────────────────────────────────────────────────────
+  it("classifies as Care Label from synonym 'wash care' when typeOption literal isn't present", () => {
+    const tp = {
+      id: "tp-d3",
+      article_code: "X3",
+      extracted_label_specs: [
+        { section: "Inside seam", description: "Wash care: machine wash cold, tumble dry low, do not bleach" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X3",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Care Label");
+  });
+
+  it("classifies as Country of Origin Label from synonym 'made in'", () => {
+    const tp = {
+      id: "tp-d4",
+      article_code: "X4",
+      extracted_label_specs: [
+        { section: "Inside hem", description: "Made in Pakistan, polyester 100%, woven" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X4",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Country of Origin Label");
+  });
+
+  it("classifies as Composition Label from 'fiber content 100% cotton'", () => {
+    const tp = {
+      id: "tp-d5",
+      article_code: "X5",
+      extracted_label_specs: [
+        { section: "Hem", description: "Fiber content: 100% cotton, machine washable" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X5",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    // "Composition Label" via synonym "fiber content"
+    expect(result[0].type).toBe("Composition Label");
+  });
+
+  it("classifies as GOTS Label when description mentions GOTS certification", () => {
+    const tp = {
+      id: "tp-d6",
+      article_code: "X6",
+      extracted_label_specs: [
+        { section: "Inside", description: "GOTS certified organic cotton blend" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X6",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("GOTS Label");
+  });
+
+  // ── Direct beats synonym (priority test) ────────────────────────────────
+  it("prefers direct typeOption match over synonym when both apply", () => {
+    // section says "Care Label" (direct) AND description says "wash" (synonym)
+    // — should pick direct.
+    const tp = {
+      id: "tp-d7",
+      article_code: "X7",
+      extracted_label_specs: [
+        { section: "Care Label", description: "Wash instructions, machine washable" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X7",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Care Label");
+  });
+
+  // ── Real-world BOB shape: Law tag/Care label section ────────────────────
+  it("real-world BOB regression still works: 'Law tag/Care label' section → Care Label", () => {
+    const tp = {
+      id: "tp-d8",
+      article_code: "GPSE50",
+      extracted_label_specs: [
+        {
+          section: "Law tag/Care label",
+          label_type: "Non woven label with coating",
+          description: "3M non woven material with white ground / black color font",
+        },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    // "Care Label" via direct match in section
+    expect(result[0].type).toBe("Care Label");
+  });
+
+  // ── Generic section + uninformative description ─────────────────────────
+  it("falls back to Custom Label when description carries no recognisable signal", () => {
+    const tp = {
+      id: "tp-d9",
+      article_code: "X9",
+      extracted_label_specs: [
+        { section: "Hem", description: "Generic label per spec sheet, refer artwork" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X9",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Custom Label");
+  });
+});
