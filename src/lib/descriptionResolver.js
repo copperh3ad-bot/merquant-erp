@@ -202,6 +202,21 @@ function pickTypeFromDescription(elem, cfg) {
   return best;
 }
 
+// Find the UPC/EAN entry matching a given article_code. Returns "" when no
+// match exists. Used by the Sticker / Insert Card tabs (cfg.showEAN === true)
+// to fill pc_ean_code regardless of whether a tech-pack spec element matched
+// the tab category — the EAN can surface even when no Sticker / Insert Card
+// trim/accessory entry exists in the tech pack.
+function lookupUpcEan(upc, articleCode) {
+  if (!Array.isArray(upc) || upc.length === 0 || !articleCode) return "";
+  const code = String(articleCode).trim().toUpperCase();
+  const match = upc.find((u) =>
+    (u.our_sku && String(u.our_sku).trim().toUpperCase() === code) ||
+    (u.bob_sku && String(u.bob_sku).trim().toUpperCase() === code)
+  );
+  return match ? (match.bob_sku || match.our_sku || "") : "";
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────
 
 function isEmptyMaterial(row) {
@@ -283,15 +298,8 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
   }
 
   // pc_ean_code: for tabs with showEAN=true (Sticker, Insert Card), look up
-  // the per-size UPC entry by matching on item_code or size.
-  let pcEan = "";
-  if (cfg.showEAN && Array.isArray(upc) && upc.length > 0) {
-    const match = upc.find((u) =>
-      (u.our_sku && articleCode && String(u.our_sku).trim().toUpperCase() === String(articleCode).trim().toUpperCase()) ||
-      (u.bob_sku && articleCode && String(u.bob_sku).trim().toUpperCase() === String(articleCode).trim().toUpperCase())
-    );
-    if (match) pcEan = match.bob_sku || match.our_sku || "";
-  }
+  // the per-size UPC entry by matching on article_code.
+  const pcEan = cfg.showEAN ? lookupUpcEan(upc, articleCode) : "";
 
   if (cfg.splitDescSize) {
     return { ...base, type: typeText, quality: "", description: descText, size: sizeText, pc_ean_code: pcEan };
@@ -447,33 +455,35 @@ export function resolveDescription({
     }
   }
 
-  // ── Tier-2 fallback — measurements-only ──────────────────────────────
-  // Even when no spec element matches the tab, certain tabs have data in
-  // extracted_measurements.this_sku that's worth surfacing on its own
-  // (e.g. Carton tab when the trim_specs JSONB has nothing labeled "Carton").
+  // ── Tier-2 fallback — measurements-only / EAN-only ────────────────────
+  // Even when no spec element matches the tab, two signals can produce a
+  // useful row:
+  //   1. extracted_measurements.this_sku (per-SKU dim from BOB tech pack)
+  //   2. UPC/EAN entry for showEAN tabs (Sticker, Insert Card) — emits a
+  //      row carrying just the EAN when no other source has data.
+  // (2) is critical for the Sticker tab, which has no size source anywhere
+  // else and would otherwise return null even when the UPC table has its EAN.
+  let measurementOnlySize = null;
   if (ctx.measurements?.this_sku) {
     const sku = ctx.measurements.this_sku;
-    let measurementOnlySize = null;
-    if (cfg.category === "Polybag")        measurementOnlySize = sku.pvc_bag_dimensions || null;
-    else if (cfg.category === "Stiffener") measurementOnlySize = sku.stiffener_size      || null;
-    else if (cfg.category === "Carton")    measurementOnlySize = sku.carton_size_cm      || null;
-    else if (cfg.category === "Insert Card") measurementOnlySize = sku.insert_dimensions  || null;
-    else if (cfg.category === "Zipper")    measurementOnlySize = sku.zipper_length        || null;
+    if (cfg.category === "Polybag")          measurementOnlySize = sku.pvc_bag_dimensions || null;
+    else if (cfg.category === "Stiffener")   measurementOnlySize = sku.stiffener_size      || null;
+    else if (cfg.category === "Carton")      measurementOnlySize = sku.carton_size_cm      || null;
+    else if (cfg.category === "Insert Card") measurementOnlySize = sku.insert_dimensions   || null;
+    else if (cfg.category === "Zipper")      measurementOnlySize = sku.zipper_length        || null;
+  }
+  const fallbackEan = cfg.showEAN ? lookupUpcEan(ctx.upc, articleCode) : "";
 
-    if (measurementOnlySize) {
-      const base = {
-        type: cfg.typeOptions[0],
-        wastage_percent: cfg.defaultWastage,
-        multiplier: 1,
-        pc_ean_code: "",
-        carton_ean_code: "",
-        existing_id: null,
-      };
-      if (cfg.splitDescSize) {
-        return [{ ...base, quality: "", description: "", size: measurementOnlySize }];
-      }
-      return [{ ...base, quality: "", description: "", size: measurementOnlySize }];
-    }
+  if (measurementOnlySize || fallbackEan) {
+    const base = {
+      type: cfg.typeOptions[0],
+      wastage_percent: cfg.defaultWastage,
+      multiplier: 1,
+      pc_ean_code: fallbackEan,
+      carton_ean_code: "",
+      existing_id: null,
+    };
+    return [{ ...base, quality: "", description: "", size: measurementOnlySize || "" }];
   }
 
   return null;

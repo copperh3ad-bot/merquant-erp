@@ -929,3 +929,111 @@ describe("resolveDescription — description-based label classification", () => 
     expect(result[0].type).toBe("Custom Label");
   });
 });
+
+// ── EAN flow on showEAN tabs without a matching spec element ──────────────
+// Bug uncovered during the integration simulation: the Sticker tab
+// (cfg.showEAN=true, no size source on the article OR in measurements)
+// returned null even when the tech pack's UPC table carried the EAN.
+// Insert Card had a similar gap: the size-only fallback emitted a row
+// without populating pc_ean_code, hiding the EAN in the UI.
+
+describe("resolveDescription — EAN flow on showEAN tabs", () => {
+  const CFG_STICKER_EAN = {
+    category: "Sticker",
+    typeOptions: ["UPC Sticker", "Custom Sticker"],
+    qualityLabel: "Size / Description",
+    defaultWastage: 5,
+    showEAN: true,
+  };
+  const CFG_INSERT_EAN = {
+    category: "Insert Card",
+    typeOptions: ["Art Card", "Custom"],
+    qualityLabel: "Quality / Size",
+    defaultWastage: 5,
+    showEAN: true,
+  };
+
+  const tpWithUpcOnly = {
+    id: "tp-ean-1",
+    article_code: "SIM-Q",
+    extracted_accessory_specs: [],   // no Sticker/Insert Card spec elements
+    extracted_trim_specs: [],
+    extracted_label_specs: [],
+    extracted_measurements: {},      // no this_sku.* dims
+    extracted_data: {
+      source: "BOB Tech Pack",
+      upc: [{ size: "QUEEN", our_sku: "SIM-Q", bob_sku: "9876543210001" }],
+    },
+  };
+
+  it("Sticker tab emits an EAN-only row when no spec element matches and no size source exists", () => {
+    const result = resolveDescription({
+      articleCode: "SIM-Q",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER_EAN,
+      masterSpecs: [],
+      techPack: tpWithUpcOnly,
+    });
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+    expect(result[0].pc_ean_code).toBe("9876543210001");
+    expect(result[0].size).toBe("");
+  });
+
+  it("Insert Card tab populates pc_ean_code on the measurement-fallback size row", () => {
+    const tp = {
+      ...tpWithUpcOnly,
+      extracted_measurements: { this_sku: { insert_dimensions: "27.00X57.10cm" } },
+    };
+    const result = resolveDescription({
+      articleCode: "SIM-Q",
+      tabCategory: "Insert Card",
+      cfg: CFG_INSERT_EAN,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("27.00X57.10cm");
+    expect(result[0].pc_ean_code).toBe("9876543210001");
+  });
+
+  it("non-showEAN tabs (Polybag) emit measurement-fallback row WITHOUT pc_ean_code", () => {
+    const tp = {
+      ...tpWithUpcOnly,
+      extracted_measurements: { this_sku: { pvc_bag_dimensions: "28X28X9.5cm" } },
+    };
+    const result = resolveDescription({
+      articleCode: "SIM-Q",
+      tabCategory: "Polybag",
+      cfg: { category: "Polybag", typeOptions: ["PVC"], splitDescSize: true, defaultWastage: 3 },
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("28X28X9.5cm");
+    expect(result[0].pc_ean_code).toBe("");  // not a showEAN tab
+  });
+
+  it("Sticker tab returns null when neither size source NOR matching UPC exists", () => {
+    const tpNoUpc = { ...tpWithUpcOnly, extracted_data: { source: "BOB", upc: [] } };
+    const result = resolveDescription({
+      articleCode: "SIM-Q",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER_EAN,
+      masterSpecs: [],
+      techPack: tpNoUpc,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("UPC entry where article_code doesn't match → no EAN, no row", () => {
+    const result = resolveDescription({
+      articleCode: "DIFFERENT-CODE",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER_EAN,
+      masterSpecs: [],
+      techPack: tpWithUpcOnly,
+    });
+    expect(result).toBeNull();
+  });
+});
