@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import ValidationReport from "@/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
+import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
 
 async function loadSheetJS() {
   if (window.XLSX) return window.XLSX;
@@ -129,6 +130,17 @@ const SHEETS = {
       product_width_in:  toNum(r.product_width_in),
       product_depth_in:  toNum(r.product_depth_in),
       finish_dimensions: toStr(r.finish_dimensions),
+      // Per-SKU dimension fields (added 0005_articles_size_fields). Stored as
+      // text because spreadsheet values are free-form ("27X27.5X6.5cm",
+      // "58*28.5*43"). The Packaging Planning page reads these via the
+      // descriptionResolver article-hints fallback so the Carton, Stiffener,
+      // Polybag, Insert Card, and Zipper tabs auto-fill sizes from master
+      // data when consumption_library has no matching size_spec.
+      insert_dimensions:  toStr(r.insert_dimensions),
+      pvc_bag_dimensions: toStr(r.pvc_bag_dimensions),
+      stiffener_size:     toStr(r.stiffener_size),
+      zipper_length_cm:   toStr(r.zipper_length_cm),
+      carton_size_cm:     toStr(r.carton_size_cm),
       order_quantity: 0,
       size_labels: toStr(r.size) ? [toStr(r.size)] : [],
     }),
@@ -646,6 +658,7 @@ export default function MasterData() {
           <Button size="sm" variant="outline" onClick={handleExport}>
             <Download className="h-3.5 w-3.5 mr-1.5"/>Export Current
           </Button>
+          <TryAIExtractionButton kind="master_data" size="sm" label="Try AI Extraction" />
         </div>
       </div>
 

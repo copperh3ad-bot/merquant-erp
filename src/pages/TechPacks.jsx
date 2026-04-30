@@ -20,6 +20,7 @@ import { format } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import EmptyState from "@/components/shared/EmptyState";
 import StatCard from "@/components/shared/StatCard";
+import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
 import { cn } from "@/lib/utils";
 import { callClaude } from "@/lib/aiProxy";
 import POSelector from "@/components/shared/POSelector";
@@ -1106,6 +1107,13 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
               <input ref={inputRef} type="file" multiple className="hidden"
                 accept=".pdf,.xlsx,.xls,.csv,.doc,.docx,.png,.jpg,.jpeg,.gif,.webp,.txt"
                 onChange={e=>{ addFiles(e.target.files); e.target.value = ""; }}/>
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border border-dashed">
+              <div className="text-xs text-muted-foreground">
+                Or send a single file through the AI extraction review queue (lets you preview rows before they are saved):
+              </div>
+              <TryAIExtractionButton kind="tech_pack" size="sm" label="Try AI Extraction" />
             </div>
 
             {files.length > 0 && (

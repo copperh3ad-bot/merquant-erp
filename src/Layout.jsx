@@ -22,6 +22,7 @@ const ALL_NAV = [
   { group: "Orders",          name: "Purchase Orders",          icon: FileText,         page: "PurchaseOrders",        badge: "pendingApprovals" },
   { group: "Orders",          name: "Season Planning",          icon: Sun,              page: "SeasonPlanning" },
   { group: "Orders",          name: "Email Crawler",            icon: Inbox,            page: "EmailCrawler",           permission: "PO_CREATE" },
+  { group: "Orders",          name: "AI Extraction Review",     icon: Sparkles,         page: "AIExtractionReview" },
   // ── Tracking & Approvals ───────────────────────────────────────
   { group: "Tracking",        name: "Tech Packs",               icon: FileSearch,       page: "TechPacks" },
   { group: "Tracking",        name: "Shortage Alerts",          icon: ShieldAlert,      page: "ShortageAlerts" },
