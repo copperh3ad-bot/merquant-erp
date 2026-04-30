@@ -308,8 +308,9 @@ export default function PackagingPlanning() {
   // Master data accessory specs (consumption_library). Tier-1 of the fallback
   // chain: seeded into rows when no saved accessory_items exist yet for a PO
   // article. If material is empty, resolveDescription falls through to the
-  // tech-pack tier — but for Packaging, techPack is always null (Path A), so
-  // consumption_library is the only fallback source for this page.
+  // tech-pack tier (Tier-2). Wired to chain-length-2 (formerly s12 Path A
+  // chain-length-1) so Trims, Accessories, and Packaging tabs all pull
+  // descriptions from the linked tech pack when consumption_library is empty.
   const { data: masterAccessorySpecs = [] } = useQuery({
     queryKey: ["masterAccessorySpecs"],
     queryFn: async () => {
@@ -323,10 +324,10 @@ export default function PackagingPlanning() {
     }
   });
 
-  // Tech packs — fetched for future Trims/Accessory wiring. Packaging passes
-  // techPack: null to resolveDescription (Path A), so this data is not used on
-  // this page today. The query is cheap (5 columns, extracted-only rows) and
-  // including it here means the dependency key already accounts for it.
+  // Tech packs — Tier-2 of the fallback chain. Each PO article finds its
+  // matching tech pack via findTechPackForArticle (article_code first, then
+  // po_id). Used to seed Trim, Accessory, Label, etc. tab rows when
+  // consumption_library has no usable description for that article+category.
   const { data: techPacks = [] } = useQuery({
     queryKey: ["techPacksExtracted"],
     queryFn: async () => {
@@ -407,15 +408,25 @@ export default function PackagingPlanning() {
             existing_id: e.id,
           }));
         } else {
-          // No saved rows for this article+category — try to seed from master data.
-          // For Packaging Planning, techPack is explicitly null (Path A): this page
-          // only falls back to consumption_library, never to the tech pack.
+          // No saved rows for this article+category — try to seed from master
+          // data, then fall back to the linked tech pack. Tier-2 picks up
+          // descriptions for Trim / Accessory / Label / etc. tabs from the
+          // tech pack's JSONB columns when consumption_library has no rows
+          // (or rows with empty material). The helper handles per-category
+          // dispatch internally — passing techPack non-null is safe across
+          // every tab.
+          const techPack = findTechPackForArticle({
+            articleCode: art.article_code,
+            poId: activePo.id,
+            techPacks,
+          });
           const seeded = resolveDescription({
             articleCode: art.article_code,
             tabCategory: cfg.category,
             cfg,
             masterSpecs: masterAccessorySpecs,
-            techPack: null,
+            techPack,
+            techPackLabelSpecs: techPack?.extracted_label_specs ?? null,
           });
           init[tab][art.id] = seeded ?? [defaultRow(cfg)];
         }
