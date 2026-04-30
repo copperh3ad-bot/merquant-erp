@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Database, Upload, Download, FileSpreadsheet, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Link as LinkIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
+import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import ValidationReport from "@/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
 import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
@@ -121,7 +122,10 @@ const SHEETS = {
     required: ["item_code"],
     columns: ["tech_pack_code","brand","product_type","product_category","size","item_code","bob_sku","color","product_length_in","product_width_in","product_depth_in","finish_dimensions","insert_dimensions","pvc_bag_dimensions","stiffener_size","zipper_length_cm","units_per_carton","carton_size_cm"],
     transform: (r) => ({
-      article_code: toStr(r.item_code),
+      // Uppercase canonical — matches trg_normalize_article_code DB trigger.
+      // Without this, master data with mixed-case codes ("GPFRIOPPk") would
+      // attempt to upsert into a row that's already stored as "GPFRIOPPK".
+      article_code: toStr(r.item_code) ? toStr(r.item_code).toUpperCase() : null,
       article_name: [toStr(r.product_type), toStr(r.size), toStr(r.color)].filter(Boolean).join(" — ") || toStr(r.item_code),
       color: toStr(r.color),
       size: toStr(r.size),
@@ -132,15 +136,15 @@ const SHEETS = {
       finish_dimensions: toStr(r.finish_dimensions),
       // Per-SKU dimension fields (added 0005_articles_size_fields). Stored as
       // text because spreadsheet values are free-form ("27X27.5X6.5cm",
-      // "58*28.5*43"). The Packaging Planning page reads these via the
-      // descriptionResolver article-hints fallback so the Carton, Stiffener,
-      // Polybag, Insert Card, and Zipper tabs auto-fill sizes from master
-      // data when consumption_library has no matching size_spec.
-      insert_dimensions:  toStr(r.insert_dimensions),
-      pvc_bag_dimensions: toStr(r.pvc_bag_dimensions),
-      stiffener_size:     toStr(r.stiffener_size),
-      zipper_length_cm:   toStr(r.zipper_length_cm),
-      carton_size_cm:     toStr(r.carton_size_cm),
+      // "58*28.5*43"). Normalized to canonical form via dimensionNormalizer
+      // so the same physical measurement entered as "27x52.6" or "52.60x27"
+      // converges to a single string — keeps cross-source audits clean.
+      // 2D dims sort smaller→larger; 3D and 1D preserve order.
+      insert_dimensions:  normalizeDim2D(toStr(r.insert_dimensions)),
+      pvc_bag_dimensions: normalizeDim2D(toStr(r.pvc_bag_dimensions)),
+      stiffener_size:     normalizeDim2D(toStr(r.stiffener_size)),
+      zipper_length_cm:   normalizeDim3D(toStr(r.zipper_length_cm)),
+      carton_size_cm:     normalizeDim3D(toStr(r.carton_size_cm)),
       order_quantity: 0,
       size_labels: toStr(r.size) ? [toStr(r.size)] : [],
     }),

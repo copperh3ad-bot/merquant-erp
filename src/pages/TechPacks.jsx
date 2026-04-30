@@ -28,6 +28,7 @@ import { runFullAudit, applyFix, AUDIT_STEPS } from "@/lib/techPackAudit";
 import { parseBobTechPack } from "@/lib/bobTechPackParser";
 import { classifyArticle, componentApplies } from "@/lib/articleTypes";
 import { computeBarcodeUpdates } from "@/lib/barcodeOcrMerge";
+import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import SelectionCheckbox from "@/components/shared/SelectionCheckbox";
 import BulkActionsBar from "@/components/techpack/BulkActionsBar";
@@ -1016,12 +1017,14 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                   (currentVal == null || String(currentVal).trim() === "") && newVal ? newVal : null;
 
                 // sku.zipper_length → articles.zipper_length_cm (column rename).
+                // Each value is normalized to a canonical form so cross-source
+                // audits (W×L vs L×W from different sources) compare cleanly.
                 const patch = {
-                  pvc_bag_dimensions: onlyIfBlank(existingArt.pvc_bag_dimensions, sku.pvc_bag_dimensions),
-                  stiffener_size:     onlyIfBlank(existingArt.stiffener_size,     sku.stiffener_size),
-                  insert_dimensions:  onlyIfBlank(existingArt.insert_dimensions,  sku.insert_dimensions),
-                  zipper_length_cm:   onlyIfBlank(existingArt.zipper_length_cm,   sku.zipper_length),
-                  carton_size_cm:     onlyIfBlank(existingArt.carton_size_cm,     sku.carton_size_cm),
+                  pvc_bag_dimensions: onlyIfBlank(existingArt.pvc_bag_dimensions, normalizeDim2D(sku.pvc_bag_dimensions)),
+                  stiffener_size:     onlyIfBlank(existingArt.stiffener_size,     normalizeDim2D(sku.stiffener_size)),
+                  insert_dimensions:  onlyIfBlank(existingArt.insert_dimensions,  normalizeDim2D(sku.insert_dimensions)),
+                  zipper_length_cm:   onlyIfBlank(existingArt.zipper_length_cm,   normalizeDim3D(sku.zipper_length)),
+                  carton_size_cm:     onlyIfBlank(existingArt.carton_size_cm,     normalizeDim3D(sku.carton_size_cm)),
                 };
                 const filtered = Object.fromEntries(
                   Object.entries(patch).filter(([_, v]) => v != null)

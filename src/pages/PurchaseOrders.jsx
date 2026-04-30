@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createPageUrl } from "@/utils";
 import { db, mfg, priceList as priceListAPI, supabase } from "@/api/supabaseClient";
+import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -362,7 +363,9 @@ export default function PurchaseOrders() {
             po_id:         po.id,
             po_number:     po.po_number,
             article_name:  item.item_description || code,
-            article_code:  code,
+            // Uppercase canonical — matches the DB trigger trg_normalize_article_code
+            // and ensures dedupe by article_code below collapses case variants.
+            article_code:  String(code).trim().toUpperCase(),
             size:          productSize,
             components,
             order_quantity: qty,
@@ -439,12 +442,15 @@ export default function PurchaseOrders() {
                 const fillIfBlank = (cur, nv) =>
                   (cur == null || String(cur).trim() === "") && nv ? nv : null;
 
+                // Normalize on write — see dimensionNormalizer.js. 2D dims
+                // sort smaller→larger so W×L and L×W converge; 3D (carton)
+                // and 1D (zipper) preserve order.
                 const patch = {
-                  pvc_bag_dimensions: fillIfBlank(art.pvc_bag_dimensions, sku.pvc_bag_dimensions),
-                  stiffener_size:     fillIfBlank(art.stiffener_size,     sku.stiffener_size),
-                  insert_dimensions:  fillIfBlank(art.insert_dimensions,  sku.insert_dimensions),
-                  zipper_length_cm:   fillIfBlank(art.zipper_length_cm,   sku.zipper_length),
-                  carton_size_cm:     fillIfBlank(art.carton_size_cm,     sku.carton_size_cm),
+                  pvc_bag_dimensions: fillIfBlank(art.pvc_bag_dimensions, normalizeDim2D(sku.pvc_bag_dimensions)),
+                  stiffener_size:     fillIfBlank(art.stiffener_size,     normalizeDim2D(sku.stiffener_size)),
+                  insert_dimensions:  fillIfBlank(art.insert_dimensions,  normalizeDim2D(sku.insert_dimensions)),
+                  zipper_length_cm:   fillIfBlank(art.zipper_length_cm,   normalizeDim3D(sku.zipper_length)),
+                  carton_size_cm:     fillIfBlank(art.carton_size_cm,     normalizeDim3D(sku.carton_size_cm)),
                 };
                 const filtered = Object.fromEntries(Object.entries(patch).filter(([_, v]) => v != null));
                 if (Object.keys(filtered).length > 0) {
