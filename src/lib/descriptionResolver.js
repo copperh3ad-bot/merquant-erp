@@ -150,8 +150,28 @@ function shouldFallThrough(rows) {
   return rows.length === 0 || rows.every(isEmptyMaterial);
 }
 
+// Pull the per-SKU dimension that corresponds to a packaging tab from an
+// articles row (master data). Returns "" when the article has no value for
+// that field. Mirrors the per-tab mapping used for tech-pack measurements
+// so that articleSizes acts as a 4th-tier size fallback after element /
+// measurements / blank.
+function articleSizeForTab(cfg, articleSizes) {
+  if (!articleSizes || !cfg) return "";
+  if (cfg.category === "Polybag")          return articleSizes.pvc_bag_dimensions || "";
+  if (cfg.category === "Stiffener")        return articleSizes.stiffener_size     || "";
+  if (cfg.category === "Carton")           return articleSizes.carton_size_cm     || "";
+  if (cfg.category === "Insert Card")      return articleSizes.insert_dimensions  || "";
+  if (cfg.category === "Zipper")           return articleSizes.zipper_length_cm   || "";
+  return "";
+}
+
 // Convert a single consumption_library row to a Packaging Planning row object.
-function masterRowToSeedRow(m, cfg) {
+// articleSizes (master-data per-SKU dims) is used as a fallback when the
+// consumption_library row has empty size_spec — this is the common case
+// where the user filled the master Articles sheet's stiffener_size /
+// carton_size_cm columns but the per-component-consumption rows don't
+// repeat the same dimensions.
+function masterRowToSeedRow(m, cfg, articleSizes = null) {
   const wastage =
     m.wastage_percent != null
       ? m.wastage_percent <= 1
@@ -168,10 +188,12 @@ function masterRowToSeedRow(m, cfg) {
     existing_id: null,
   };
 
+  const sizeText = m.size_spec || articleSizeForTab(cfg, articleSizes) || "";
+
   if (cfg.splitDescSize) {
-    return { ...base, quality: "", description: m.material || "", size: m.size_spec || "" };
+    return { ...base, quality: "", description: m.material || "", size: sizeText };
   }
-  return { ...base, quality: m.material || "", description: "", size: m.size_spec || "" };
+  return { ...base, quality: m.material || "", description: "", size: sizeText };
 }
 
 // Convert a single tech-pack JSONB element to a Packaging Planning row object.
@@ -179,7 +201,7 @@ function masterRowToSeedRow(m, cfg) {
 // per-SKU dims) and upc (per-size UPC table) are passed in so size and
 // pc_ean_code can be filled when the spec element doesn't carry them.
 function techPackElementToSeedRow(elem, cfg, ctx = {}) {
-  const { measurements = null, upc = null, articleCode = null } = ctx;
+  const { measurements = null, upc = null, articleCode = null, articleSizes = null } = ctx;
 
   const base = {
     type: cfg.typeOptions[0],
@@ -199,6 +221,9 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
 
   // Size: prefer the element's own size_spec; otherwise fall back to per-SKU
   // dimensions stored in extracted_measurements.this_sku, picked by tab.
+  // Final fallback: master-data articles row (articleSizes) for the case
+  // where the user filled the Articles sheet's stiffener_size/carton_size_cm
+  // columns but the tech pack's measurements don't carry them.
   let sizeText = elem.size_spec || elem.dimensions || elem.size || "";
   if (!sizeText && measurements?.this_sku) {
     const sku = measurements.this_sku;
@@ -208,6 +233,7 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
     else if (cfg.category === "Insert Card") sizeText = sku.insert_dimensions || "";
     else if (cfg.category === "Zipper")    sizeText = sku.zipper_length || "";
   }
+  if (!sizeText) sizeText = articleSizeForTab(cfg, articleSizes);
 
   // Type: for Label tab, derive from section/label_type. For other tabs,
   // scan the description/material text for a typeOption keyword (Polybag
@@ -305,6 +331,12 @@ export function findTechPackForArticle({ articleCode, poId, techPacks }) {
  *   - extracted_measurements (per-SKU sizes for Polybag/Stiffener/Carton/etc.)
  *   - extracted_data.upc       (per-size UPC/EAN for Sticker/Insert Card)
  *
+ * articleSizes is an optional master-data per-SKU dimensions row (a row from
+ * the `articles` table after migration 0005_articles_size_fields). It serves
+ * as a fallback for size on Carton / Stiffener / Polybag / Insert Card /
+ * Zipper tabs when neither consumption_library nor the tech pack carry the
+ * dimension.
+ *
  * @param {object} params
  * @param {string} params.articleCode
  * @param {string} params.tabCategory          - cfg.category value
@@ -312,6 +344,10 @@ export function findTechPackForArticle({ articleCode, poId, techPacks }) {
  * @param {object[]} params.masterSpecs        - consumption_library rows
  * @param {object|null} params.techPack        - tech_packs row (Tier-2)
  * @param {object[]|null} [params.techPackLabelSpecs]
+ * @param {object|null} [params.articleSizes]  - articles row carrying
+ *                                               carton_size_cm / stiffener_size /
+ *                                               pvc_bag_dimensions / insert_dimensions /
+ *                                               zipper_length_cm
  * @returns {object[]|null}
  */
 export function resolveDescription({
@@ -321,6 +357,7 @@ export function resolveDescription({
   masterSpecs,
   techPack,
   techPackLabelSpecs = null,
+  articleSizes = null,
 }) {
   if (!articleCode) return null;
   const normalised = articleCode.trim().toUpperCase();
@@ -333,11 +370,28 @@ export function resolveDescription({
   );
 
   if (!shouldFallThrough(masterRows)) {
-    return masterRows.map((m) => masterRowToSeedRow(m, cfg));
+    return masterRows.map((m) => masterRowToSeedRow(m, cfg, articleSizes));
   }
 
   // ── Tier 2: tech_packs JSONB ─────────────────────────────────────────
-  if (!techPack) return null;
+  // techPack may be null (Packaging Path A); we still want to consult
+  // articleSizes for a size-only seed row on tabs whose dimension lives
+  // on the article. Handled at the bottom.
+  if (!techPack) {
+    const articleOnlySize = articleSizeForTab(cfg, articleSizes);
+    if (articleOnlySize) {
+      const base = {
+        type: cfg.typeOptions[0],
+        wastage_percent: cfg.defaultWastage,
+        multiplier: 1,
+        pc_ean_code: "",
+        carton_ean_code: "",
+        existing_id: null,
+      };
+      return [{ ...base, quality: "", description: "", size: articleOnlySize }];
+    }
+    return null;
+  }
 
   const accessoryElems = Array.isArray(techPack.extracted_accessory_specs) ? techPack.extracted_accessory_specs : [];
   const trimElems      = Array.isArray(techPack.extracted_trim_specs)      ? techPack.extracted_trim_specs      : [];
@@ -352,6 +406,7 @@ export function resolveDescription({
       ? techPack.extracted_data.upc
       : null,
     articleCode,
+    articleSizes,
   };
 
   const accessoryCandidates = accessoryElems.filter(
@@ -389,29 +444,32 @@ export function resolveDescription({
   // Even when no spec element matches the tab, certain tabs have data in
   // extracted_measurements.this_sku that's worth surfacing on its own
   // (e.g. Carton tab when the trim_specs JSONB has nothing labeled "Carton").
+  // articleSizes is checked second so master-data dimensions also surface
+  // when the tech pack has no measurements at all.
+  let fallbackSize = null;
   if (ctx.measurements?.this_sku) {
     const sku = ctx.measurements.this_sku;
-    let measurementOnlySize = null;
-    if (cfg.category === "Polybag")        measurementOnlySize = sku.pvc_bag_dimensions || null;
-    else if (cfg.category === "Stiffener") measurementOnlySize = sku.stiffener_size      || null;
-    else if (cfg.category === "Carton")    measurementOnlySize = sku.carton_size_cm      || null;
-    else if (cfg.category === "Insert Card") measurementOnlySize = sku.insert_dimensions  || null;
-    else if (cfg.category === "Zipper")    measurementOnlySize = sku.zipper_length        || null;
+    if (cfg.category === "Polybag")          fallbackSize = sku.pvc_bag_dimensions || null;
+    else if (cfg.category === "Stiffener")   fallbackSize = sku.stiffener_size      || null;
+    else if (cfg.category === "Carton")      fallbackSize = sku.carton_size_cm      || null;
+    else if (cfg.category === "Insert Card") fallbackSize = sku.insert_dimensions   || null;
+    else if (cfg.category === "Zipper")      fallbackSize = sku.zipper_length        || null;
+  }
+  if (!fallbackSize) {
+    const articleOnly = articleSizeForTab(cfg, articleSizes);
+    if (articleOnly) fallbackSize = articleOnly;
+  }
 
-    if (measurementOnlySize) {
-      const base = {
-        type: cfg.typeOptions[0],
-        wastage_percent: cfg.defaultWastage,
-        multiplier: 1,
-        pc_ean_code: "",
-        carton_ean_code: "",
-        existing_id: null,
-      };
-      if (cfg.splitDescSize) {
-        return [{ ...base, quality: "", description: "", size: measurementOnlySize }];
-      }
-      return [{ ...base, quality: "", description: "", size: measurementOnlySize }];
-    }
+  if (fallbackSize) {
+    const base = {
+      type: cfg.typeOptions[0],
+      wastage_percent: cfg.defaultWastage,
+      multiplier: 1,
+      pc_ean_code: "",
+      carton_ean_code: "",
+      existing_id: null,
+    };
+    return [{ ...base, quality: "", description: "", size: fallbackSize }];
   }
 
   return null;
