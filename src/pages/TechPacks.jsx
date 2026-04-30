@@ -943,6 +943,52 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
               createdTps.push(tp);
             }
 
+            // ── Barcode OCR enrichment ──
+            // BOB tech packs render the UPC table as a barcode IMAGE, not as
+            // text cells, so the BOB parser can't read the digits. Send the
+            // raw file to the extract-barcodes edge function which uses
+            // Claude vision to OCR each embedded barcode + its size label,
+            // then write the matched (size, EAN) onto each tech_packs row's
+            // extracted_data.upc array. Synchronous so the user gets a
+            // progress message; any failure here is non-blocking — the
+            // tech_packs rows are already saved, just without UPC data.
+            try {
+              updateProg(idx, { status: "extracting", message: "Reading barcode images…" });
+
+              const arrayBuf = await file.arrayBuffer();
+              const fileBytes = new Uint8Array(arrayBuf);
+              const CHUNK = 0x8000;
+              let binary = "";
+              for (let i = 0; i < fileBytes.length; i += CHUNK) {
+                binary += String.fromCharCode.apply(null, Array.from(fileBytes.subarray(i, i + CHUNK)));
+              }
+              const fileBase64 = btoa(binary);
+
+              const { data: ocrData, error: ocrErr } = await supabase.functions.invoke(
+                "extract-barcodes",
+                { body: { file_base64: fileBase64, file_name: file.name } }
+              );
+
+              if (!ocrErr && ocrData?.ok && Array.isArray(ocrData.results) && ocrData.results.length > 0) {
+                for (const tp of createdTps) {
+                  const skuSize = String(tp.extracted_data?.this_sku?.size || "").toUpperCase().trim();
+                  if (!skuSize) continue;
+                  const match = ocrData.results.find(r =>
+                    r.size && r.barcode &&
+                    String(r.size).toUpperCase().trim() === skuSize
+                  );
+                  if (match) {
+                    const upc = [{ size: match.size, our_sku: tp.article_code, bob_sku: match.barcode }];
+                    const merged = { ...(tp.extracted_data || {}), upc };
+                    await supabase.from("tech_packs").update({ extracted_data: merged }).eq("id", tp.id);
+                    tp.extracted_data = merged;
+                  }
+                }
+              }
+            } catch (ocrErr) {
+              console.warn("[barcode OCR] failed (non-blocking):", ocrErr?.message || ocrErr);
+            }
+
             // Run cross-check on the first SKU's tech pack as a representative sample
             // (audit runs per-SKU when user opens that tech pack)
             updateProg(idx, { status: "done", result: {
