@@ -3,6 +3,8 @@ import {
   classifyComponent,
   classifyBatch,
   CANONICAL_TYPES,
+  detectProductTypeFromCode,
+  detectPolybagSkuMismatch,
 } from "../../src/lib/componentClassifier.js";
 
 // ── Real-world fixtures from the live consumption_library data ────────────
@@ -199,5 +201,114 @@ describe("CANONICAL_TYPES", () => {
   it("includes the new Accessory Bag and Hang Tag categories", () => {
     expect(CANONICAL_TYPES).toContain("Accessory Bag");
     expect(CANONICAL_TYPES).toContain("Hang Tag");
+  });
+});
+
+// ── SKU-aware data-quality detection ─────────────────────────────────────
+
+describe("detectProductTypeFromCode", () => {
+  it("identifies Pillow Protector codes", () => {
+    expect(detectProductTypeFromCode("GPFRIOPPK")).toBe("Pillow Protector");
+    expect(detectProductTypeFromCode("GPFRIOPPQ")).toBe("Pillow Protector");
+    expect(detectProductTypeFromCode("XYZPP1")).toBe("Pillow Protector");
+  });
+
+  it("identifies Mattress Protector codes", () => {
+    expect(detectProductTypeFromCode("GPFRIOMP33")).toBe("Mattress Protector");
+    expect(detectProductTypeFromCode("GPMP46")).toBe("Mattress Protector");
+    expect(detectProductTypeFromCode("ABCMP78")).toBe("Mattress Protector");
+  });
+
+  it("identifies Sleeper Encasement (SE) codes", () => {
+    expect(detectProductTypeFromCode("GPSE50")).toBe("Sleeper Encasement");
+  });
+
+  it("identifies Total Encasement (TE) codes", () => {
+    expect(detectProductTypeFromCode("GPTE78")).toBe("Total Encasement");
+  });
+
+  it("returns null for unrecognised patterns", () => {
+    expect(detectProductTypeFromCode("SLPCSS-Q-GY")).toBeNull();
+    expect(detectProductTypeFromCode("MFRM-001")).toBeNull();
+    expect(detectProductTypeFromCode("")).toBeNull();
+    expect(detectProductTypeFromCode(null)).toBeNull();
+  });
+
+  it("is case-insensitive", () => {
+    expect(detectProductTypeFromCode("gpfrioppk")).toBe("Pillow Protector");
+    expect(detectProductTypeFromCode("gpfriomp46")).toBe("Mattress Protector");
+  });
+});
+
+describe("detectPolybagSkuMismatch", () => {
+  // The exact bug the user reported: pillow protector polybag row had
+  // the mattress encasement description.
+  it("flags Pillow Protector polybag with mattress-encasement zipper description", () => {
+    const result = detectPolybagSkuMismatch({
+      articleCode: "GPFRIOPPK",
+      componentType: "Polybag",
+      material: "Bag material — 12S (Thickness)- Transparent PVC Bag with 7S White PVC Binding all around seam and 3# Nylon Coil White Zipper(No Hanger Loop on top)",
+    });
+    expect(result).not.toBeNull();
+    expect(result.product_type).toBe("Pillow Protector");
+    expect(result.offending_keyword).toMatch(/zipper|12s|hanger loop|bound|binding/i);
+    expect(result.message).toContain("GPFRIOPPK");
+  });
+
+  it("does NOT flag Pillow Protector polybag with the correct hanger-bag description", () => {
+    const result = detectPolybagSkuMismatch({
+      articleCode: "GPFRIOPPQ",
+      componentType: "Polybag",
+      material: "Bag material — PVC Transparent Polybag with PP Plastic Hanger on Top, adhesive tape opening",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does NOT flag Mattress Protector with its expected zipper-bag description", () => {
+    const result = detectPolybagSkuMismatch({
+      articleCode: "GPFRIOMP78",
+      componentType: "Polybag",
+      material: "Bag material — 12S Transparent PVC Bag with 7S White PVC Binding all around seam and 3# Nylon Coil White Zipper",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("flags Mattress Protector polybag with a hanger-bag description (reverse mis-pair)", () => {
+    const result = detectPolybagSkuMismatch({
+      articleCode: "GPFRIOMP33",
+      componentType: "Polybag",
+      material: "Bag material — Size 3.5cm H X 11.5cm W with PP Plastic Hanger and adhesive tape",
+    });
+    expect(result).not.toBeNull();
+    expect(result.product_type).toBe("Mattress Protector");
+  });
+
+  it("returns null for non-Polybag component types", () => {
+    expect(detectPolybagSkuMismatch({
+      articleCode: "GPFRIOPPK", componentType: "Stiffener",
+      material: "Cardboard with zipper",
+    })).toBeNull();
+    expect(detectPolybagSkuMismatch({
+      articleCode: "GPFRIOPPK", componentType: "Insert Card",
+      material: "anything",
+    })).toBeNull();
+  });
+
+  it("returns null when product type can't be inferred from the SKU code", () => {
+    const result = detectPolybagSkuMismatch({
+      articleCode: "SLPCSS-Q-GY",
+      componentType: "Polybag",
+      material: "Some bag with zipper",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when material is empty / null", () => {
+    expect(detectPolybagSkuMismatch({
+      articleCode: "GPFRIOPPK", componentType: "Polybag", material: "",
+    })).toBeNull();
+    expect(detectPolybagSkuMismatch({
+      articleCode: "GPFRIOPPK", componentType: "Polybag", material: null,
+    })).toBeNull();
   });
 });

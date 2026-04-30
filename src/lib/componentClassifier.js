@@ -191,3 +191,114 @@ export function classifyBatch(items) {
     ...classifyComponent(item),
   }));
 }
+
+// ── SKU-aware data-quality detection ────────────────────────────────────
+//
+// Different product types use different polybags. When the user's master
+// data sheet pastes the wrong polybag description against a SKU (e.g. the
+// large mattress-encasement zipper bag against a pillow protector SKU,
+// because both products share a tech pack), the row imports cleanly but
+// surfaces wrong info on Packaging Planning.
+//
+// detectProductTypeFromCode() infers the product family from the article
+// code so we can validate the polybag/insert/etc. description against
+// the SKU's actual product type.
+
+// Pillow Protector matches BEFORE Mattress Protector because some Pillow
+// codes (GPFRIOPPK, GPFRIOPPQ) also satisfy the MP regex via the "MPP"
+// substring. Order matters.
+const PRODUCT_TYPE_PATTERNS = [
+  // Pillow Protector — codes ending in PPK/PPQ or containing PP\d
+  { type: "Pillow Protector",   test: (c) => /PP[KQ]\d*$/.test(c) || /PP\d/.test(c) },
+  // Mattress Protector — codes containing MP\d (GPMP46, GPFRIOMP33)
+  { type: "Mattress Protector", test: (c) => /MP\d/.test(c) },
+  // Sleeper Encasement — codes containing SE\d (GPSE50)
+  { type: "Sleeper Encasement", test: (c) => /SE\d/.test(c) },
+  // Total Encasement — codes containing TE\d (GPTE50)
+  { type: "Total Encasement",   test: (c) => /TE\d/.test(c) },
+];
+
+/**
+ * Infer the product family from a SKU/article code. Returns null when no
+ * known pattern matches (the system falls back to neutral classification).
+ */
+export function detectProductTypeFromCode(articleCode) {
+  if (!articleCode) return null;
+  const code = String(articleCode).toUpperCase();
+  for (const p of PRODUCT_TYPE_PATTERNS) {
+    if (p.test(code)) return p.type;
+  }
+  return null;
+}
+
+// Per-product-type "this should NOT appear in a Polybag description" lists.
+// Each keyword here is a STRONG signal the row was mis-paired in the source.
+// Detection is one-way (we flag obvious problems, not subtle judgement calls).
+const POLYBAG_MISMATCH_RULES = {
+  "Pillow Protector": {
+    // Pillow protectors use a small clear bag with plastic hanger + adhesive
+    // seal. They DON'T use coil zippers, "12S thickness" vinyl, or bound seams
+    // (those are mattress-encasement features).
+    bad_keywords: [
+      "nylon coil zipper", "coil zipper",
+      "no hanger loop on top",
+      "12s transparent",
+      "bound seam",
+      "white pvc binding all around",
+    ],
+    expected_keywords: ["plastic hanger", "adhesive tape", "hanger on top"],
+  },
+  "Mattress Protector": {
+    // Mattress protectors use a larger PVC bag, often with a bound seam and
+    // sometimes a zipper. The small 3.5cm × 11.5cm hanger bag is for the
+    // hang tag, NOT for the protector itself.
+    bad_keywords: [
+      "3.5cm h x 11.5cm w",
+      "bag opening at the bottom with automatic adhesive",
+    ],
+    expected_keywords: ["pvc bag", "bound seam"],
+  },
+  "Sleeper Encasement": {
+    bad_keywords: ["3.5cm h x 11.5cm w", "automatic adhesive"],
+    expected_keywords: ["pvc bag", "zipper"],
+  },
+  "Total Encasement": {
+    bad_keywords: ["3.5cm h x 11.5cm w", "automatic adhesive"],
+    expected_keywords: ["pvc bag", "zipper"],
+  },
+};
+
+/**
+ * Detect a polybag description that doesn't match the SKU's product type.
+ * Returns null when everything looks consistent OR when we can't confidently
+ * classify (no rule for this product type, no signal in the description, etc.).
+ *
+ * @param {object} args
+ * @param {string} args.articleCode    SKU code
+ * @param {string} args.componentType  must be "Polybag" — other types short-circuit
+ * @param {string} args.material       the polybag description text
+ * @returns {object|null}              { product_type, offending_keyword, message } or null
+ */
+export function detectPolybagSkuMismatch({ articleCode, componentType, material }) {
+  if (componentType !== "Polybag") return null;
+  if (!material) return null;
+
+  const productType = detectProductTypeFromCode(articleCode);
+  if (!productType) return null;
+
+  const rule = POLYBAG_MISMATCH_RULES[productType];
+  if (!rule) return null;
+
+  const m = String(material).toLowerCase();
+  for (const kw of rule.bad_keywords) {
+    if (m.includes(kw)) {
+      return {
+        article_code: articleCode,
+        product_type: productType,
+        offending_keyword: kw,
+        message: `${articleCode} is a ${productType} but its Polybag description mentions "${kw}" — typical of a different product type. The row may be mis-paired in the master-data source.`,
+      };
+    }
+  }
+  return null;
+}

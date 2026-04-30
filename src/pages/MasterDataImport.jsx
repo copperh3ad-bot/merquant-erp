@@ -7,7 +7,7 @@ import { Database, Upload, Download, FileSpreadsheet, Loader2, CheckCircle2, Ale
 import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
-import { classifyComponent } from "@/lib/componentClassifier";
+import { classifyComponent, detectPolybagSkuMismatch } from "@/lib/componentClassifier";
 import { normalizeRowKeys } from "@/lib/headerNormalizer";
 import ValidationReport from "@/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
@@ -202,13 +202,14 @@ const SHEETS = {
         notes: [toStr(r.variant), toStr(r.unit) ? `unit: ${toStr(r.unit)}` : null].filter(Boolean).join(" · ") || null,
       };
     },
-    // 3-step pipeline:
+    // 4-step pipeline:
     //   1. Re-classify component_type via componentClassifier (rules-based).
     //      Disambiguates user-typed categories like "Polybag" when the actual
     //      item is a small hang-tag carrier ("Accessory Bag") or vice versa.
-    //   2. Drop byte-identical duplicates (same SKU+component_type+material+
-    //      size+placement+consumption).
-    //   3. Sort for deterministic ordering.
+    //   2. Detect SKU↔polybag mismatches (e.g. Pillow Protector polybag with
+    //      mattress-encasement zipper description). Logged as warnings — the
+    //      row is still imported, but the user is told to check the source.
+    //   3. Drop byte-identical duplicates.
     postProcess: (rows) => {
       // Step 1: smart re-classify
       let reclassified = 0;
@@ -220,7 +221,6 @@ const SHEETS = {
           size_spec:    row.size_spec,
           placement:    row.placement,
         });
-        // Only override when the classifier is confident AND disagrees.
         if (result.component_type && result.confidence >= 0.85 && result.component_type !== row.component_type) {
           reclassified += 1;
           return { ...row, component_type: result.component_type, _classifier_reason: result.reason };
@@ -229,7 +229,28 @@ const SHEETS = {
       });
       if (reclassified > 0) console.info(`[MasterDataImport] re-classified ${reclassified} accessory row(s) by componentClassifier`);
 
-      // Step 2: dedupe
+      // Step 2: SKU-aware polybag mismatch detection. The classifier can't
+      // catch every case (e.g. when the wrong description is paired with a
+      // SKU but the description itself is internally consistent — only the
+      // PAIRING is wrong). detectPolybagSkuMismatch() looks at the SKU's
+      // product family (Pillow Protector / Mattress Protector / Encasement)
+      // and flags Polybag rows whose description contains keywords typical
+      // of a different product type.
+      const mismatchWarnings = [];
+      for (const row of classified) {
+        const warn = detectPolybagSkuMismatch({
+          articleCode:   row.item_code,
+          componentType: row.component_type,
+          material:      row.material,
+        });
+        if (warn) mismatchWarnings.push(warn);
+      }
+      if (mismatchWarnings.length > 0) {
+        console.warn(`[MasterDataImport] ${mismatchWarnings.length} likely SKU↔polybag mis-pairing(s) detected — these rows will import but the source data may be wrong:`);
+        for (const w of mismatchWarnings) console.warn(`  ${w.message}`);
+      }
+
+      // Step 3: dedupe
       const seen = new Set();
       const out = [];
       let dropped = 0;
@@ -237,7 +258,6 @@ const SHEETS = {
         const key = [row.item_code, row.component_type, row.material, row.size_spec, row.placement, row.consumption_per_unit].join("||");
         if (seen.has(key)) { dropped++; continue; }
         seen.add(key);
-        // Strip transient classifier-reason field before insert
         const { _classifier_reason, ...persistRow } = row;
         out.push(persistRow);
       }
