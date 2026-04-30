@@ -5,6 +5,8 @@ import {
   CANONICAL_TYPES,
   detectProductTypeFromCode,
   detectPolybagSkuMismatch,
+  detectStiffenerSkuMismatch,
+  detectAnySkuMismatch,
 } from "../../src/lib/componentClassifier.js";
 
 // ── Real-world fixtures from the live consumption_library data ────────────
@@ -310,5 +312,82 @@ describe("detectPolybagSkuMismatch", () => {
     expect(detectPolybagSkuMismatch({
       articleCode: "GPFRIOPPK", componentType: "Polybag", material: null,
     })).toBeNull();
+  });
+});
+
+describe("detectStiffenerSkuMismatch", () => {
+  it("flags Mattress Protector stiffener with 'White square card' description", () => {
+    const result = detectStiffenerSkuMismatch({
+      articleCode: "GPFRIOMP46",
+      componentType: "Stiffener",
+      material: "Cardboard material(Stiffener) — White square card",
+    });
+    expect(result).not.toBeNull();
+    expect(result.product_type).toBe("Mattress Protector");
+    expect(result.component_label).toBe("Stiffener");
+    expect(result.offending_keyword).toBe("white square card");
+  });
+
+  it("flags Pillow Protector stiffener with U-shape cardboard description", () => {
+    const result = detectStiffenerSkuMismatch({
+      articleCode: "GPFRIOPPK",
+      componentType: "Stiffener",
+      material: 'Cardboard material(Stiffener) — Packaging inside need to put a "U" 1 ply thickness in White Cardboard',
+    });
+    expect(result).not.toBeNull();
+    expect(result.product_type).toBe("Pillow Protector");
+  });
+
+  it("does NOT flag Mattress Protector with the correct U-shape stiffener", () => {
+    const result = detectStiffenerSkuMismatch({
+      articleCode: "GPFRIOMP78",
+      componentType: "Stiffener",
+      material: 'Cardboard material(Stiffener) — Packaging inside need to put a "U" 1 ply thickness in White Cardboard to maintain the shape',
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does NOT flag Pillow Protector with the correct White Square Card stiffener", () => {
+    const result = detectStiffenerSkuMismatch({
+      articleCode: "GPFRIOPPQ",
+      componentType: "Stiffener",
+      material: "Cardboard material(Stiffener) — White square card",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null for non-Stiffener component types", () => {
+    expect(detectStiffenerSkuMismatch({
+      articleCode: "GPFRIOMP46", componentType: "Polybag",
+      material: "White square card",
+    })).toBeNull();
+  });
+});
+
+describe("detectAnySkuMismatch — dispatcher across all component types", () => {
+  it("catches a Polybag mismatch", () => {
+    const r = detectAnySkuMismatch({
+      articleCode: "GPFRIOPPK", componentType: "Polybag",
+      material: "12S Transparent PVC Bag with Nylon Coil White Zipper",
+    });
+    expect(r).not.toBeNull();
+    expect(r.component_label).toBe("Polybag");
+  });
+
+  it("catches a Stiffener mismatch", () => {
+    const r = detectAnySkuMismatch({
+      articleCode: "GPFRIOMP46", componentType: "Stiffener",
+      material: "White square card",
+    });
+    expect(r).not.toBeNull();
+    expect(r.component_label).toBe("Stiffener");
+  });
+
+  it("returns null for components with no rules yet (Insert Card, Label, etc.)", () => {
+    const r = detectAnySkuMismatch({
+      articleCode: "GPFRIOPPK", componentType: "Insert Card",
+      material: "anything goes",
+    });
+    expect(r).toBeNull();
   });
 });

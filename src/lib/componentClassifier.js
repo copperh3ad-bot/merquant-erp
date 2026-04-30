@@ -231,9 +231,37 @@ export function detectProductTypeFromCode(articleCode) {
   return null;
 }
 
-// Per-product-type "this should NOT appear in a Polybag description" lists.
-// Each keyword here is a STRONG signal the row was mis-paired in the source.
-// Detection is one-way (we flag obvious problems, not subtle judgement calls).
+// Per-product-type rules for detecting mis-paired component rows.
+// Two parallel maps:
+//   POLYBAG_MISMATCH_RULES   — Polybag-specific mis-pair signals
+//   STIFFENER_MISMATCH_RULES — Stiffener-specific mis-pair signals
+// Generic SKU↔component mismatch is detected via detectComponentSkuMismatch,
+// which dispatches to the right rule set based on componentType.
+
+const STIFFENER_MISMATCH_RULES = {
+  // Mattress Protectors / Sleeper / Total Encasements use a U-shape
+  // cardboard insert that wraps the product to maintain shape. They DON'T
+  // use the small white square card (that's for pillow protectors).
+  "Mattress Protector": {
+    bad_keywords: ["white square card"],
+    expected_keywords: ["u shape", "u-shape", "1 ply thickness", "maintain the shape"],
+  },
+  "Sleeper Encasement": {
+    bad_keywords: ["white square card"],
+    expected_keywords: ["u shape", "u-shape", "1 ply thickness"],
+  },
+  "Total Encasement": {
+    bad_keywords: ["white square card"],
+    expected_keywords: ["u shape", "u-shape", "1 ply thickness"],
+  },
+  // Pillow Protectors use a small white square cardboard piece. They
+  // DON'T use the U-shape cardboard (that's for mattress products).
+  "Pillow Protector": {
+    bad_keywords: ['"u" 1 ply', "u-1 ply", "u 1 ply thickness", "1 ply thickness", "maintain the shape"],
+    expected_keywords: ["white square card"],
+  },
+};
+
 const POLYBAG_MISMATCH_RULES = {
   "Pillow Protector": {
     // Pillow protectors use a small clear bag with plastic hanger + adhesive
@@ -281,12 +309,44 @@ const POLYBAG_MISMATCH_RULES = {
  */
 export function detectPolybagSkuMismatch({ articleCode, componentType, material }) {
   if (componentType !== "Polybag") return null;
-  if (!material) return null;
+  return _detectMismatchByRules(POLYBAG_MISMATCH_RULES, "Polybag", { articleCode, material });
+}
 
+/**
+ * Same shape as detectPolybagSkuMismatch but for Stiffener rows.
+ * Mattress / Sleeper / Total Encasements use a U-shape cardboard insert.
+ * Pillow Protectors use a small white square card. When the user's master
+ * data sheet copies a stiffener row from one SKU type onto another (a real
+ * issue we cleaned up — every Mattress Protector had BOTH stiffener rows
+ * because both came from the shared tech pack), this detects it.
+ */
+export function detectStiffenerSkuMismatch({ articleCode, componentType, material }) {
+  if (componentType !== "Stiffener") return null;
+  return _detectMismatchByRules(STIFFENER_MISMATCH_RULES, "Stiffener", { articleCode, material });
+}
+
+/**
+ * Generic dispatcher — run all known mismatch detectors against a row.
+ * Use this from MasterDataImport.jsx postProcess to flag any
+ * SKU↔component mis-pairings during ingest, regardless of which
+ * component type the row is.
+ *
+ * @returns {object|null}  same shape as the per-component detectors
+ */
+export function detectAnySkuMismatch({ articleCode, componentType, material }) {
+  return (
+    detectPolybagSkuMismatch({ articleCode, componentType, material }) ||
+    detectStiffenerSkuMismatch({ articleCode, componentType, material })
+  );
+}
+
+// Shared internal — walks a rules map for the SKU's product type and
+// returns the first bad-keyword hit. Returns null when nothing fires.
+function _detectMismatchByRules(rulesMap, componentLabel, { articleCode, material }) {
+  if (!material) return null;
   const productType = detectProductTypeFromCode(articleCode);
   if (!productType) return null;
-
-  const rule = POLYBAG_MISMATCH_RULES[productType];
+  const rule = rulesMap[productType];
   if (!rule) return null;
 
   const m = String(material).toLowerCase();
@@ -295,8 +355,9 @@ export function detectPolybagSkuMismatch({ articleCode, componentType, material 
       return {
         article_code: articleCode,
         product_type: productType,
+        component_label: componentLabel,
         offending_keyword: kw,
-        message: `${articleCode} is a ${productType} but its Polybag description mentions "${kw}" — typical of a different product type. The row may be mis-paired in the master-data source.`,
+        message: `${articleCode} is a ${productType} but its ${componentLabel} description mentions "${kw}" — typical of a different product type. The row may be mis-paired in the master-data source.`,
       };
     }
   }

@@ -7,7 +7,7 @@ import { Database, Upload, Download, FileSpreadsheet, Loader2, CheckCircle2, Ale
 import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
-import { classifyComponent, detectPolybagSkuMismatch } from "@/lib/componentClassifier";
+import { classifyComponent, detectAnySkuMismatch } from "@/lib/componentClassifier";
 import { normalizeRowKeys } from "@/lib/headerNormalizer";
 import ValidationReport from "@/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
@@ -237,16 +237,14 @@ const SHEETS = {
       });
       if (reclassified > 0) console.info(`[MasterDataImport] re-classified ${reclassified} accessory row(s) by componentClassifier`);
 
-      // Step 2: SKU-aware polybag mismatch detection. The classifier can't
-      // catch every case (e.g. when the wrong description is paired with a
-      // SKU but the description itself is internally consistent — only the
-      // PAIRING is wrong). detectPolybagSkuMismatch() looks at the SKU's
-      // product family (Pillow Protector / Mattress Protector / Encasement)
-      // and flags Polybag rows whose description contains keywords typical
-      // of a different product type.
+      // Step 2: SKU-aware mismatch detection. detectAnySkuMismatch dispatches
+      // across all known component-type rules (Polybag, Stiffener, …) and
+      // flags rows where the description contains keywords inappropriate for
+      // the SKU's product family — typically the result of a shared tech pack
+      // putting all components on every SKU when only some apply.
       const mismatchWarnings = [];
       for (const row of classified) {
-        const warn = detectPolybagSkuMismatch({
+        const warn = detectAnySkuMismatch({
           articleCode:   row.item_code,
           componentType: row.component_type,
           material:      row.material,
@@ -254,7 +252,7 @@ const SHEETS = {
         if (warn) mismatchWarnings.push(warn);
       }
       if (mismatchWarnings.length > 0) {
-        console.warn(`[MasterDataImport] ${mismatchWarnings.length} likely SKU↔polybag mis-pairing(s) detected — these rows will import but the source data may be wrong:`);
+        console.warn(`[MasterDataImport] ${mismatchWarnings.length} likely SKU↔component mis-pairing(s) detected — these rows will import but the source data may be wrong:`);
         for (const w of mismatchWarnings) console.warn(`  ${w.message}`);
       }
 
