@@ -4,6 +4,7 @@ import {
   matchOcrResultsToTechPacks,
   buildUpcUpdate,
   computeBarcodeUpdates,
+  sizesMatch,
 } from "../../src/lib/barcodeOcrMerge.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
@@ -183,5 +184,131 @@ describe("computeBarcodeUpdates", () => {
     const noMatchOcr = [{ size: "ZZZ-NONESUCH", barcode: "1" }];
     const updates = computeBarcodeUpdates(noMatchOcr, techPacksBob);
     expect(updates).toEqual([]);
+  });
+});
+
+// ── Real-world fuzzy size matching (BOB FT2 Cool-S Frio regression) ──────
+// Production data showed 7 / 12 SKUs failed to match because the OCR-printed
+// size labels differed from the SKU's stored size string in subtle ways:
+//   - "SPLIT  CAL KING"     (double space in SKU side)
+//   - "CAL KING" / "CK"     (abbreviation in OCR side)
+//   - "KING PILLOW PROTECTOR" — OCR may print only "KING"
+// These tests pin the lenient matching rules added to barcodeOcrMerge.js.
+
+describe("sizesMatch (lenient rules for BOB OCR labels)", () => {
+  it("collapses double-space whitespace artefacts ('SPLIT  CAL KING' === 'SPLIT CAL KING')", () => {
+    expect(sizesMatch("SPLIT  CAL KING", "SPLIT CAL KING")).toBe(true);
+  });
+
+  it("normalises punctuation: 'CAL-KING' / 'CAL_KING' / 'CAL/KING' all match 'CAL KING'", () => {
+    expect(sizesMatch("CAL-KING", "CAL KING")).toBe(true);
+    expect(sizesMatch("CAL_KING", "CAL KING")).toBe(true);
+    expect(sizesMatch("CAL/KING", "CAL KING")).toBe(true);
+  });
+
+  it("matches abbreviations: 'CK' ↔ 'CAL KING'", () => {
+    expect(sizesMatch("CAL KING", "CK")).toBe(true);
+    expect(sizesMatch("CK",       "CAL KING")).toBe(true);
+  });
+
+  it("matches abbreviations: 'SHQ' ↔ 'SPLIT HEAD QUEEN'", () => {
+    expect(sizesMatch("SPLIT HEAD QUEEN", "SHQ")).toBe(true);
+    expect(sizesMatch("SHQ", "SPLIT HEAD QUEEN")).toBe(true);
+  });
+
+  it("matches abbreviations: 'SHK' ↔ 'SPLIT HEAD KING'", () => {
+    expect(sizesMatch("SPLIT HEAD KING", "SHK")).toBe(true);
+  });
+
+  it("matches abbreviations: 'TXL' ↔ 'TWIN XL'", () => {
+    expect(sizesMatch("TWIN XL", "TXL")).toBe(true);
+  });
+
+  it("matches abbreviations: 'FXL' ↔ 'FULL XL'", () => {
+    expect(sizesMatch("FULL XL", "FXL")).toBe(true);
+  });
+
+  it("matches partial OCR labels: 'KING' against 'KING PILLOW PROTECTOR'", () => {
+    expect(sizesMatch("KING PILLOW PROTECTOR", "KING")).toBe(true);
+  });
+
+  it("matches partial OCR labels: 'QUEEN PP' against 'QUEEN PILLOW PROTECTOR'", () => {
+    expect(sizesMatch("QUEEN PILLOW PROTECTOR", "QUEEN PP")).toBe(true);
+  });
+
+  it("does NOT match unrelated sizes", () => {
+    expect(sizesMatch("KING", "QUEEN")).toBe(false);
+    expect(sizesMatch("TWIN", "FULL XL")).toBe(false);
+    expect(sizesMatch("CAL KING", "SPLIT HEAD KING")).toBe(false);
+  });
+
+  it("does NOT match a single short word like 'K' or 'Q' (avoid spurious noise hits)", () => {
+    expect(sizesMatch("K", "KING")).toBe(false);
+    expect(sizesMatch("Q", "QUEEN")).toBe(false);
+  });
+
+  it("returns false when either side is empty", () => {
+    expect(sizesMatch("", "QUEEN")).toBe(false);
+    expect(sizesMatch("QUEEN", "")).toBe(false);
+    expect(sizesMatch(null, "QUEEN")).toBe(false);
+  });
+});
+
+describe("matchOcrResultsToTechPacks — real-world FT2 Cool-S Frio cases", () => {
+  // Replicates the 12-SKU mattress protector upload where 7 rows previously
+  // missed: the failing sizes had double spaces, abbreviations, or partial
+  // OCR labels. With sizesMatch, all 12 should now pair up.
+  const frioOcr = [
+    { size: "TWIN",         barcode: "10001731001" },
+    { size: "TXL",          barcode: "10001731002" }, // OCR returned abbreviation
+    { size: "FULL",         barcode: "10001731003" },
+    { size: "QUEEN",        barcode: "10001731004" },
+    { size: "KING",         barcode: "10001731005" },
+    { size: "CK",           barcode: "10001731006" }, // CAL KING
+    { size: "FXL",          barcode: "10001731007" }, // FULL XL
+    { size: "SHQ",          barcode: "10001731008" }, // SPLIT HEAD QUEEN
+    { size: "SHK",          barcode: "10001731009" }, // SPLIT HEAD KING
+    { size: "SCK",          barcode: "10001731010" }, // SPLIT CAL KING
+    { size: "KING",         barcode: "10001731011" }, // OCR for KING PILLOW PROTECTOR
+    { size: "QUEEN PP",     barcode: "10001731012" }, // QUEEN PILLOW PROTECTOR
+  ];
+  const frioTechPacks = [
+    { id: "tp-1",  article_code: "GPFRIOMP33", extracted_data: { this_sku: { size: "TWIN" } } },
+    { id: "tp-2",  article_code: "GPFRIOMP38", extracted_data: { this_sku: { size: "TWIN XL" } } },
+    { id: "tp-3",  article_code: "GPFRIOMP46", extracted_data: { this_sku: { size: "FULL" } } },
+    { id: "tp-4",  article_code: "GPFRIOMP50", extracted_data: { this_sku: { size: "QUEEN" } } },
+    { id: "tp-5",  article_code: "GPFRIOMP78", extracted_data: { this_sku: { size: "KING" } } },
+    { id: "tp-6",  article_code: "GPFRIOMP72", extracted_data: { this_sku: { size: "CAL KING" } } },
+    { id: "tp-7",  article_code: "GPFRIOMP80", extracted_data: { this_sku: { size: "FULL XL" } } },
+    { id: "tp-8",  article_code: "GPFRIOMP52", extracted_data: { this_sku: { size: "SPLIT HEAD QUEEN" } } },
+    { id: "tp-9",  article_code: "GPFRIOMP79", extracted_data: { this_sku: { size: "SPLIT HEAD KING" } } },
+    { id: "tp-10", article_code: "GPFRIOMP36", extracted_data: { this_sku: { size: "SPLIT  CAL KING" } } }, // double space
+    { id: "tp-11", article_code: "GPFRIOPPK",  extracted_data: { this_sku: { size: "KING PILLOW PROTECTOR" } } },
+    { id: "tp-12", article_code: "GPFRIOPPQ",  extracted_data: { this_sku: { size: "QUEEN PILLOW PROTECTOR" } } },
+  ];
+
+  it("matches all 12 SKUs with the lenient rules", () => {
+    const pairs = matchOcrResultsToTechPacks(frioOcr, frioTechPacks);
+    // First 11 unambiguous pairs. The "QUEEN" entry (idx 3) and "KING" entry (idx 4)
+    // are both valid for KING-only PP because of greedy first-match; that's fine —
+    // the important assertion is no SKU is left without a match.
+    const matchedIds = pairs.map((p) => p.tp.id);
+    expect(matchedIds).toContain("tp-1");
+    expect(matchedIds).toContain("tp-2");
+    expect(matchedIds).toContain("tp-3");
+    expect(matchedIds).toContain("tp-4");
+    expect(matchedIds).toContain("tp-5");
+    expect(matchedIds).toContain("tp-6");
+    expect(matchedIds).toContain("tp-7");
+    expect(matchedIds).toContain("tp-8");
+    expect(matchedIds).toContain("tp-9");
+    expect(matchedIds).toContain("tp-10");
+    expect(matchedIds).toContain("tp-12");
+    // tp-11 (KING PILLOW PROTECTOR) only matches if the OCR's literal "KING"
+    // entry resolves to it — current greedy finder picks the first OCR row
+    // whose size matches, which is "KING" → grabs tp-5 first. tp-11 still
+    // pairs because there's a second "KING" OCR row at idx 10.
+    expect(matchedIds).toContain("tp-11");
+    expect(pairs.length).toBe(12);
   });
 });
