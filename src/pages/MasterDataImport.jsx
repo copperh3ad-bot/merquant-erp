@@ -7,7 +7,7 @@ import { Database, Upload, Download, FileSpreadsheet, Loader2, CheckCircle2, Ale
 import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
-import { classifyComponent, detectAnySkuMismatch } from "@/lib/componentClassifier";
+import { classifyComponent, detectAnySkuMismatch, classifyWithAiFallback } from "@/lib/componentClassifier";
 import { normalizeRowKeys } from "@/lib/headerNormalizer";
 import ValidationReport from "@/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
@@ -502,6 +502,45 @@ export default function MasterData() {
             console.info(`[MasterDataImport] ${sheetName}: dropped ${before - valid.length} duplicate row(s)`);
           }
         }
+
+        // ── AI fallback for ambiguous component classifications ──
+        // The Accessory sheet's postProcess runs the keyword classifier and
+        // overrides component_type when confidence >= 0.85. For rows the
+        // keyword classifier can't classify confidently (low confidence or
+        // null), batch-call the classify-components Claude edge function.
+        // Handles product families the keyword rules don't know about.
+        // Failure is silent — keyword result stays. Only fires on the
+        // Accessory sheet where component_type drives downstream tabs.
+        if (sheetName === "3. SKU Accessory Consumption" && valid.length > 0) {
+          try {
+            const aiInputs = valid.map(v => ({
+              raw_category: v.payload.component_type,
+              material:     v.payload.material,
+              size_spec:    v.payload.size_spec,
+              placement:    v.payload.placement,
+            }));
+            const aiResults = await classifyWithAiFallback(aiInputs, {
+              invokeFn: supabase.functions.invoke,
+            });
+            let aiOverrides = 0;
+            for (let i = 0; i < valid.length; i++) {
+              const r = aiResults[i];
+              if (
+                r && typeof r.reason === "string" && r.reason.startsWith("ai:") &&
+                r.component_type && r.component_type !== valid[i].payload.component_type
+              ) {
+                valid[i].payload.component_type = r.component_type;
+                aiOverrides += 1;
+              }
+            }
+            if (aiOverrides > 0) {
+              console.info(`[MasterDataImport] AI fallback re-classified ${aiOverrides} ambiguous accessory row(s) via classify-components`);
+            }
+          } catch (aiErr) {
+            console.warn("[MasterDataImport AI fallback] failed (non-blocking):", aiErr?.message || aiErr);
+          }
+        }
+
         report[sheetName] = { valid, invalid };
       }
 

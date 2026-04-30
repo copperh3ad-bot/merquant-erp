@@ -7,6 +7,7 @@ import {
   detectPolybagSkuMismatch,
   detectStiffenerSkuMismatch,
   detectAnySkuMismatch,
+  classifyWithAiFallback,
 } from "../../src/lib/componentClassifier.js";
 
 // ── Real-world fixtures from the live consumption_library data ────────────
@@ -229,11 +230,39 @@ describe("detectProductTypeFromCode", () => {
     expect(detectProductTypeFromCode("GPTE78")).toBe("Total Encasement");
   });
 
-  it("returns null for unrecognised patterns", () => {
-    expect(detectProductTypeFromCode("SLPCSS-Q-GY")).toBeNull();
+  it("returns null for genuinely unrecognised patterns", () => {
     expect(detectProductTypeFromCode("MFRM-001")).toBeNull();
+    expect(detectProductTypeFromCode("XYZ-123")).toBeNull();
     expect(detectProductTypeFromCode("")).toBeNull();
     expect(detectProductTypeFromCode(null)).toBeNull();
+  });
+
+  // ── Apr 2026 expansion: broader bedding categories ──
+  it("identifies Sheet Set codes (SLPCSS, JFCSS, etc.)", () => {
+    expect(detectProductTypeFromCode("SLPCSS-Q-GY")).toBe("Sheet Set");
+    expect(detectProductTypeFromCode("JFCSS-K-IV")).toBe("Sheet Set");
+    expect(detectProductTypeFromCode("BRAND-SHEET-K")).toBe("Sheet Set");
+  });
+
+  it("identifies Pillow Case codes", () => {
+    expect(detectProductTypeFromCode("ABCPC2")).toBe("Pillow Case");
+    expect(detectProductTypeFromCode("PILLOWCASE-K-WHT")).toBe("Pillow Case");
+  });
+
+  it("identifies Comforter codes", () => {
+    expect(detectProductTypeFromCode("COMF-Q-GY")).toBe("Comforter");
+    expect(detectProductTypeFromCode("BRAND-COMFORTER")).toBe("Comforter");
+  });
+
+  it("identifies Duvet Cover codes", () => {
+    expect(detectProductTypeFromCode("DUVET-K")).toBe("Duvet Cover");
+    expect(detectProductTypeFromCode("ABCDC1")).toBe("Duvet Cover");
+  });
+
+  it("identifies Mattress Topper / Bed Skirt / Throw codes", () => {
+    expect(detectProductTypeFromCode("ABCTOPPER-Q")).toBe("Mattress Topper");
+    expect(detectProductTypeFromCode("BSKT-Q")).toBe("Bed Skirt");
+    expect(detectProductTypeFromCode("THROW-WHT")).toBe("Throw");
   });
 
   it("is case-insensitive", () => {
@@ -389,5 +418,82 @@ describe("detectAnySkuMismatch — dispatcher across all component types", () =>
       material: "anything goes",
     });
     expect(r).toBeNull();
+  });
+});
+
+// ── AI fallback wrapper ─────────────────────────────────────────────────
+
+describe("classifyWithAiFallback", () => {
+  it("returns keyword results without calling AI when every row is high-confidence", async () => {
+    let aiCalls = 0;
+    const fakeInvoke = async () => { aiCalls++; return { data: { ok: true, classifications: [] }, error: null }; };
+    const items = [
+      { raw_category: "Polybag",   material: "12S Transparent PVC Bag with Nylon Coil Zipper" },
+      { raw_category: "Stiffener", material: "White cardboard U-shape stiffener" },
+      { raw_category: "Sticker",   material: "Barcode UPC sticker 76mm x 23mm" },
+    ];
+    const out = await classifyWithAiFallback(items, { invokeFn: fakeInvoke });
+    expect(out).toHaveLength(3);
+    expect(aiCalls).toBe(0);                    // every row was high-conf — no AI call
+    expect(out[0].component_type).toBe("Polybag");
+    expect(out[1].component_type).toBe("Stiffener");
+    expect(out[2].component_type).toBe("Sticker");
+  });
+
+  it("calls AI for low-confidence items only", async () => {
+    let calledWith = null;
+    const fakeInvoke = async (_name, args) => {
+      calledWith = args;
+      return {
+        data: {
+          ok: true,
+          classifications: [
+            { id: "1", component_type: "Trim", confidence: 0.92, reason: "claude-vision" },
+          ],
+        },
+        error: null,
+      };
+    };
+    const items = [
+      { raw_category: "Polybag", material: "PE 60 micron transparent polybag" },     // confident
+      { raw_category: "Unknown", material: "Mystery item with no keywords matching" }, // ambiguous → AI
+    ];
+    const out = await classifyWithAiFallback(items, { invokeFn: fakeInvoke });
+    expect(calledWith).not.toBeNull();
+    expect(calledWith.body.items).toHaveLength(1);  // only the ambiguous one
+    expect(calledWith.body.items[0].id).toBe("1");
+    // Item 0 keeps keyword result; item 1 gets AI result
+    expect(out[0].component_type).toBe("Polybag");
+    expect(out[1].component_type).toBe("Trim");
+    expect(out[1].reason).toMatch(/^ai:/);
+  });
+
+  it("falls back to keyword result when AI invocation throws or returns error", async () => {
+    const fakeInvoke = async () => { throw new Error("network down"); };
+    const items = [{ raw_category: "Unknown", material: "ambiguous" }];
+    const out = await classifyWithAiFallback(items, { invokeFn: fakeInvoke });
+    expect(out).toHaveLength(1);
+    expect(out[0].component_type).toBeNull();   // keyword classifier couldn't classify, AI failed
+    expect(out[0].reason).toBe("no_rule_matched");
+  });
+
+  it("works without an invokeFn (skips AI entirely)", async () => {
+    const items = [
+      { raw_category: "Polybag", material: "PE bag" },
+      { raw_category: "Mystery", material: "unclassifiable" },
+    ];
+    const out = await classifyWithAiFallback(items, {});
+    expect(out).toHaveLength(2);
+    expect(out[0].component_type).toBe("Polybag");
+    // Item 1 stays at keyword fallback since no AI is configured
+  });
+
+  it("respects confidenceFloor option", async () => {
+    let aiCalls = 0;
+    const fakeInvoke = async () => { aiCalls++; return { data: { ok: true, classifications: [] }, error: null }; };
+    // Sticker rule returns confidence 0.92. With confidenceFloor=0.95, AI should fire.
+    const items = [{ raw_category: "Sticker", material: "Barcode sticker" }];
+    await classifyWithAiFallback(items, { invokeFn: fakeInvoke, confidenceFloor: 0.95 });
+    expect(aiCalls).toBe(1);
   });
 });
