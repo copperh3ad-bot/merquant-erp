@@ -401,19 +401,24 @@ export default function PurchaseOrders() {
         try {
           const articleCodes = dedupedArticles.map(a => a.article_code).filter(Boolean);
           if (articleCodes.length > 0) {
-            const { data: tps } = await supabase
+            // Fetch ALL tech_packs and match case-insensitively in JS.
+            // .in() is case-sensitive, and we may have stored article_codes
+            // with mixed case ("GPFRIOPPk" tech pack vs "GPFRIOPPK" article).
+            const upperCodes = new Set(articleCodes.map(c => String(c).trim().toUpperCase()));
+            const { data: allTps } = await supabase
               .from("tech_packs")
-              .select("article_code, extracted_measurements")
-              .in("article_code", articleCodes);
-            if (Array.isArray(tps) && tps.length > 0) {
-              // Pick the most recent tech pack per article_code (the array
-              // already ordered newest-first by default, but we don't rely
-              // on that — first-seen-wins is fine for backfill).
+              .select("article_code, extracted_measurements");
+            const tps = (allTps || []).filter(t =>
+              t.article_code && upperCodes.has(String(t.article_code).trim().toUpperCase())
+            );
+            if (tps.length > 0) {
+              // Pick first-seen tech pack per upper-cased article_code.
               const byCode = new Map();
               for (const tp of tps) {
-                if (!byCode.has(tp.article_code)) byCode.set(tp.article_code, tp);
+                const k = String(tp.article_code).trim().toUpperCase();
+                if (!byCode.has(k)) byCode.set(k, tp);
               }
-              for (const [code, tp] of byCode) {
+              for (const [, tp] of byCode) {
                 const sku = tp.extracted_measurements?.this_sku;
                 if (!sku) continue;
 
@@ -423,10 +428,11 @@ export default function PurchaseOrders() {
                 // sheet-set resolution (Flat Sheet vs Fitted Sheet vs
                 // Pillow Case). The other 5 columns are independent
                 // (Packaging Planning's article-fallback target).
+                // ilike() so mixed-case article_codes still match.
                 const { data: art } = await supabase
                   .from("articles")
                   .select("id, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
-                  .eq("article_code", code)
+                  .ilike("article_code", tp.article_code)
                   .maybeSingle();
                 if (!art) continue;
 

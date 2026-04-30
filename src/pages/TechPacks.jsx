@@ -1001,10 +1001,14 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                 // populate articles.product_dimensions with the whole-SKU
                 // value here, Layer 1 wins and clobbers the per-component
                 // resolution (Flat Sheet vs Fitted Sheet vs Pillow Case).
+                // ilike() instead of eq() so case-mismatched article_codes
+                // ("GPFRIOPPk" tech pack vs "GPFRIOPPK" article) still match.
+                // Without this, articles whose source XLSX used mixed case in
+                // the SKU column don't get their dimensions backfilled.
                 const { data: existingArt } = await supabase
                   .from("articles")
                   .select("id, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
-                  .eq("article_code", tp.article_code)
+                  .ilike("article_code", tp.article_code)
                   .maybeSingle();
                 if (!existingArt) continue;
 
