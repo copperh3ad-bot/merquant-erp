@@ -124,6 +124,46 @@ const FIXTURES = [
     expected: "Trim",
   },
 
+  // Process / construction / spec rows → Other (hidden from all tabs)
+  {
+    name: "stitching density spec",
+    item: { raw_category: "Stitching Density", material: "9-10 stitch per inch" },
+    expected: "Other",
+  },
+  {
+    name: "needle type spec",
+    item: { raw_category: "Needle", material: "Ball Point Needle" },
+    expected: "Other",
+  },
+  {
+    name: "sewing construction note",
+    item: { raw_category: "Sewing Construction", material: "1cm H – Bound Seam inside all seam" },
+    expected: "Other",
+  },
+  {
+    name: "overlocking stitch note",
+    item: { raw_category: "Overlocking Stitch", material: "All seam before bound seam" },
+    expected: "Other",
+  },
+  {
+    name: "bound seam fabric (not an accessory)",
+    item: { raw_category: "Bound Seam Material", material: "70gsm 100% Polyester microfiber woven fabric" },
+    expected: "Other",
+  },
+  {
+    name: "cut and sew construction summary",
+    item: { raw_category: "Trim", material: "This is a cut and sew construction - platfoam + piping + skirt with overlock stitching" },
+    expected: "Other",
+  },
+  {
+    name: "packaging-assembly summary mentioning 3+ components",
+    item: {
+      raw_category: "Insert Card",
+      material: "Color paper insert with vinyl PVC Bag with white bound seam & inside cardboard wrapped by product (Stiffener)",
+    },
+    expected: "Other",
+  },
+
   // Trim
   {
     name: "elastic binding",

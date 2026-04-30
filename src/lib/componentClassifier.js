@@ -35,6 +35,38 @@ export const CANONICAL_TYPES = [
 // Ordering matters: more specific rules first (Accessory Bag before Polybag,
 // Hang Tag before Label). Each rule returns a confidence 0–1.
 const RULES = [
+  // ── Other (process / construction / packaging-summary descriptions
+  //    that aren't actual purchasable items). Must come FIRST so these
+  //    short-circuit before any specific component rule fires on
+  //    incidental keyword matches.
+  //
+  //    Catches:
+  //      - Sewing process specs ("9-10 stitch per inch", "Ball Point Needle")
+  //      - Construction instructions ("Sewing Construction", "Bound Seam")
+  //      - Stitch types ("Overlocking Stitch")
+  //      - Bound-seam fabric specs (fabric usage, not a discrete trim)
+  //      - Packaging-assembly summaries (rows that list 3+ components
+  //        together — e.g. "Color paper insert with vinyl PVC Bag with
+  //        bound seam & inside cardboard wrapped by product (Stiffener)")
+  //
+  //    These rows are stored but never appear on any Packaging Planning
+  //    tab (the tabs match against canonical types — "Other" isn't one).
+  {
+    type: "Other",
+    confidence: 0.95,
+    test: (h) => {
+      // Process / construction / spec rows
+      if (/\b(stitching density|stitches per inch|sewing construction|sewing details|ball point needle|overlocking stitch|overlock stitch|fabric construction|cut and sew construction|bound seam material)\b/.test(h)) return true;
+      // "9-10 stitch per inch" or "9 stitches per inch" patterns
+      if (/\b\d+\s*[-–]?\s*\d*\s*stitch(?:es)?\s+per\s+inch\b/.test(h)) return true;
+      // Packaging-assembly summary rows that list 3+ components together
+      const componentMentions = ["pvc bag", "stiffener", "insert", "polybag", "bound seam"]
+        .filter((kw) => h.includes(kw));
+      if (componentMentions.length >= 3) return true;
+      return false;
+    },
+  },
+
   // ── Accessory Bag (must come BEFORE Polybag — same word "polybag" appears)
   {
     type: "Accessory Bag",
