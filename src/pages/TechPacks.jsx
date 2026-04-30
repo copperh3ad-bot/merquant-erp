@@ -836,9 +836,38 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
               }
             }
 
+            // ── Duplicate-upload guard ──
+            // If this exact (file_name, article_code) combination already exists,
+            // we'd be creating duplicate tech_packs rows that fragment downstream
+            // resolver lookups (a real issue we cleaned up in 2026-04-30 — 23
+            // duplicate rows from re-uploaded files). Skip SKUs already in DB
+            // for this file unless the user explicitly chose to re-upload.
+            const existingPairs = new Set();
+            try {
+              const { data: existingTps } = await supabase
+                .from("tech_packs")
+                .select("article_code")
+                .eq("file_name", file.name);
+              for (const t of (existingTps || [])) {
+                if (t.article_code) existingPairs.add(String(t.article_code).toUpperCase());
+              }
+              if (existingPairs.size > 0) {
+                console.info(`[TechPacks] file '${file.name}' already has ${existingPairs.size} tech_pack rows — skipping duplicate SKU creates. To re-extract barcodes for these rows, use the ⟳ Barcodes button on the existing rows.`);
+              }
+            } catch (dupErr) {
+              console.warn("[TechPacks duplicate-guard] check failed (non-blocking):", dupErr?.message || dupErr);
+            }
+
             // Create one tech_packs row per SKU
             const createdTps = [];
+            const skippedDuplicates = [];
             for (const sku of bob.skus) {
+              // Skip SKUs whose (file_name, article_code) row already exists.
+              const skuCodeUpper = String(sku.item_code || "").toUpperCase();
+              if (skuCodeUpper && existingPairs.has(skuCodeUpper)) {
+                skippedDuplicates.push(sku.item_code);
+                continue;
+              }
               // Classify this SKU (pillow protector vs mattress protector vs encasement etc.)
               const productType = classifyArticle({
                 article_code: sku.item_code,
@@ -996,6 +1025,10 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                 notes: notes || `Auto-extracted from BOB tech pack (${bob.header.product_no}). ${productType.label}. ${skuFabricSpecs.length} fabric component(s) apply to this SKU.`,
               });
               createdTps.push(tp);
+            }
+
+            if (skippedDuplicates.length > 0) {
+              console.info(`[TechPacks] skipped ${skippedDuplicates.length} duplicate SKU(s) already on file '${file.name}': ${skippedDuplicates.join(", ")}`);
             }
 
             // ── Article dimension sync ──

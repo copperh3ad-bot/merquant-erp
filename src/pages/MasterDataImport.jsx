@@ -157,7 +157,9 @@ const SHEETS = {
     required: ["item_code","component_type"],
     columns: ["tech_pack_code","item_code","size","product_size","component_type","direction","fabric_type","construction","yarn_count","composition","gsm","finish","color","width_cm","consumption_per_unit","wastage_percent","total_required","supplier","remarks"],
     transform: (r) => ({
-      item_code: toStr(r.item_code), size: toStr(r.size),
+      // Uppercase item_code defense-in-depth (DB trigger trg_normalize_consumption_item_code also enforces)
+      item_code: toStr(r.item_code) ? toStr(r.item_code).toUpperCase() : null,
+      size: toStr(r.size),
       kind: "fabric", component_type: toStr(r.component_type),
       fabric_type: toStr(r.fabric_type), gsm: toNum(r.gsm),
       construction: toStr(r.construction),
@@ -188,13 +190,19 @@ const SHEETS = {
       const parts = [itemName, rawMaterial, sizeSpec, placement].filter(Boolean);
       const unique = parts.filter((p, i) => p !== parts[i - 1]);
       const material = unique.join(" — ");
+      // Normalize size_spec at write time so "4.0cmX7.0cm" and "4cmX7cm"
+      // converge to the same canonical "4.00X7.00CM" form. Prevents the
+      // semantic-duplicate rows we cleaned up in 2026-04-30.
+      const normalizedSizeSpec = sizeSpec ? normalizeDim2D(sizeSpec) : "";
       return {
-        item_code: toStr(r.item_code), size: toStr(r.size),
+        // Uppercase item_code defense-in-depth (DB trigger also enforces).
+        item_code: toStr(r.item_code) ? toStr(r.item_code).toUpperCase() : null,
+        size: toStr(r.size),
         kind: "accessory",
         component_type: toStr(r.category) || itemName,
         color: "",
         material,
-        size_spec: sizeSpec,
+        size_spec: normalizedSizeSpec,
         placement,
         consumption_per_unit: toNum(r.consumption_per_unit),
         wastage_percent: toNum(r.wastage_percent) || 0,
