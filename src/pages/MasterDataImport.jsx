@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { classifyComponent } from "@/lib/componentClassifier";
+import { normalizeRowKeys } from "@/lib/headerNormalizer";
 import ValidationReport from "@/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
 import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
@@ -354,7 +355,14 @@ const SHEET_ORDER = Object.keys(SHEETS);
 function readSheet(XLSX, wb, sheetName) {
   const ws = wb.Sheets[sheetName];
   if (!ws) return [];
-  const rows = XLSX.utils.sheet_to_json(ws, { defval: "", raw: false });
+  const rawRows = XLSX.utils.sheet_to_json(ws, { defval: "", raw: false });
+  // Normalize headers so v4-template files ("Article Code", "Pieces/Carton",
+  // "Wastage %") resolve to the canonical snake_case keys that the per-sheet
+  // transform functions read (r.item_code, r.units_per_carton,
+  // r.wastage_percent). Per-sheet alias overrides handle ambiguous cases
+  // like "Pieces/Carton" → units_per_carton on Carton/Articles vs
+  // pieces_per_carton on Price List.
+  const rows = rawRows.map(r => normalizeRowKeys(r, sheetName));
   return rows.filter(r => Object.values(r).some(v => String(v).trim() !== ""));
 }
 
