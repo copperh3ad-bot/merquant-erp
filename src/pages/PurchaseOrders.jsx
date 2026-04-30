@@ -417,9 +417,15 @@ export default function PurchaseOrders() {
                 const sku = tp.extracted_measurements?.this_sku;
                 if (!sku) continue;
 
+                // IMPORTANT: skip articles.product_dimensions — it's
+                // FabricWorking's manual-override slot. Writing the
+                // whole-SKU dim here would override its per-component
+                // sheet-set resolution (Flat Sheet vs Fitted Sheet vs
+                // Pillow Case). The other 5 columns are independent
+                // (Packaging Planning's article-fallback target).
                 const { data: art } = await supabase
                   .from("articles")
-                  .select("id, product_dimensions, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
+                  .select("id, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
                   .eq("article_code", code)
                   .maybeSingle();
                 if (!art) continue;
@@ -428,7 +434,6 @@ export default function PurchaseOrders() {
                   (cur == null || String(cur).trim() === "") && nv ? nv : null;
 
                 const patch = {
-                  product_dimensions: fillIfBlank(art.product_dimensions, sku.product_dimensions),
                   pvc_bag_dimensions: fillIfBlank(art.pvc_bag_dimensions, sku.pvc_bag_dimensions),
                   stiffener_size:     fillIfBlank(art.stiffener_size,     sku.stiffener_size),
                   insert_dimensions:  fillIfBlank(art.insert_dimensions,  sku.insert_dimensions),

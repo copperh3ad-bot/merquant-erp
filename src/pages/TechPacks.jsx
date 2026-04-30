@@ -992,9 +992,18 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                 // by a prior PO upload). If no article exists, skip — the
                 // article will be created by future PO upload, at which
                 // point this sync wouldn't run anyway.
+                //
+                // IMPORTANT: do NOT write articles.product_dimensions here.
+                // That field is FabricWorking's manual-override slot (Layer 1
+                // of its 3-tier resolver). FabricWorking already reads
+                // tech_packs.extracted_measurements.size_chart for per-part
+                // sheet-set dimensions (byItemPart / byCodeSizePart). If we
+                // populate articles.product_dimensions with the whole-SKU
+                // value here, Layer 1 wins and clobbers the per-component
+                // resolution (Flat Sheet vs Fitted Sheet vs Pillow Case).
                 const { data: existingArt } = await supabase
                   .from("articles")
-                  .select("id, product_dimensions, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
+                  .select("id, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
                   .eq("article_code", tp.article_code)
                   .maybeSingle();
                 if (!existingArt) continue;
@@ -1004,7 +1013,6 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
 
                 // sku.zipper_length → articles.zipper_length_cm (column rename).
                 const patch = {
-                  product_dimensions: onlyIfBlank(existingArt.product_dimensions, sku.product_dimensions),
                   pvc_bag_dimensions: onlyIfBlank(existingArt.pvc_bag_dimensions, sku.pvc_bag_dimensions),
                   stiffener_size:     onlyIfBlank(existingArt.stiffener_size,     sku.stiffener_size),
                   insert_dimensions:  onlyIfBlank(existingArt.insert_dimensions,  sku.insert_dimensions),
