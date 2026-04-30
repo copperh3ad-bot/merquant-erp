@@ -66,35 +66,97 @@ function matchesCategory(elemCat, tab) {
   return false;
 }
 
-// Map a free-form label_type/section value to one of cfg.typeOptions so the
+// Synonym map for the Label tab's typeOption dropdown. Each key is one of
+// the cfg.typeOptions values; the value is a list of keywords that, when
+// found in the element's section / label_type / type / description /
+// material text, count as a match. Lets pickLabelType classify a label
+// from its description even when section/label_type are generic ("Hem",
+// "Inside seam") and the type intent only appears in the description.
+const LABEL_TYPE_SYNONYMS = {
+  "Brand Label":               ["brand", "logo", "main label"],
+  "Care Label":                ["care", "wash", "laundry", "care instruction", "law tag", "wash care"],
+  "Size Label":                ["size", "size tag"],
+  "Direction Label":           ["direction", "head end", "foot end", "this side up", "top-bottom"],
+  "Hang Tag":                  ["hang tag", "hangtag", "swing tag", "ticket"],
+  "Country of Origin Label":   ["country of origin", "made in", "origin label"],
+  "Composition Label":         ["composition", "fiber content", "fibre content", "material content", "% cotton", "% polyester"],
+  "Wash Label":                ["wash label", "washing", "wash instruction"],
+  "Price Ticket":              ["price ticket", "price tag", "msrp", "retail price"],
+  "Compliance Label":          ["compliance", "ce mark", "iso 9001"],
+  "Retailer Label":            ["retailer", "store label", "private label"],
+  "Eco Label":                 ["eco-friendly", "oeko-tex", "oeko tex", "fsc", "fair trade"],
+  "GOTS Label":                ["gots"],
+  "Barcode Label":             ["barcode", "upc", "ean"],
+  "Custom Label":              ["custom"],
+  "Care label in 3 Languages 1X3": ["3 language", "tri-lingual", "trilingual", "1x3"],
+};
+
+// Map a free-form label specification to one of cfg.typeOptions so the
 // row's "Type" dropdown defaults to the right entry instead of always
 // showing the first option (typically "Brand Label").
+//
+// Two layers of matching, in priority order:
+//   1. Direct: typeOption literal appearance in section/label_type/type/
+//      description/material — e.g. description "Brand label, woven" gets
+//      "Brand Label" because the typeOption literal is a substring.
+//   2. Synonym: LABEL_TYPE_SYNONYMS keyword appearance in any of the
+//      same fields — e.g. description "Wash care, machine wash cold"
+//      maps to "Care Label" via the "wash" / "care" synonyms.
+//
+// Direct matches always beat synonym matches (more specific). Among
+// matches of the same tier, the longest matched string wins.
 function pickLabelType(elem, cfg) {
-  const candidates = [elem?.section, elem?.label_type, elem?.type]
-    .filter(Boolean)
-    .map((s) => String(s).toLowerCase());
-  if (candidates.length === 0 || !Array.isArray(cfg?.typeOptions)) return null;
+  if (!Array.isArray(cfg?.typeOptions) || cfg.typeOptions.length === 0) return null;
 
-  // Try each typeOption against each candidate. "Care label" / "Care Label"
-  // matches "Law tag/Care label". Take the longest match for specificity.
-  let best = null;
-  let bestLen = 0;
+  // Combine all label-bearing free-text fields into one searchable haystack.
+  // Description and material are the new additions — they often carry the
+  // intent ("3M non woven material...care label") even when section/
+  // label_type are generic.
+  const haystack = [
+    elem?.section,
+    elem?.label_type,
+    elem?.type,
+    elem?.description,
+    elem?.material,
+  ]
+    .filter(Boolean)
+    .map((s) => String(s).toLowerCase())
+    .join(" | ");
+  if (!haystack) return null;
+
+  // Tier 1: direct typeOption literal match (longest wins).
+  let bestDirect = null;
+  let bestDirectLen = 0;
   for (const opt of cfg.typeOptions) {
     const oLower = opt.toLowerCase();
-    for (const c of candidates) {
-      if (c.includes(oLower) || oLower.includes(c)) {
-        if (oLower.length > bestLen) {
-          best = opt;
-          bestLen = oLower.length;
-        }
+    if (haystack.includes(oLower) && oLower.length > bestDirectLen) {
+      bestDirect = opt;
+      bestDirectLen = oLower.length;
+    }
+  }
+  if (bestDirect) return bestDirect;
+
+  // Tier 2: synonym keyword match (longest synonym wins).
+  let bestSyn = null;
+  let bestSynLen = 0;
+  for (const opt of cfg.typeOptions) {
+    const synonyms = LABEL_TYPE_SYNONYMS[opt];
+    if (!Array.isArray(synonyms)) continue;
+    for (const syn of synonyms) {
+      const sLower = syn.toLowerCase();
+      if (haystack.includes(sLower) && sLower.length > bestSynLen) {
+        bestSyn = opt;
+        bestSynLen = sLower.length;
       }
     }
   }
-  // Fallback: if cfg has "Custom Label" / "Custom" option, use it
-  if (!best && cfg.typeOptions.some((o) => /custom/i.test(o))) {
-    best = cfg.typeOptions.find((o) => /custom/i.test(o));
+  if (bestSyn) return bestSyn;
+
+  // Final fallback: a "Custom" option if cfg has one.
+  if (cfg.typeOptions.some((o) => /custom/i.test(o))) {
+    return cfg.typeOptions.find((o) => /custom/i.test(o));
   }
-  return best;
+  return null;
 }
 
 // Smart-default for the Item Type dropdown on non-Label tabs. Scans the
