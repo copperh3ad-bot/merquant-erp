@@ -93,28 +93,42 @@ function techPackElementToSeedRow(elem, cfg) {
     existing_id: null,
   };
 
+  // Coalesce across the BOB-format and AI-format field names so we get a
+  // populated description regardless of which extraction path produced
+  // the JSONB element.
+  const descText =
+    elem.description ||
+    elem.material ||
+    elem.section ||
+    "";
+  const sizeText =
+    elem.size_spec ||
+    elem.dimensions ||
+    elem.size ||
+    "";
+
   if (cfg.splitDescSize) {
-    return {
-      ...base,
-      quality: "",
-      description: elem.description || "",
-      size: elem.size_spec || "",
-    };
+    return { ...base, quality: "", description: descText, size: sizeText };
   }
 
-  return {
-    ...base,
-    quality: elem.description || "",
-    description: "",
-    size: elem.size_spec || "",
-  };
+  return { ...base, quality: descText, description: "", size: sizeText };
 }
 
 /**
  * Returns true when a tech-pack JSONB element has no usable description.
+ * Checks several plausible field names because the BOB path and AI path use
+ * slightly different naming conventions for the human-readable description.
  */
 function isTechPackElementEmpty(elem) {
-  return elem.description == null || elem.description.trim() === "";
+  if (!elem) return true;
+  const candidates = [
+    elem.description,
+    elem.material,
+    elem.dimensions,
+    elem.size_spec,
+    elem.section,
+  ];
+  return !candidates.some((v) => v != null && String(v).trim() !== "");
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
@@ -223,24 +237,43 @@ export function resolveDescription({
     : [];
   const labelElems = Array.isArray(techPackLabelSpecs) ? techPackLabelSpecs : [];
 
-  // Determine candidate elements for this category.
-  // Matching logic by element field:
-  //   extracted_accessory_specs  → elem.accessory_type === tabCategory
-  //   extracted_trim_specs       → elem.trim_type === tabCategory
-  //   extracted_label_specs      → elem.label_type === tabCategory (or any label if empty)
+  // Determine candidate elements for this category. Matching is fuzzy
+  // (case-insensitive substring + alias) because the JSONB columns can be
+  // populated from two different paths with different field-naming conventions:
   //
-  // For Packaging (Path A): techPack is null so we never reach here.
-  // For future Trims session: caller passes techPack with extracted_trim_specs.
-  // For future Accessory session: caller passes techPack with extracted_accessory_specs.
+  //   BOB-extracted (TechPacks.jsx legacy fast path)
+  //     trim_specs    → elem.trim_type      = exact tab category ("Trim", "Polybag", ...)
+  //     accessory_specs → elem.accessory_type = exact tab category
+  //     label_specs   → elem.label_type      = exact tab category
+  //
+  //   AI-extracted (extract-document edge function)
+  //     trim_specs    = AI's "packaging" array → elem.category = free-form ("Polybag printed")
+  //     accessory_specs → elem.accessory_type = free-form ("Stitching Density")
+  //     label_specs   → elem.label_type        = free-form ("Print satin woven label")
+  //
+  // Strict equality on the AI shape returned 0 candidates (the symptom
+  // "quantities are there but not the right description"). Substring + alias
+  // matching surfaces the right rows on each tab regardless of which path
+  // produced the tech pack data.
+  const matchesCategory = (elemCat, tab) => {
+    if (!elemCat) return false;
+    const e = String(elemCat).toLowerCase();
+    const t = String(tab).toLowerCase();
+    return e === t || e.includes(t) || t.includes(e);
+  };
   const accessoryCandidates = accessoryElems.filter(
-    (e) => e.accessory_type === tabCategory
+    (e) => matchesCategory(e.accessory_type, tabCategory) || matchesCategory(e.category, tabCategory)
   );
   const trimCandidates = trimElems.filter(
-    (e) => e.trim_type === tabCategory
+    (e) => matchesCategory(e.trim_type, tabCategory) || matchesCategory(e.category, tabCategory)
   );
-  const labelCandidates = labelElems.filter(
-    (e) => !e.label_type || e.label_type === tabCategory
-  );
+  // Labels: when the tab is "Label", surface every label element regardless of
+  // its specific label_type (e.g. "Print satin woven label", "Care label").
+  // For other tabs, only include if the label_type fuzzy-matches.
+  const labelCandidates = labelElems.filter((e) => {
+    if (String(tabCategory).toLowerCase() === "label") return true;
+    return matchesCategory(e.label_type, tabCategory) || matchesCategory(e.type, tabCategory);
+  });
 
   // Merge: accessory + trim candidates cover most cases; labels merged when caller
   // supplies techPackLabelSpecs.

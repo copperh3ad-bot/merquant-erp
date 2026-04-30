@@ -270,3 +270,112 @@ describe("findTechPackForArticle", () => {
     expect(result.id).toBe("tp-uuid-001");
   });
 });
+
+// ── AI-extracted shape coverage (regression guard) ────────────────────────
+// AI extraction produces JSONB elements with descriptive free-form values
+// in accessory_type / label_type, not the canonical tab category strings the
+// BOB path used. Strict equality returned 0 candidates and the seeded rows
+// came back with empty descriptions ("quantities are there but not the right
+// description"). The resolver now does case-insensitive substring matching
+// and also surfaces ALL labels on the Label tab regardless of label_type.
+
+const techPackAiShape = {
+  id: "tp-ai-001",
+  article_code: ARTICLE_CODE,
+  po_id: PO_ID,
+  extracted_accessory_specs: [
+    // AI emits descriptive accessory_type values, not exact tab names
+    { accessory_type: "Polybag printed",      description: "50 micron PE bag",   size_spec: "40x60cm" },
+    { accessory_type: "Stitching Density",    description: "11 stitches per inch" },
+    { accessory_type: "Carton Outer Sleeve",  description: "5-ply B-flute brown" },
+  ],
+  extracted_trim_specs: [
+    // AI's "packaging" array sometimes lands here with `category`, not `trim_type`
+    { category: "Polybag", description: "PE 60 micron printed" },
+  ],
+  extracted_label_specs: [
+    // AI label items use label_type for narrative, plus dimensions/section
+    { label_type: "Print satin woven label", description: "Polyester silk satin print woven folded label", dimensions: "3.8x10cm" },
+    { label_type: "Care label",              description: "100% cotton, machine wash cold",                dimensions: "2x6cm" },
+  ],
+};
+
+describe("resolveDescription — AI-extracted shape", () => {
+  it("Polybag tab: surfaces accessory whose accessory_type contains 'Polybag'", () => {
+    const result = resolveDescription({
+      articleCode: ARTICLE_CODE,
+      tabCategory: "Polybag",
+      cfg: CFG_SPLIT,
+      masterSpecs: [],
+      techPack: techPackAiShape,
+    });
+    expect(result).not.toBeNull();
+    // Should find at least the accessory_specs match AND the trim_specs match
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    const descs = result.map((r) => r.description);
+    expect(descs.some((d) => /50 micron/i.test(d) || /60 micron/i.test(d))).toBe(true);
+  });
+
+  it("Stitching/Density-only specs DON'T match unrelated tabs", () => {
+    // "Stitching Density" should not appear under Trim or Polybag
+    const result = resolveDescription({
+      articleCode: ARTICLE_CODE,
+      tabCategory: "Trim",
+      cfg: { ...CFG_QUALITY, category: "Trim" },
+      masterSpecs: [],
+      techPack: techPackAiShape,
+    });
+    if (result) {
+      const descs = result.map((r) => r.quality);
+      expect(descs.every((d) => !/stitches per inch/i.test(d))).toBe(true);
+    }
+  });
+
+  it("Label tab: surfaces all label specs regardless of label_type", () => {
+    const result = resolveDescription({
+      articleCode: ARTICLE_CODE,
+      tabCategory: "Label",
+      cfg: CFG_QUALITY,
+      masterSpecs: [],
+      techPack: techPackAiShape,
+      techPackLabelSpecs: techPackAiShape.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result.length).toBeGreaterThanOrEqual(2);
+    const qualities = result.map((r) => r.quality);
+    expect(qualities.some((q) => /silk satin/i.test(q))).toBe(true);
+    expect(qualities.some((q) => /machine wash/i.test(q))).toBe(true);
+  });
+
+  it("Carton tab: matches accessory_type 'Carton Outer Sleeve' via substring", () => {
+    const result = resolveDescription({
+      articleCode: ARTICLE_CODE,
+      tabCategory: "Carton",
+      cfg: { ...CFG_SPLIT, category: "Carton" },
+      masterSpecs: [],
+      techPack: techPackAiShape,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].description).toMatch(/5-ply/i);
+  });
+
+  it("falls back to dimensions when description is empty (BOB labels often used dimensions)", () => {
+    const tp = {
+      ...techPackAiShape,
+      extracted_label_specs: [
+        { label_type: "Custom Label", dimensions: "5x5cm woven", section: "Hem" },
+      ],
+    };
+    const result = resolveDescription({
+      articleCode: ARTICLE_CODE,
+      tabCategory: "Label",
+      cfg: CFG_QUALITY,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    // dimensions is exposed via size, section is exposed via quality
+    expect(result).not.toBeNull();
+    expect(result[0].size).toMatch(/5x5cm/);
+  });
+});
