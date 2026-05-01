@@ -393,12 +393,18 @@ Deno.serve(async (req) => {
   }
   const userId = userData.user.id;
 
-  // Dedup
+  // Dedup: a (file_hash, kind) tuple uniquely identifies a recent extraction
+  // attempt. Scoping by kind matters because the same physical file can
+  // legitimately be uploaded twice with different kinds — e.g. a customer
+  // sends one XLSX that the user first imports as a tech_pack and then
+  // re-imports as master_data. Without the kind filter, the second upload
+  // would silently surface the first extraction (wrong shape, wrong path).
   const sinceIso = new Date(Date.now() - DEDUP_WINDOW_MS).toISOString();
   const { data: dupRows, error: dupErr } = await supabase
     .from("ai_extractions")
     .select("id, created_at, review_status")
     .eq("file_hash", fileHash)
+    .eq("kind", kind)
     .gte("created_at", sinceIso)
     .not("review_status", "in", "(rejected,superseded)")
     .order("created_at", { ascending: false })
