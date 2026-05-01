@@ -11,35 +11,52 @@
 // confirmed all 357 rows of the live accessory consumption data are covered,
 // but any future unknown component_type would have leaked under the old
 // `!!c.fabric_type` fallback rule.
+//
+// 2026-05-02 — migrated off two locally-maintained Sets onto the central
+// textileVocabulary. The fabric whitelist is now expressed in CANONICAL
+// part names (e.g. "Flat Sheet"), and inputs go through the canonicaliser
+// before lookup, so variants like "Fitted Sheet (Split Head)" and aliases
+// like "top sheet" route to the same answer. The accessory blocklist is
+// fully delegated to `isInCategory("accessory", x)`.
+
+import { canonical, isInCategory } from "@/lib/textileVocabulary";
+import { canonicalPartName } from "@/lib/partNameCanonical";
 
 /**
- * Fabric component_type values that appear on the fabric working sheet.
- * Extend this list when a new fabric component enters the consumption library.
+ * The subset of canonical part names that count as FABRIC on the working
+ * sheet. Other parts in the textileVocabulary (Outer, Inner, Quilting,
+ * Pillow Compression, Window, Sham) are intentionally NOT on this list:
+ * they are either accessory-side parts or aren't in the live consumption
+ * library. Add a part here only after confirming the consumption library
+ * actually drives a fabric line item from it.
  */
-export const FABRIC_TYPES = new Set([
-  "platform", "skirt", "piping", "binding", "bottom", "bottom + skirt",
-  "sleeper flap", "evalon membrane", "flat sheet", "fitted sheet",
-  "fitted sheet (2pc split)", "fitted sheet (split head)",
-  "pillow case (1pc)", "pillow case (2pc)", "fabric bag",
-  "front", "back", "top fabric", "filling", "lamination",
+export const FABRIC_PART_NAMES = new Set([
+  "Flat Sheet",
+  "Fitted Sheet",
+  "Pillow Case",
+  "Fabric Bag",
+  "Top Fabric",
+  "Bottom",
+  "Skirt",
+  "Platform",
+  "Binding",
+  "Piping",
+  "Filling",
+  "Lamination",
+  "Evalon Membrane",
+  "Sleeper Flap",
+  "Front",
+  "Back",
 ]);
 
 /**
- * Accessory / trim / packaging component_type values. These NEVER appear on
- * the fabric working sheet regardless of whether fabric_type is populated.
- *
- * Covers all 13 distinct component_type values in the live accessory
- * consumption library (357 rows, verified against merquant-master-data-v4.xlsx
- * on 2026-04-21). The last three ("care label", "hang tag", "poly bag") are
- * not yet in the data but are common enough additions that we include them
- * defensively so a merchandiser entering one of those strings cannot leak it
- * onto the fabric printout.
+ * Compound component_type values that explicitly count as fabric. These are
+ * legacy strings from the consumption library that combine two parts in one
+ * row (e.g. an upholstery panel cut as bottom + skirt together). Kept as a
+ * separate set because the canonical vocabulary stores parts atomically.
  */
-export const ACCESSORY_TYPES = new Set([
-  "zipper", "thread", "elastic", "law tag", "size label", "label",
-  "pvc bag", "insert card", "stiffener", "stiffener size",
-  "size sticker", "barcode sticker", "barcode sticker size", "packaging",
-  "care label", "hang tag", "poly bag",
+const COMPOUND_FABRIC_TOKENS = new Set([
+  "bottom + skirt",
 ]);
 
 /** Accepted values of the explicit c.kind field. */
@@ -53,9 +70,10 @@ const KIND_NON_FABRIC = new Set(["accessory", "trim", "packaging"]);
  *   1. Explicit c.kind === "fabric"                → INCLUDE
  *   2. Explicit c.kind ∈ {accessory,trim,packaging} → EXCLUDE
  *   3. Legacy (no kind) — component_type lookup:
- *      a. In FABRIC_TYPES                          → INCLUDE
- *      b. In ACCESSORY_TYPES                       → EXCLUDE
- *      c. Unknown                                  → EXCLUDE (fail-closed)
+ *      a. Compound fabric token (e.g. "bottom + skirt") → INCLUDE
+ *      b. Canonical part name in FABRIC_PART_NAMES     → INCLUDE
+ *      c. In accessory vocabulary                       → EXCLUDE
+ *      d. Unknown                                       → EXCLUDE (fail-closed)
  *
  * The old fallback `!!c.fabric_type` is deliberately removed: an accessory
  * row with a mistakenly-populated fabric_type field used to leak through.
@@ -73,10 +91,25 @@ export function isFabricComponent(c, opts = {}) {
   if (KIND_NON_FABRIC.has(c.kind)) return false;
 
   const t = (c.component_type || "").toLowerCase().trim();
-  if (FABRIC_TYPES.has(t)) return true;
-  if (ACCESSORY_TYPES.has(t)) return false;
+  if (!t) return false;
 
-  // Unknown component_type on a legacy row. Fail closed.
+  // 3a. Compound forms first — they wouldn't match a single canonical part.
+  if (COMPOUND_FABRIC_TOKENS.has(t)) return true;
+
+  // 3b. Canonicalise (this strips "(qualifier)" suffixes and resolves
+  //     aliases like "top sheet" → "Flat Sheet"), then check the whitelist.
+  const canon = canonicalPartName(t);
+  if (canon && FABRIC_PART_NAMES.has(canon)) return true;
+
+  // 3c. Anything in the accessory vocabulary is explicitly NOT fabric.
+  if (isInCategory("accessory", t)) return false;
+
+  // Defensive: if the part canonicalises into vocab but isn't on our fabric
+  // whitelist (e.g. "Outer", "Quilting"), it's a non-fabric part — exclude
+  // without warning.
+  if (canonical("part", t)) return false;
+
+  // 3d. Unknown component_type on a legacy row. Fail closed.
   if (typeof opts.onUnknown === "function") {
     try {
       opts.onUnknown({

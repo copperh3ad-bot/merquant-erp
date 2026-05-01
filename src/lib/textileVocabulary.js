@@ -141,10 +141,12 @@ const ACCESSORY_CATEGORIES = {
   "PVC Bag":           ["pvc bag", "vinyl bag", "vinyl pvc bag"],
   "Insert Card":       ["insert card", "sewing insert label", "informational insert",
                         "marketing card"],
-  "Stiffener":         ["stiffener", "cardboard insert", "cardboard stiffener",
-                        "u cardboard", "card board"],
+  "Stiffener":         ["stiffener", "stiffener size", "cardboard insert",
+                        "cardboard stiffener", "u cardboard", "card board"],
   "Sticker":           ["sticker", "size sticker", "barcode sticker",
-                        "decorative sticker", "barcode"],
+                        "barcode sticker size", "decorative sticker", "barcode"],
+  "Label":             ["label"], // generic — promote to specific subtype if known
+
   "Zipper":            ["zipper", "zip", "zip closure", "ykk zipper"],
   "Thread":            ["thread", "sewing thread", "matched thread"],
   "Elastic":           ["elastic", "elastic band", "elastic tape"],
