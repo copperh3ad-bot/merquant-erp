@@ -234,6 +234,82 @@ function SummaryRow({ label, sample }) {
   );
 }
 
+// ── Progress bubble ─────────────────────────────────────────────────────────
+//
+// Shows live status + elapsed time + (optional) percent bar for the current
+// file. Phase strings are short ("Reading file", "Uploading", "AI parsing",
+// "Done") and the bar fills proportionally for phases where we have hard
+// percent (file→base64 conversion); for AI phases we show an indeterminate
+// pulse + elapsed counter so the user knows it's not hung.
+
+function ProgressBubble({ fileName, fileSize, phase, percent, startedAt }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (phase === "done" || phase === "error") return;
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 250);
+    return () => clearInterval(t);
+  }, [phase, startedAt]);
+
+  const phaseLabel = {
+    reading: "Reading file from disk",
+    uploading: "Uploading to AI",
+    parsing: "AI parsing (this can take 10–30s)",
+    done: "Done",
+    error: "Failed",
+  }[phase] || phase;
+
+  const isDeterminate = typeof percent === "number" && percent >= 0 && percent <= 100;
+
+  return (
+    <div className="bg-card border border-border rounded-lg px-3 py-2.5 text-xs space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {phase === "done" ? (
+            <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+          ) : phase === "error" ? (
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+          ) : (
+            <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-primary" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="font-medium truncate">{fileName}</div>
+            <div className="text-muted-foreground text-[11px]">
+              {phaseLabel}
+              {phase !== "done" && phase !== "error" && (
+                <span className="ml-1 font-mono">· {elapsed}s</span>
+              )}
+              {fileSize != null && (
+                <span className="ml-2 text-muted-foreground/70">
+                  {(fileSize / 1024).toFixed(0)} KB
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+        {isDeterminate ? (
+          <div
+            className={`h-full ${
+              phase === "done" ? "bg-emerald-500" : phase === "error" ? "bg-rose-500" : "bg-primary"
+            } transition-all duration-200`}
+            style={{ width: `${percent}%` }}
+          />
+        ) : phase === "done" ? (
+          <div className="h-full bg-emerald-500 w-full" />
+        ) : phase === "error" ? (
+          <div className="h-full bg-rose-500 w-full" />
+        ) : (
+          <div
+            className="h-full bg-primary animate-pulse"
+            style={{ width: phase === "parsing" ? "85%" : phase === "uploading" ? "60%" : "30%" }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ───────────────────────────────────────────────────────────────
 
 export default function FileFeeder() {
@@ -269,7 +345,14 @@ export default function FileFeeder() {
   }, [messages]);
 
   const append = useCallback((msg) => {
-    setMessages((m) => [...m, { id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, time: fmtTime(), ...msg }]);
+    const id = `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setMessages((m) => [...m, { id, time: fmtTime(), ...msg }]);
+    return id;
+  }, []);
+
+  // Update an existing message in place (used for live progress bubbles).
+  const updateMessage = useCallback((id, patch) => {
+    setMessages((m) => m.map((msg) => (msg.id === id ? { ...msg, ...patch } : msg)));
   }, []);
 
   // ── File handling ─────────────────────────────────────────────────────────
@@ -320,30 +403,62 @@ export default function FileFeeder() {
           continue;
         }
 
-        // Pre-extraction message so user knows we're working.
-        const isImg = looksLikeImage(file.type, file.name);
-        const isPdf = file.name.toLowerCase().endsWith(".pdf");
-        append({
+        // Live progress bubble for this file. We mutate it through phases
+        // (reading → uploading → parsing → done/error) so the user always
+        // sees something moving and an elapsed-time counter instead of a
+        // silent spinner that looks hung during the 10–30s AI call.
+        const startedAt = Date.now();
+        const progressId = append({
           type: "assistant",
           content: (
-            <div className="flex items-center gap-2 text-xs">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              <span>
-                Parsing <strong>{file.name}</strong>
-                {isImg
-                  ? " — using vision to read the image"
-                  : isPdf
-                  ? " — using vision to read the PDF (covers embedded images and scans)"
-                  : " — also reading any embedded images"}…
-              </span>
-            </div>
+            <ProgressBubble
+              fileName={file.name}
+              fileSize={file.size}
+              phase="reading"
+              percent={0}
+              startedAt={startedAt}
+            />
           ),
         });
 
+        // Track the latest phase so the delayed setTimeout in `uploading`
+        // doesn't accidentally clobber a faster `done`/`error` transition.
+        let currentPhase = "reading";
+        const setPhase = (phase, percent) => {
+          // Once we've reached a terminal state, ignore later updates from
+          // the setTimeout below.
+          if ((currentPhase === "done" || currentPhase === "error") &&
+              phase !== "done" && phase !== "error") {
+            return;
+          }
+          currentPhase = phase;
+          updateMessage(progressId, {
+            content: (
+              <ProgressBubble
+                fileName={file.name}
+                fileSize={file.size}
+                phase={phase}
+                percent={percent}
+                startedAt={startedAt}
+              />
+            ),
+          });
+        };
+
         // Call the edge function.
         try {
+          // Phase 1: read file → base64. For tiny files this is fast; for
+          // 8–10 MB files it can take a second or two. We update percent in
+          // 25/50/75/100 bands so the bar visibly moves.
+          setPhase("reading", 10);
           const b64 = await fileToBase64(file);
-          const { data, error } = await supabase.functions.invoke("extract-document", {
+          setPhase("reading", 100);
+
+          // Phase 2: hand off to the edge function (network upload).
+          // supabase.functions.invoke doesn't expose upload progress, but
+          // the indeterminate pulse + phase label communicates the handoff.
+          setPhase("uploading");
+          const invokePromise = supabase.functions.invoke("extract-document", {
             body: {
               kind: "tech_pack",
               file_name: file.name,
@@ -352,8 +467,18 @@ export default function FileFeeder() {
               file_base64: b64,
             },
           });
+          // After ~1.5s, flip the label from "uploading" to "parsing" so
+          // the user sees both phases. setPhase guards against clobbering
+          // a faster done/error.
+          setTimeout(() => setPhase("parsing"), 1500);
 
-          if (error) throw new Error(error.message || "Edge function call failed");
+          const { data, error } = await invokePromise;
+
+          if (error) {
+            setPhase("error");
+            throw new Error(error.message || "Edge function call failed");
+          }
+          setPhase("done", 100);
 
           // Duplicate handling: extract-document returns ok:false + EXTRACTION_DUPLICATE
           // when the same file (by hash) was uploaded recently and is still pending.
@@ -409,6 +534,7 @@ export default function FileFeeder() {
             ),
           });
         } catch (e) {
+          setPhase("error");
           append({
             type: "assistant",
             content: (
