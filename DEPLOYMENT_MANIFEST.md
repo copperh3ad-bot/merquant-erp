@@ -128,7 +128,7 @@
 
 | Function | Version | Purpose |
 |---|---|---|
-| ai-proxy | v18 | Proxies Anthropic API calls. Uses Deno.serve() (no imports). Normalises model names. |
+| ai-proxy | v31 | Proxies Anthropic API calls. Uses Deno.serve(). Normalises model names. **JWT-verified (2026-05-01 hardening)** — every request must carry a valid Supabase user session. |
 
 ---
 
@@ -206,11 +206,11 @@
 
 ---
 
-## AI Assistant (Edge Function v18)
+## AI Assistant (Edge Function v31)
 
 - Endpoint: `https://ecjqdyruwqlesfthgphv.supabase.co/functions/v1/ai-proxy`
 - Model: `claude-sonnet-4-5` (normalises any claude-*-4-* variant)
-- Auth: `verify_jwt: false` (frontend uses Supabase anon key)
+- Auth: `verify_jwt: true` — JWT verified at platform level, plus an in-handler `supabase.auth.getUser()` check. Unauthenticated callers get HTTP 401 before any Anthropic API call is made (2026-05-01 hardening).
 - Handles: SQL queries (exec_sql RPC), React component generation, data answers
 - exec_sql RPC: SELECT-only, returns JSONB array
 
@@ -243,7 +243,7 @@ src/
 
 supabase/
   functions/
-    ai-proxy/index.ts       ← Edge function v18 (Deno.serve)
+    ai-proxy/index.ts       ← Edge function v31 (Deno.serve, verify_jwt: true)
 ```
 
 ---

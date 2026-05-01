@@ -6,8 +6,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Database, Upload, Download, FileSpreadsheet, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Link as LinkIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { validateMasterData } from "@/lib/validators/masterDataValidator";
+import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
+import { classifyComponent, detectAnySkuMismatch, classifyWithAiFallback } from "@/lib/componentClassifier";
+import { normalizeRowKeys } from "@/lib/headerNormalizer";
 import ValidationReport from "@/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
+import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
 
 async function loadSheetJS() {
   if (window.XLSX) return window.XLSX;
@@ -120,7 +124,10 @@ const SHEETS = {
     required: ["item_code"],
     columns: ["tech_pack_code","brand","product_type","product_category","size","item_code","bob_sku","color","product_length_in","product_width_in","product_depth_in","finish_dimensions","insert_dimensions","pvc_bag_dimensions","stiffener_size","zipper_length_cm","units_per_carton","carton_size_cm"],
     transform: (r) => ({
-      article_code: toStr(r.item_code),
+      // Uppercase canonical — matches trg_normalize_article_code DB trigger.
+      // Without this, master data with mixed-case codes ("GPFRIOPPk") would
+      // attempt to upsert into a row that's already stored as "GPFRIOPPK".
+      article_code: toStr(r.item_code) ? toStr(r.item_code).toUpperCase() : null,
       article_name: [toStr(r.product_type), toStr(r.size), toStr(r.color)].filter(Boolean).join(" — ") || toStr(r.item_code),
       color: toStr(r.color),
       size: toStr(r.size),
@@ -129,6 +136,17 @@ const SHEETS = {
       product_width_in:  toNum(r.product_width_in),
       product_depth_in:  toNum(r.product_depth_in),
       finish_dimensions: toStr(r.finish_dimensions),
+      // Per-SKU dimension fields (added 0005_articles_size_fields). Stored as
+      // text because spreadsheet values are free-form ("27X27.5X6.5cm",
+      // "58*28.5*43"). Normalized to canonical form via dimensionNormalizer
+      // so the same physical measurement entered as "27x52.6" or "52.60x27"
+      // converges to a single string — keeps cross-source audits clean.
+      // 2D dims sort smaller→larger; 3D and 1D preserve order.
+      insert_dimensions:  normalizeDim2D(toStr(r.insert_dimensions)),
+      pvc_bag_dimensions: normalizeDim2D(toStr(r.pvc_bag_dimensions)),
+      stiffener_size:     normalizeDim2D(toStr(r.stiffener_size)),
+      zipper_length_cm:   normalizeDim3D(toStr(r.zipper_length_cm)),
+      carton_size_cm:     normalizeDim3D(toStr(r.carton_size_cm)),
       order_quantity: 0,
       size_labels: toStr(r.size) ? [toStr(r.size)] : [],
     }),
@@ -139,7 +157,9 @@ const SHEETS = {
     required: ["item_code","component_type"],
     columns: ["tech_pack_code","item_code","size","product_size","component_type","direction","fabric_type","construction","yarn_count","composition","gsm","finish","color","width_cm","consumption_per_unit","wastage_percent","total_required","supplier","remarks"],
     transform: (r) => ({
-      item_code: toStr(r.item_code), size: toStr(r.size),
+      // Uppercase item_code defense-in-depth (DB trigger trg_normalize_consumption_item_code also enforces)
+      item_code: toStr(r.item_code) ? toStr(r.item_code).toUpperCase() : null,
+      size: toStr(r.size),
       kind: "fabric", component_type: toStr(r.component_type),
       fabric_type: toStr(r.fabric_type), gsm: toNum(r.gsm),
       construction: toStr(r.construction),
@@ -170,13 +190,19 @@ const SHEETS = {
       const parts = [itemName, rawMaterial, sizeSpec, placement].filter(Boolean);
       const unique = parts.filter((p, i) => p !== parts[i - 1]);
       const material = unique.join(" — ");
+      // Normalize size_spec at write time so "4.0cmX7.0cm" and "4cmX7cm"
+      // converge to the same canonical "4.00X7.00CM" form. Prevents the
+      // semantic-duplicate rows we cleaned up in 2026-04-30.
+      const normalizedSizeSpec = sizeSpec ? normalizeDim2D(sizeSpec) : "";
       return {
-        item_code: toStr(r.item_code), size: toStr(r.size),
+        // Uppercase item_code defense-in-depth (DB trigger also enforces).
+        item_code: toStr(r.item_code) ? toStr(r.item_code).toUpperCase() : null,
+        size: toStr(r.size),
         kind: "accessory",
         component_type: toStr(r.category) || itemName,
         color: "",
         material,
-        size_spec: sizeSpec,
+        size_spec: normalizedSizeSpec,
         placement,
         consumption_per_unit: toNum(r.consumption_per_unit),
         wastage_percent: toNum(r.wastage_percent) || 0,
@@ -184,17 +210,62 @@ const SHEETS = {
         notes: [toStr(r.variant), toStr(r.unit) ? `unit: ${toStr(r.unit)}` : null].filter(Boolean).join(" · ") || null,
       };
     },
-    // After transform, drop byte-identical duplicates (same SKU+category+material+size+placement+consumption).
-    // Source tech packs sometimes list the same accessory twice; we silently keep the first.
+    // 4-step pipeline:
+    //   1. Re-classify component_type via componentClassifier (rules-based).
+    //      Disambiguates user-typed categories like "Polybag" when the actual
+    //      item is a small hang-tag carrier ("Accessory Bag") or vice versa.
+    //   2. Detect SKU↔polybag mismatches (e.g. Pillow Protector polybag with
+    //      mattress-encasement zipper description). Logged as warnings — the
+    //      row is still imported, but the user is told to check the source.
+    //   3. Drop byte-identical duplicates.
     postProcess: (rows) => {
+      // Step 1: smart re-classify
+      let reclassified = 0;
+      const classified = rows.map((row) => {
+        const result = classifyComponent({
+          raw_category: row.component_type,
+          item_name:    "",
+          material:     row.material,
+          size_spec:    row.size_spec,
+          placement:    row.placement,
+        });
+        if (result.component_type && result.confidence >= 0.85 && result.component_type !== row.component_type) {
+          reclassified += 1;
+          return { ...row, component_type: result.component_type, _classifier_reason: result.reason };
+        }
+        return row;
+      });
+      if (reclassified > 0) console.info(`[MasterDataImport] re-classified ${reclassified} accessory row(s) by componentClassifier`);
+
+      // Step 2: SKU-aware mismatch detection. detectAnySkuMismatch dispatches
+      // across all known component-type rules (Polybag, Stiffener, …) and
+      // flags rows where the description contains keywords inappropriate for
+      // the SKU's product family — typically the result of a shared tech pack
+      // putting all components on every SKU when only some apply.
+      const mismatchWarnings = [];
+      for (const row of classified) {
+        const warn = detectAnySkuMismatch({
+          articleCode:   row.item_code,
+          componentType: row.component_type,
+          material:      row.material,
+        });
+        if (warn) mismatchWarnings.push(warn);
+      }
+      if (mismatchWarnings.length > 0) {
+        console.warn(`[MasterDataImport] ${mismatchWarnings.length} likely SKU↔component mis-pairing(s) detected — these rows will import but the source data may be wrong:`);
+        for (const w of mismatchWarnings) console.warn(`  ${w.message}`);
+      }
+
+      // Step 3: dedupe
       const seen = new Set();
       const out = [];
       let dropped = 0;
-      for (const row of rows) {
+      for (const row of classified) {
         const key = [row.item_code, row.component_type, row.material, row.size_spec, row.placement, row.consumption_per_unit].join("||");
         if (seen.has(key)) { dropped++; continue; }
         seen.add(key);
-        out.push(row);
+        const { _classifier_reason, ...persistRow } = row;
+        out.push(persistRow);
       }
       if (dropped > 0) console.info(`[MasterDataImport] auto-dropped ${dropped} byte-identical accessory duplicate(s)`);
       return out;
@@ -310,7 +381,14 @@ const SHEET_ORDER = Object.keys(SHEETS);
 function readSheet(XLSX, wb, sheetName) {
   const ws = wb.Sheets[sheetName];
   if (!ws) return [];
-  const rows = XLSX.utils.sheet_to_json(ws, { defval: "", raw: false });
+  const rawRows = XLSX.utils.sheet_to_json(ws, { defval: "", raw: false });
+  // Normalize headers so v4-template files ("Article Code", "Pieces/Carton",
+  // "Wastage %") resolve to the canonical snake_case keys that the per-sheet
+  // transform functions read (r.item_code, r.units_per_carton,
+  // r.wastage_percent). Per-sheet alias overrides handle ambiguous cases
+  // like "Pieces/Carton" → units_per_carton on Carton/Articles vs
+  // pieces_per_carton on Price List.
+  const rows = rawRows.map(r => normalizeRowKeys(r, sheetName));
   return rows.filter(r => Object.values(r).some(v => String(v).trim() !== ""));
 }
 
@@ -424,6 +502,45 @@ export default function MasterData() {
             console.info(`[MasterDataImport] ${sheetName}: dropped ${before - valid.length} duplicate row(s)`);
           }
         }
+
+        // ── AI fallback for ambiguous component classifications ──
+        // The Accessory sheet's postProcess runs the keyword classifier and
+        // overrides component_type when confidence >= 0.85. For rows the
+        // keyword classifier can't classify confidently (low confidence or
+        // null), batch-call the classify-components Claude edge function.
+        // Handles product families the keyword rules don't know about.
+        // Failure is silent — keyword result stays. Only fires on the
+        // Accessory sheet where component_type drives downstream tabs.
+        if (sheetName === "3. SKU Accessory Consumption" && valid.length > 0) {
+          try {
+            const aiInputs = valid.map(v => ({
+              raw_category: v.payload.component_type,
+              material:     v.payload.material,
+              size_spec:    v.payload.size_spec,
+              placement:    v.payload.placement,
+            }));
+            const aiResults = await classifyWithAiFallback(aiInputs, {
+              invokeFn: supabase.functions.invoke,
+            });
+            let aiOverrides = 0;
+            for (let i = 0; i < valid.length; i++) {
+              const r = aiResults[i];
+              if (
+                r && typeof r.reason === "string" && r.reason.startsWith("ai:") &&
+                r.component_type && r.component_type !== valid[i].payload.component_type
+              ) {
+                valid[i].payload.component_type = r.component_type;
+                aiOverrides += 1;
+              }
+            }
+            if (aiOverrides > 0) {
+              console.info(`[MasterDataImport] AI fallback re-classified ${aiOverrides} ambiguous accessory row(s) via classify-components`);
+            }
+          } catch (aiErr) {
+            console.warn("[MasterDataImport AI fallback] failed (non-blocking):", aiErr?.message || aiErr);
+          }
+        }
+
         report[sheetName] = { valid, invalid };
       }
 
@@ -646,6 +763,7 @@ export default function MasterData() {
           <Button size="sm" variant="outline" onClick={handleExport}>
             <Download className="h-3.5 w-3.5 mr-1.5"/>Export Current
           </Button>
+          <TryAIExtractionButton kind="master_data" size="sm" label="Try AI Extraction" />
         </div>
       </div>
 

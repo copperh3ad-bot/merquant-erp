@@ -71,7 +71,7 @@ export default function FabricEditDialog({ open, onOpenChange, article, onSave, 
           <table className="w-full text-xs border-collapse">
             <thead>
               <tr className="bg-slate-100">
-                {["Part","Prod. Size","Direction","Fabric Type","GSM","Width (cm)","Cut/Unit (m)","Wastage %","Total Req. (m)",""].map(h => (
+                {["Part","Prod. Size","Dimensions","Direction","Fabric Type","GSM","Width (cm)","Cut/Unit (m)","Wastage %","Total Req. (m)",""].map(h => (
                   <th key={h} className="border px-2 py-1.5 text-left whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -88,6 +88,15 @@ export default function FabricEditDialog({ open, onOpenChange, article, onSave, 
                       </select>
                     </td>
                     <td className="border px-1.5 py-1"><input className={inp} placeholder="e.g. 70x96" value={comp.product_size || ""} onChange={e => updateComp(idx, "product_size", e.target.value)} /></td>
+                    <td className={`border px-1.5 py-1 ${(comp.component_type === "Fabric Bag" && !comp.dimensions) ? "bg-amber-50" : ""}`}>
+                      <input
+                        className={inp}
+                        placeholder={comp.component_type === "Fabric Bag" ? 'e.g. 12"x16"' : "(from tech pack)"}
+                        title={comp.component_type === "Fabric Bag" && !comp.dimensions ? "Fabric Bag dimensions are usually missing from tech packs — please fill in the polybag size for this SKU." : "Per-component dimension override. Leave blank to use the value from the tech pack."}
+                        value={comp.dimensions || ""}
+                        onChange={e => updateComp(idx, "dimensions", e.target.value)}
+                      />
+                    </td>
                     <td className="border px-1.5 py-1"><input className={inp} placeholder="WXL" value={comp.direction || ""} onChange={e => updateComp(idx, "direction", e.target.value)} /></td>
                     <td className="border px-1.5 py-1"><input className={inp} value={comp.fabric_type || ""} onChange={e => updateComp(idx, "fabric_type", e.target.value)} /></td>
                     <td className="border px-1.5 py-1"><input type="number" className={inp} value={comp.gsm || ""} onChange={e => updateComp(idx, "gsm", Number(e.target.value))} /></td>

@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createPageUrl } from "@/utils";
 import { db, mfg, priceList as priceListAPI, supabase } from "@/api/supabaseClient";
+import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -362,7 +363,9 @@ export default function PurchaseOrders() {
             po_id:         po.id,
             po_number:     po.po_number,
             article_name:  item.item_description || code,
-            article_code:  code,
+            // Uppercase canonical — matches the DB trigger trg_normalize_article_code
+            // and ensures dedupe by article_code below collapses case variants.
+            article_code:  String(code).trim().toUpperCase(),
             size:          productSize,
             components,
             order_quantity: qty,
@@ -384,10 +387,82 @@ export default function PurchaseOrders() {
           }, {})
         );
 
-        // Authoritative upsert: replaces components[] on every import
+        // Authoritative upsert: replaces components[] on every import.
+        // Note: only the columns in dedupedArticles are written; existing
+        // dimension columns (carton_size_cm, stiffener_size, etc.) are
+        // preserved on UPDATE because they're not in the SET clause.
         await supabase.from("articles").upsert(dedupedArticles, {
           onConflict: "article_code", ignoreDuplicates: false,
         });
+
+        // ── Article dimension backfill from tech_packs ──
+        // When a tech pack was uploaded BEFORE the PO, the article row
+        // doesn't exist yet at tech-pack time so the tech-pack→article sync
+        // (in TechPacks.jsx) couldn't fire. Now that the articles exist,
+        // pull the per-SKU dimensions out of any matching tech_packs and
+        // fill any NULL dimension columns.
+        try {
+          const articleCodes = dedupedArticles.map(a => a.article_code).filter(Boolean);
+          if (articleCodes.length > 0) {
+            // Fetch ALL tech_packs and match case-insensitively in JS.
+            // .in() is case-sensitive, and we may have stored article_codes
+            // with mixed case ("GPFRIOPPk" tech pack vs "GPFRIOPPK" article).
+            const upperCodes = new Set(articleCodes.map(c => String(c).trim().toUpperCase()));
+            const { data: allTps } = await supabase
+              .from("tech_packs")
+              .select("article_code, extracted_measurements");
+            const tps = (allTps || []).filter(t =>
+              t.article_code && upperCodes.has(String(t.article_code).trim().toUpperCase())
+            );
+            if (tps.length > 0) {
+              // Pick first-seen tech pack per upper-cased article_code.
+              const byCode = new Map();
+              for (const tp of tps) {
+                const k = String(tp.article_code).trim().toUpperCase();
+                if (!byCode.has(k)) byCode.set(k, tp);
+              }
+              for (const [, tp] of byCode) {
+                const sku = tp.extracted_measurements?.this_sku;
+                if (!sku) continue;
+
+                // IMPORTANT: skip articles.product_dimensions — it's
+                // FabricWorking's manual-override slot. Writing the
+                // whole-SKU dim here would override its per-component
+                // sheet-set resolution (Flat Sheet vs Fitted Sheet vs
+                // Pillow Case). The other 5 columns are independent
+                // (Packaging Planning's article-fallback target).
+                // ilike() so mixed-case article_codes still match.
+                const { data: art } = await supabase
+                  .from("articles")
+                  .select("id, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
+                  .ilike("article_code", tp.article_code)
+                  .maybeSingle();
+                if (!art) continue;
+
+                const fillIfBlank = (cur, nv) =>
+                  (cur == null || String(cur).trim() === "") && nv ? nv : null;
+
+                // Normalize on write — see dimensionNormalizer.js. 2D dims
+                // sort smaller→larger so W×L and L×W converge; 3D (carton)
+                // and 1D (zipper) preserve order.
+                const patch = {
+                  pvc_bag_dimensions: fillIfBlank(art.pvc_bag_dimensions, normalizeDim2D(sku.pvc_bag_dimensions)),
+                  stiffener_size:     fillIfBlank(art.stiffener_size,     normalizeDim2D(sku.stiffener_size)),
+                  insert_dimensions:  fillIfBlank(art.insert_dimensions,  normalizeDim2D(sku.insert_dimensions)),
+                  zipper_length_cm:   fillIfBlank(art.zipper_length_cm,   normalizeDim3D(sku.zipper_length)),
+                  carton_size_cm:     fillIfBlank(art.carton_size_cm,     normalizeDim3D(sku.carton_size_cm)),
+                };
+                const filtered = Object.fromEntries(Object.entries(patch).filter(([_, v]) => v != null));
+                if (Object.keys(filtered).length > 0) {
+                  await supabase.from("articles").update(filtered).eq("id", art.id);
+                }
+              }
+            }
+          }
+        } catch (dimBackfillErr) {
+          // Non-blocking — articles are already saved, this is enrichment.
+          console.warn("[PO upload article dim backfill] failed (non-blocking):", dimBackfillErr?.message || dimBackfillErr);
+        }
 
         // Auto-copy accessories from most recent previous PO for same articles
         setImportMsg("Copying accessories from history…");

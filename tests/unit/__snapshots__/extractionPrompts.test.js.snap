@@ -1,0 +1,688 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getPromptForKind (drift detection) > master_data system prompt matches snapshot 1`] = `
+"You are extracting structured data for a manufacturing ERP. Rules:
+- If a value is not present in the source, leave it null. Do not invent values.
+- Normalise units where obvious (e.g. "150 GSM" -> 150). Leave units in the field name as documented in the schema.
+- Preserve the user's exact item codes and product names. Do not rewrite or "improve" them.
+- Numbers must be numbers (not strings). Strings must not contain unit suffixes when the schema asks for a number.
+- Use the provided tool to return structured output. Do not respond in plain text.
+
+You are extracting from a single master-data XLSX export.
+Each worksheet renders as a CSV block in the user message.
+Sheets you may encounter:
+- Articles / SKUs (item_code, brand, product_type, size)
+- SKU Fabric Consumption (item_code, component_type, fabric_type, gsm, width_cm, consumption_per_unit, wastage_percent, color)
+- SKU Accessory Consumption (item_code, category, item_name, material, size_spec, placement, consumption_per_unit)
+- Carton Master (item_code, units_per_carton, carton_length_cm, carton_width_cm, carton_height_cm)
+- Price List (item_code, price_usd, effective_from)
+- Suppliers (name, contact_email, contact_phone)
+- Seasons (name, start_date, end_date)
+- Production Lines (name, line_type, daily_capacity)
+
+Map each input sheet to the matching output array. Sheets you do not recognise: ignore.
+Sheets that are obviously empty (header only, no rows): omit the section entirely from
+the output rather than emitting an empty array.
+
+Produce one tool call to "extract_master_data".
+
+For "_confidence.overall" use the same scale as tech packs."
+`;
+
+exports[`getPromptForKind (drift detection) > master_data tool schema matches snapshot 1`] = `
+{
+  "description": "Return the structured contents of a master-data XLSX export.",
+  "input_schema": {
+    "properties": {
+      "_confidence": {
+        "properties": {
+          "overall": {
+            "type": "number",
+          },
+          "per_section": {
+            "type": "object",
+          },
+        },
+        "required": [
+          "overall",
+        ],
+        "type": "object",
+      },
+      "_notes": {
+        "type": [
+          "string",
+          "null",
+        ],
+      },
+      "accessory_consumption": {
+        "items": {
+          "properties": {
+            "category": {
+              "type": "string",
+            },
+            "consumption_per_unit": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "item_code": {
+              "type": "string",
+            },
+            "item_name": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "material": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "placement": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "size_spec": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+          },
+          "required": [
+            "item_code",
+            "category",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "articles": {
+        "items": {
+          "properties": {
+            "brand": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "item_code": {
+              "type": "string",
+            },
+            "product_type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "size": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+          },
+          "required": [
+            "item_code",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "carton_master": {
+        "items": {
+          "properties": {
+            "carton_height_cm": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "carton_length_cm": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "carton_width_cm": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "item_code": {
+              "type": "string",
+            },
+            "units_per_carton": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+          },
+          "required": [
+            "item_code",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "fabric_consumption": {
+        "items": {
+          "properties": {
+            "color": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "component_type": {
+              "type": "string",
+            },
+            "consumption_per_unit": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "fabric_type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "gsm": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "item_code": {
+              "type": "string",
+            },
+            "wastage_percent": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "width_cm": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+          },
+          "required": [
+            "item_code",
+            "component_type",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "price_list": {
+        "items": {
+          "properties": {
+            "effective_from": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "item_code": {
+              "type": "string",
+            },
+            "price_usd": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+          },
+          "required": [
+            "item_code",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "production_lines": {
+        "items": {
+          "properties": {
+            "daily_capacity": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "line_type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "name": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "name",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "seasons": {
+        "items": {
+          "properties": {
+            "end_date": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "name": {
+              "type": "string",
+            },
+            "start_date": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+          },
+          "required": [
+            "name",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "suppliers": {
+        "items": {
+          "properties": {
+            "contact_email": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "contact_phone": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "name": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "name",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+    },
+    "required": [
+      "_confidence",
+    ],
+    "type": "object",
+  },
+  "name": "extract_master_data",
+}
+`;
+
+exports[`getPromptForKind (drift detection) > tech_pack system prompt matches snapshot 1`] = `
+"You are extracting structured data for a manufacturing ERP. Rules:
+- If a value is not present in the source, leave it null. Do not invent values.
+- Normalise units where obvious (e.g. "150 GSM" -> 150). Leave units in the field name as documented in the schema.
+- Preserve the user's exact item codes and product names. Do not rewrite or "improve" them.
+- Numbers must be numbers (not strings). Strings must not contain unit suffixes when the schema asks for a number.
+- Use the provided tool to return structured output. Do not respond in plain text.
+
+You are extracting from a single textile tech pack uploaded as XLSX.
+The user message contains each worksheet rendered as a CSV block.
+A tech pack typically has:
+- a header sheet with brand, product type, product number, and product name
+- one or more rows describing fabric components (shell, lining, fill, etc.) with GSM, construction, finish
+- a SKU table where each row is one finished article (size + colour + dimensions)
+- optional sheets for labels, accessories, packaging, and zipper specs
+
+Produce one tool call to "extract_tech_pack". The "skus" array is required and must
+contain at least one row. If the source genuinely has no SKU rows (e.g. the file is
+not a tech pack at all), still call the tool with skus=[] and set _notes to explain.
+
+For "_confidence.overall" use:
+  0.9-1.0 = every field unambiguous
+  0.6-0.9 = mostly clear, a few inferences
+  0.3-0.6 = significant uncertainty
+  0.0-0.3 = the source barely resembles a tech pack"
+`;
+
+exports[`getPromptForKind (drift detection) > tech_pack tool schema matches snapshot 1`] = `
+{
+  "description": "Return the structured contents of a textile tech pack.",
+  "input_schema": {
+    "properties": {
+      "_confidence": {
+        "properties": {
+          "overall": {
+            "type": "number",
+          },
+          "per_section": {
+            "type": "object",
+          },
+        },
+        "required": [
+          "overall",
+        ],
+        "type": "object",
+      },
+      "_notes": {
+        "type": [
+          "string",
+          "null",
+        ],
+      },
+      "accessories": {
+        "items": {
+          "properties": {
+            "accessory_type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "description": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "material": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "placement": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "source_label": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+          },
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "fabric_specs": {
+        "items": {
+          "properties": {
+            "color": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "component_type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "construction": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "fabric_type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "finish": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "gsm": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+          },
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "header": {
+        "properties": {
+          "brand": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "product_name": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "product_no": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "product_type": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+        },
+        "type": "object",
+      },
+      "labels": {
+        "items": {
+          "properties": {
+            "color": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "material": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "placement": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "section": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "size": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+          },
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "packaging": {
+        "items": {
+          "properties": {
+            "category": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "label": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "value": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "variant": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+          },
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "skus": {
+        "items": {
+          "properties": {
+            "carton_size_cm": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "color": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "insert_dimensions": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "is_set": {
+              "type": [
+                "boolean",
+                "null",
+              ],
+            },
+            "item_code": {
+              "type": "string",
+            },
+            "product_dimensions": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "pvc_bag_dimensions": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "size": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "stiffener_size": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "units_per_carton": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "zipper_length": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+          },
+          "required": [
+            "item_code",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "zipper": {
+        "properties": {
+          "color": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "length": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "type": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+        },
+        "type": "object",
+      },
+    },
+    "required": [
+      "skus",
+      "_confidence",
+    ],
+    "type": "object",
+  },
+  "name": "extract_tech_pack",
+}
+`;

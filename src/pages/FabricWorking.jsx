@@ -145,12 +145,19 @@ export default function FabricWorking() {
   // which renders as a dash in the UI. The optional `part` argument (e.g.
   // "Flat Sheet", "Fitted Sheet", "Pillow Case") narrows the lookup to that
   // specific component for sheet-set tech packs that store per-part dimensions.
-  const resolveDims = (article, productSize, part) => {
+  const resolveDims = (article, productSize, part, component = null) => {
+    // Layer 0: per-component manual override. Lets a Manager fill in a
+    // missing fabric-bag (or any per-component) dimension without affecting
+    // sibling components on the same article. Stored as `dimensions` on the
+    // component object inside articles.components.
+    if (component?.dimensions) return String(component.dimensions);
+
     // Layer 1: direct manual override on the article row.
     if (article?.product_dimensions) return String(article.product_dimensions);
     if (!dimsIndex) return "";
 
     const partKey = part ? normalizeSizeKey(part) : null;
+    const sizeKey = productSize ? normalizeSizeKey(productSize) : null;
 
     // Layer 2a: per-part item_code match (sheet-set tech packs).
     if (partKey && article?.article_code && dimsIndex.byItemPart?.has(article.article_code)) {
@@ -160,27 +167,40 @@ export default function FabricWorking() {
     }
 
     // Layer 2b: item_code match (whole-SKU dimension, family tech packs).
-    if (article?.article_code && dimsIndex.byItemCode.has(article.article_code)) {
+    //
+    // Gate: if this SKU has per-part dimensions registered (i.e. byItemPart
+    // has an entry for this article_code) AND a specific part was requested,
+    // do NOT fall through to the whole-SKU dimension. For sheet sets the
+    // whole-SKU product_dimensions equals the flat-sheet dimension, so a
+    // fabric bag / pillow-only / pvc-bag component would otherwise display
+    // the flat-sheet dimension as if it were its own. Better to leave it
+    // blank so the operator fills it in (or a future tech-pack extraction
+    // populates the missing part_dimensions entry).
+    const isStructuredByItemPart =
+      partKey && article?.article_code && dimsIndex.byItemPart?.has(article.article_code);
+    if (!isStructuredByItemPart && article?.article_code && dimsIndex.byItemCode.has(article.article_code)) {
       return dimsIndex.byItemCode.get(article.article_code);
     }
 
     // Layer 3a: per-part (article_code, size) match.
-    if (partKey && article?.article_code && productSize) {
+    let isStructuredByCodeSize = false;
+    if (partKey && article?.article_code && sizeKey) {
       const sizePartMap = dimsIndex.byCodeSizePart?.get(article.article_code);
-      if (sizePartMap) {
-        const partMap = sizePartMap.get(normalizeSizeKey(productSize));
-        if (partMap) {
-          const hit = partMap.get(partKey);
-          if (hit) return hit;
-        }
+      if (sizePartMap?.has(sizeKey)) {
+        isStructuredByCodeSize = true;
+        const partMap = sizePartMap.get(sizeKey);
+        const hit = partMap.get(partKey);
+        if (hit) return hit;
       }
     }
 
     // Layer 3b: legacy (article_code, size) match.
-    if (article?.article_code && productSize) {
+    // Same gate as 2b — if a per-part map exists for this (article, size)
+    // pair, don't fall through to the whole-SKU dimension.
+    if (!isStructuredByCodeSize && article?.article_code && sizeKey) {
       const sizeMap = dimsIndex.byCodeSize.get(article.article_code);
       if (sizeMap) {
-        const hit = sizeMap.get(normalizeSizeKey(productSize));
+        const hit = sizeMap.get(sizeKey);
         if (hit) return hit;
       }
     }
@@ -337,7 +357,7 @@ export default function FabricWorking() {
     rows.push(["Article", "Colors", "Total Qty", "Part", "Prod Size", "Dimensions", "Direction", "Fabrication", "Width cm", "Cut/Unit m", "Net Mtrs", "Wastage%", "Total Mtrs"]);
     combinedGroups.forEach(g => {
       g.components.forEach((comp, i) => {
-        const dims = resolveDims(g.template, comp.product_size, comp.component_type);
+        const dims = resolveDims(g.template, comp.product_size, comp.component_type, comp);
         rows.push([
           i===0?g.displayName:"",
           i===0?g.colors:"",
@@ -547,7 +567,7 @@ export default function FabricWorking() {
       combinedGroups.forEach((g, gi) => {
         g.components.forEach((comp, ci) => {
           const isFirst = ci === 0;
-          const dims = resolveDims(g.template, comp.product_size, comp.component_type);
+          const dims = resolveDims(g.template, comp.product_size, comp.component_type, comp);
           const values = [
             isFirst ? g.displayName : "",
             isFirst ? g.colors : "",
@@ -598,7 +618,7 @@ export default function FabricWorking() {
             const isFirst = ci === 0;
             const net = (comp.consumption_per_unit || 0) * (art.order_quantity || 0);
             const total = comp.total_required || net * (1 + (comp.wastage_percent || 0) / 100);
-            const dims = resolveDims(art, comp.product_size, comp.component_type);
+            const dims = resolveDims(art, comp.product_size, comp.component_type, comp);
             const values = [
               isFirst ? (art.article_name || "") : "",
               isFirst ? (art.article_code || "") : "",
@@ -778,7 +798,7 @@ export default function FabricWorking() {
                           </td>}
                         </tr>
                       ) : g.components.map((comp, ci) => {
-                        const dims = resolveDims(g.template, comp.product_size, comp.component_type);
+                        const dims = resolveDims(g.template, comp.product_size, comp.component_type, comp);
                         return (
                         <tr key={ci} style={{ backgroundColor: gi%2===0?"#EBF0FA":"#fff" }}>
                           {ci===0 && <>
@@ -855,7 +875,7 @@ export default function FabricWorking() {
                               ) : comps.map((comp, idx) => {
                                 const net = (comp.consumption_per_unit||0)*(article.order_quantity||0);
                                 const total = comp.total_required || net*(1+(comp.wastage_percent||0)/100);
-                                const dims = resolveDims(article, comp.product_size, comp.component_type);
+                                const dims = resolveDims(article, comp.product_size, comp.component_type, comp);
                                 return (
                                   <tr key={idx} style={{ backgroundColor:artBg }}>
                                     {idx===0 && <>
