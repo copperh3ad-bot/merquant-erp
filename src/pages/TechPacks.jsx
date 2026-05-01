@@ -778,9 +778,18 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
   const addFiles = (fileList) => {
     const incoming = Array.from(fileList || []);
     if (!incoming.length) return;
+    const oversized = incoming.filter(f => f.size > 10 * 1024 * 1024);
+    if (oversized.length) {
+      alert(
+        `Skipped ${oversized.length} file${oversized.length > 1 ? "s" : ""} larger than 10 MB:\n` +
+        oversized.map(f => `• ${f.name} (${(f.size / (1024 * 1024)).toFixed(1)} MB)`).join("\n")
+      );
+    }
+    const accepted = incoming.filter(f => f.size <= 10 * 1024 * 1024);
+    if (!accepted.length) return;
     setFiles(prev => {
       const keys = new Set(prev.map(f => `${f.name}-${f.size}`));
-      return [...prev, ...incoming.filter(f => !keys.has(`${f.name}-${f.size}`))];
+      return [...prev, ...accepted.filter(f => !keys.has(`${f.name}-${f.size}`))];
     });
   };
 

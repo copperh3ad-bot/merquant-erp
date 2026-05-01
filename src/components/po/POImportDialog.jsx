@@ -321,7 +321,16 @@ export default function POImportDialog({ open, onOpenChange, onImport }) {
             <input ref={inputRef} type="file"
               accept=".pdf,.xlsx,.xls,.csv,.txt,.jpg,.jpeg,.png,.webp"
               className="hidden"
-              onChange={e => { const f = e.target.files[0]; if (f) setFile(f); e.target.value = ""; }} />
+              onChange={e => {
+                const f = e.target.files[0];
+                e.target.value = "";
+                if (!f) return;
+                if (f.size > 10 * 1024 * 1024) {
+                  alert(`${f.name} is ${(f.size / (1024 * 1024)).toFixed(1)} MB. Max 10 MB.`);
+                  return;
+                }
+                setFile(f);
+              }} />
 
             {file ? (
               <div className="flex items-center justify-center gap-3">

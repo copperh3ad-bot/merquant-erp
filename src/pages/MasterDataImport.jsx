@@ -439,6 +439,11 @@ export default function MasterData() {
 
   const handleFile = async (f) => {
     if (!f) return;
+    if (f.size > 10 * 1024 * 1024) {
+      setStage("error");
+      setMessage(`${f.name} is ${(f.size / (1024 * 1024)).toFixed(1)} MB. Max 10 MB.`);
+      return;
+    }
     setStage("parsing"); setMessage(`Reading ${f.name}…`);
     try {
       const ext = f.name.split('.').pop().toLowerCase();

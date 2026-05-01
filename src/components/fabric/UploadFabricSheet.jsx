@@ -289,7 +289,16 @@ ${csvText.substring(0, 15000)}`
                   type="file"
                   accept=".csv,.txt,.xlsx,.xls,.xlsm"
                   className="hidden"
-                  onChange={e => { setFile(e.target.files[0]); e.target.value = ""; }}
+                  onChange={e => {
+                    const f = e.target.files[0];
+                    e.target.value = "";
+                    if (!f) return;
+                    if (f.size > 10 * 1024 * 1024) {
+                      alert(`${f.name} is ${(f.size / (1024 * 1024)).toFixed(1)} MB. Max 10 MB.`);
+                      return;
+                    }
+                    setFile(f);
+                  }}
                 />
               </div>
             )}

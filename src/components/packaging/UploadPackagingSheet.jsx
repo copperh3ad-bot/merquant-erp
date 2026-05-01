@@ -15,7 +15,16 @@ export default function UploadPackagingSheet({ onSuccess }) {
 
   const reset = () => { setFile(null); setStatus("idle"); setMessage(""); setResults(null); if (inputRef.current) inputRef.current.value = ""; };
 
-  const handleFile = (e) => { const f = e.target.files[0]; if (f) { setFile(f); } e.target.value = ""; };
+  const handleFile = (e) => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    if (f.size > 10 * 1024 * 1024) {
+      alert(`${f.name} is ${(f.size / (1024 * 1024)).toFixed(1)} MB. Max 10 MB.`);
+      return;
+    }
+    setFile(f);
+  };
 
   const handleProcess = async () => {
     if (!file) return;
