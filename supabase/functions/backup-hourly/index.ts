@@ -4,7 +4,7 @@
 // Keeps last 7 days (168 backups per table max)
 //
 // Trigger externally via: cron-job.org or GitHub Actions or Supabase scheduled jobs
-// POST https://ecjqdyruwqlesfthgphv.supabase.co/functions/v1/backup-hourly
+// POST https://jcbxmpgjirxqszodotmx.supabase.co/functions/v1/backup-hourly
 //   Headers: Authorization: Bearer <BACKUP_SECRET>
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";

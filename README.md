@@ -8,7 +8,7 @@ A production-grade AI-powered ERP system for textile merchandising operations.
 ## Live System
 
 - **Production:** https://merquant.netlify.app *(deploy to activate)*
-- **Supabase Project:** `ecjqdyruwqlesfthgphv` (ap-south-1)
+- **Supabase Project:** `jcbxmpgjirxqszodotmx` (ap-northeast-1, Tokyo)
 - **Stack:** React 18 + Vite + Tailwind CSS + shadcn/ui + Supabase + Anthropic Claude
 
 ---
@@ -40,7 +40,7 @@ npm run dev            # runs at http://localhost:5173
 ## Environment Variables
 
 ```env
-VITE_SUPABASE_URL=https://ecjqdyruwqlesfthgphv.supabase.co
+VITE_SUPABASE_URL=https://jcbxmpgjirxqszodotmx.supabase.co
 VITE_SUPABASE_ANON_KEY=your_anon_key
 ```
 

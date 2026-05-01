@@ -21,8 +21,8 @@
 
 | Resource | Value |
 |---|---|
-| Supabase Project ID | ecjqdyruwqlesfthgphv |
-| Supabase URL | https://ecjqdyruwqlesfthgphv.supabase.co |
+| Supabase Project ID | jcbxmpgjirxqszodotmx |
+| Supabase URL | https://jcbxmpgjirxqszodotmx.supabase.co |
 | Netlify Site ID | 5f7b7802-0082-4db3-ac07-242aa888187d |
 | Netlify Site | merquant2.netlify.app |
 | GitHub Repo | copperh3ad-bot/Merquant-AI |
@@ -208,7 +208,7 @@
 
 ## AI Assistant (Edge Function v31)
 
-- Endpoint: `https://ecjqdyruwqlesfthgphv.supabase.co/functions/v1/ai-proxy`
+- Endpoint: `https://jcbxmpgjirxqszodotmx.supabase.co/functions/v1/ai-proxy`
 - Model: `claude-sonnet-4-5` (normalises any claude-*-4-* variant)
 - Auth: `verify_jwt: true` — JWT verified at platform level, plus an in-handler `supabase.auth.getUser()` check. Unauthenticated callers get HTTP 401 before any Anthropic API call is made (2026-05-01 hardening).
 - Handles: SQL queries (exec_sql RPC), React component generation, data answers
