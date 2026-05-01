@@ -420,6 +420,9 @@ Deno.serve(async (req) => {
         ...baseRow,
         model: models[0],
         validation_status: "skipped",
+        review_status: "rejected" as const,                     // auto-reject on hard failure so dedup unblocks
+        rejected_at: new Date().toISOString(),
+        rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
         error_code: "EXTRACTION_PARSE_FAILED",
         error_message: msg,
       });
@@ -436,6 +439,9 @@ Deno.serve(async (req) => {
     if (lastFailure.kind === "timeout") {
       await supabase.from("ai_extractions").insert({
         ...baseRow, model: lastModel, validation_status: "skipped",
+        review_status: "rejected" as const,
+        rejected_at: new Date().toISOString(),
+        rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
         error_code: "EXTRACTION_LLM_TIMEOUT", error_message: `aborted at ${ANTHROPIC_TIMEOUT_MS}ms`,
         cost_usd: chain.total_cost_usd,
       });
@@ -444,6 +450,9 @@ Deno.serve(async (req) => {
     if (lastFailure.kind === "http_error") {
       await supabase.from("ai_extractions").insert({
         ...baseRow, model: lastModel, validation_status: "skipped",
+        review_status: "rejected" as const,
+        rejected_at: new Date().toISOString(),
+        rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
         raw_llm_response: lastFailure.body as Record<string, unknown>,
         error_code: "EXTRACTION_LLM_ERROR", error_message: `Anthropic ${lastFailure.status}`,
         cost_usd: chain.total_cost_usd,
@@ -454,6 +463,9 @@ Deno.serve(async (req) => {
     // no_tool_use
     await supabase.from("ai_extractions").insert({
       ...baseRow, model: lastModel, validation_status: "skipped",
+        review_status: "rejected" as const,
+        rejected_at: new Date().toISOString(),
+        rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
       raw_llm_response: (lastFailure as { raw?: Record<string, unknown> }).raw,
       error_code: "EXTRACTION_LLM_INVALID_JSON", error_message: "tool_use block missing",
       cost_usd: chain.total_cost_usd,
