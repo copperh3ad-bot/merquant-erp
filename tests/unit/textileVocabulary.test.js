@@ -5,6 +5,9 @@ import {
   allCanonicals,
   classify,
   CATEGORIES,
+  directionForPart,
+  productFamilyOf,
+  PRODUCT_FAMILIES,
 } from '@/lib/textileVocabulary';
 
 describe('canonical', () => {
@@ -155,5 +158,91 @@ describe('CATEGORIES', () => {
     expect(CATEGORIES).toContain('direction');
     expect(CATEGORIES).toContain('treatment');
     expect(CATEGORIES).toContain('colour');
+  });
+});
+
+describe('directionForPart', () => {
+  it('returns WXL for sheet-set parts', () => {
+    expect(directionForPart('Flat Sheet')).toBe('WXL');
+    expect(directionForPart('Fitted Sheet')).toBe('WXL');
+    expect(directionForPart('Pillow Case')).toBe('WXL');
+    expect(directionForPart('Top Fabric')).toBe('WXL');
+  });
+
+  it('returns LXW for skirt', () => {
+    expect(directionForPart('Skirt')).toBe('LXW');
+    expect(directionForPart('Border')).toBe('LXW');  // alias
+  });
+
+  it('returns null for parts without a conventional direction', () => {
+    expect(directionForPart('Fabric Bag')).toBe(null);
+    expect(directionForPart('Filling')).toBe(null);
+    expect(directionForPart('Quilting')).toBe(null);
+  });
+
+  it('canonicalises aliases before looking up', () => {
+    expect(directionForPart('Top Sheet')).toBe('WXL');             // alias for Flat Sheet
+    expect(directionForPart('fitted sheet')).toBe('WXL');          // case-insensitive
+    expect(directionForPart('Self Fabric Bag')).toBe(null);        // alias for Fabric Bag
+  });
+
+  it('returns null for unknown parts', () => {
+    expect(directionForPart('Nonexistent Part')).toBe(null);
+    expect(directionForPart('')).toBe(null);
+    expect(directionForPart(null)).toBe(null);
+  });
+});
+
+describe('productFamilyOf', () => {
+  it('detects mattress protector codes', () => {
+    expect(productFamilyOf('GPMP38')).toBe('Mattress Protector');
+    expect(productFamilyOf('GPMP78')).toBe('Mattress Protector');
+    expect(productFamilyOf('GPFRIOMP46')).toBe('Mattress Protector');
+  });
+
+  it('detects pillow protector codes', () => {
+    expect(productFamilyOf('GPPPK')).toBe('Pillow Protector');
+    expect(productFamilyOf('GPPPQ')).toBe('Pillow Protector');
+    expect(productFamilyOf('GPFRIOPPK')).toBe('Pillow Protector');
+    expect(productFamilyOf('XPP38')).toBe('Pillow Protector');
+  });
+
+  it('detects encasements', () => {
+    expect(productFamilyOf('GPSE33')).toBe('Sleeper Encasement');
+    expect(productFamilyOf('GPTE50')).toBe('Total Encasement');
+  });
+
+  it('detects sheet sets via known string markers', () => {
+    expect(productFamilyOf('SLPCSS-K')).toBe('Sheet Set');         // ^SLP prefix
+    expect(productFamilyOf('JFCSS-K')).toBe('Sheet Set');          // CSS substring
+    expect(productFamilyOf('SHTSET-Q')).toBe('Sheet Set');
+    expect(productFamilyOf('SS-100')).toBe('Sheet Set');
+  });
+
+  it('returns null for opaque codes (handled by AI fallback layer)', () => {
+    // PCSJMO is a sheet-set family but its code doesn't contain CSS/SLP/etc.
+    // Regex can't catch this — the AI-fallback classifyTermAI handles it.
+    expect(productFamilyOf('PCSJMO-Q-WH')).toBe(null);
+  });
+
+  it('detects accent products', () => {
+    expect(productFamilyOf('COMF-K')).toBe('Comforter');
+    expect(productFamilyOf('DC100')).toBe('Duvet Cover');
+    expect(productFamilyOf('DUVET-Q')).toBe('Duvet Cover');
+    expect(productFamilyOf('TOPPER-K')).toBe('Mattress Topper');
+    expect(productFamilyOf('THROW-50')).toBe('Throw');
+  });
+
+  it('returns null for unknown / empty input', () => {
+    expect(productFamilyOf('')).toBe(null);
+    expect(productFamilyOf(null)).toBe(null);
+    expect(productFamilyOf('XYZ-RANDOM')).toBe(null);
+  });
+
+  it('PRODUCT_FAMILIES exposes the full enum', () => {
+    expect(PRODUCT_FAMILIES.length).toBeGreaterThan(8);
+    expect(PRODUCT_FAMILIES).toContain('Mattress Protector');
+    expect(PRODUCT_FAMILIES).toContain('Sheet Set');
+    expect(PRODUCT_FAMILIES).toContain('Comforter');
   });
 });

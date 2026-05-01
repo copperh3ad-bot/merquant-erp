@@ -253,6 +253,105 @@ const COLOURS = {
   "Yellow":        ["yellow", "yl"],
 };
 
+// ── Label sub-types (under the Label / Hang Tag accessory categories) ──────
+// PackagingPlanning's Labels tab lets users pick a label TYPE per item.
+// Customers spell these inconsistently — same canonical pattern as the
+// other categories.
+
+const LABEL_TYPES = {
+  "Brand Label":        ["brand label", "main label", "neck label", "brand", "logo", "logo label", "product label"],
+  "Care Label":         ["care label", "wash label", "washing label", "laundry label", "care instruction", "wash care"],
+  "Size Label":         ["size label", "size tag"],
+  "Direction Label":    ["direction label", "direction", "head end", "foot end", "this side up", "top-bottom"],
+  "GOTS Label":         ["gots", "gots label", "organic label"],
+  "Barcode Label":      ["barcode label", "barcode", "upc label", "ean label"],
+  "Hang Tag":           ["hang tag", "hangtag", "hanging tag", "swing tag", "swing ticket", "ticket"],
+  "Country of Origin":  ["country of origin", "made in", "origin label", "coo"],
+  "Composition Label":  ["composition", "composition label", "fiber content", "fibre content", "content label"],
+  "Wash Label":         ["wash label", "wash instruction", "washing label"],
+  "Price Ticket":       ["price ticket", "price tag", "msrp", "retail price"],
+  "Compliance Label":   ["compliance label", "compliance", "ce mark", "iso 9001"],
+  "Retailer Label":     ["retailer label", "store label", "private label"],
+  "Eco Label":          ["eco label", "eco", "oeko-tex", "fsc", "fair trade", "oekotex"],
+  "Care Label 3-Lang":  ["care label in 3 languages 1x3", "3 language care label", "tri-lingual care", "1x3"],
+  "Custom Label":       ["custom label", "custom"],
+};
+
+// ── Polybag sub-types (material) ────────────────────────────────────────────
+const POLYBAG_TYPES = {
+  "PVC":   ["pvc", "vinyl", "pvc bag"],
+  "PP":    ["pp", "polypropylene", "moisture pp"],
+  "PE":    ["pe", "polyethylene", "pe bag"],
+  "LDPE":  ["ldpe", "low density polyethylene"],
+  "OPP":   ["opp", "oriented polypropylene", "biaxially-oriented polypropylene"],
+};
+
+// ── Sticker sub-types ───────────────────────────────────────────────────────
+const STICKER_TYPES = {
+  "UPC Sticker":         ["upc sticker", "upc"],
+  "Barcode Sticker":     ["barcode sticker", "barcode"],
+  "Size Sticker":        ["size sticker"],
+  "Packaging Info":      ["packaging info sticker", "packaging info"],
+  "Retailer Sticker":    ["retailer sticker"],
+  "Warning Sticker":     ["warning sticker", "warning label", "caution sticker"],
+  "QR Code Sticker":     ["qr code sticker", "qr code", "qr"],
+  "Compliance Sticker":  ["compliance sticker"],
+  "Custom Sticker":      ["custom sticker", "custom"],
+};
+
+// ── Zipper sub-types ────────────────────────────────────────────────────────
+const ZIPPER_TYPES = {
+  "SBS Nylon Zipper":     ["sbs nylon zipper", "sbs nylon", "nylon zipper"],
+  "Coil Zipper":          ["coil zipper", "coil"],
+  "Metal Zipper":         ["metal zipper", "metal"],
+  "Invisible Zipper":     ["invisible zipper", "invisible"],
+  "Plastic Molded Zipper":["plastic molded zipper", "plastic molded", "molded plastic"],
+  "Custom Zipper":        ["custom zipper", "custom"],
+};
+
+// ── Stiffener sub-types ─────────────────────────────────────────────────────
+const STIFFENER_TYPES = {
+  "Cardboard":     ["cardboard", "card board", "card stiffener", "u cardboard", "u-shape", "u shape"],
+  "PVC Sheet":     ["pvc sheet", "pvc"],
+  "Foam Board":    ["foam board", "foam"],
+  "MDF":           ["mdf"],
+  "Corrugated":    ["corrugated"],
+  "Bux Board":     ["bux board"],
+  "Other":         ["other", "custom"],
+};
+
+// ── Insert Card sub-types ───────────────────────────────────────────────────
+const INSERT_CARD_TYPES = {
+  "Art Card":      ["art card", "color paper insert", "color paper", "marketing card"],
+  "Bleach Card":   ["bleach card"],
+  "Bux Board":     ["bux board"],
+  "Box Packaging": ["box packaging", "box"],
+  "Custom":        ["custom"],
+};
+
+// ── Carton sub-types ────────────────────────────────────────────────────────
+const CARTON_TYPES = {
+  "Printed":  ["printed", "printed carton"],
+  "Plain":    ["plain", "plain carton"],
+  "Brown":    ["brown", "brown carton", "kraft", "kraft carton"],
+  "White":    ["white", "white carton"],
+};
+
+// ── Trim sub-types (extends TRIM_TYPES with finer detail) ──────────────────
+const TRIM_DETAIL_TYPES = {
+  "Elastic":         ["elastic", "elastic band", "elastic tape"],
+  "Drawcord":        ["drawcord", "drawstring", "cord"],
+  "Cord Lock":       ["cord lock", "cord stopper"],
+  "Drawcord Stopper":["drawcord stopper", "stopper"],
+  "Jacquard Band":   ["jacquard band", "jacquard"],
+  "Velcro":          ["velcro", "hook and loop"],
+  "Rivet":           ["rivet"],
+  "Button":          ["button"],
+  "Ribbon":          ["ribbon"],
+  "Piping":          ["piping"],
+  "Custom":          ["custom"],
+};
+
 // ── Combined registry ──────────────────────────────────────────────────────
 
 const REGISTRY = {
@@ -340,10 +439,117 @@ export function classify(input) {
 // Categories enum (for autocomplete)
 export const CATEGORIES = Object.freeze(Object.keys(REGISTRY));
 
+// ── DIRECTION_BY_PART ──────────────────────────────────────────────────────
+//
+// Default cutting-grain direction for fabric components. Keyed by canonical
+// part name. Used by PO import + Consumption Library when no direction was
+// provided in the source data. Returns null when the part has no
+// conventional direction (e.g. fabric bag — cut from any orientation).
+
+const DIRECTION_BY_PART = {
+  // WXL — width × length, cut crosswise (most sheet/protector parts)
+  "Flat Sheet":    "WXL",
+  "Fitted Sheet":  "WXL",
+  "Pillow Case":   "WXL",
+  "Sham":          "WXL",
+  "Top Fabric":    "WXL",
+  "Bottom":        "WXL",
+  "Front":         "WXL",
+  "Back":          "WXL",
+  "Platform":      "WXL",
+  "Sleeper Flap":  "WXL",
+  "Evalon Membrane": "WXL",
+
+  // LXW — length × width, cut along grain
+  "Skirt":         "LXW",
+
+  // WXL — bias cuts treated as width-direction strips for now
+  "Piping":        "WXL",
+  "Binding":       "WXL",
+
+  // No conventional direction — cut from offcuts in any orientation
+  "Filling":       null,
+  "Lamination":    null,
+  "Fabric Bag":    null,
+  "Quilting":      null,
+  "Pillow Compression": null,
+  "Outer":         null,
+  "Inner":         null,
+};
+
+/**
+ * Default cutting direction for a fabric component, by canonical part name.
+ * Accepts ANY alias (will canonicalise) — pass the raw component_type.
+ *
+ * @param {string} partInput  e.g. "Top Sheet", "Fitted Sheet (Split Head)"
+ * @returns {string|null}     "WXL" / "LXW" / null
+ */
+export function directionForPart(partInput) {
+  const cn = canonical("part", partInput);
+  if (cn && cn in DIRECTION_BY_PART) return DIRECTION_BY_PART[cn];
+  return null;
+}
+
+// ── PRODUCT_FAMILIES ───────────────────────────────────────────────────────
+//
+// Regex patterns for detecting product family from an SKU code. Used by
+// componentClassifier.js, descriptionResolver.js, and articleTypes.js —
+// previously triple-implemented with diverging regex.
+//
+// Order matters: more specific patterns first. The classifier returns the
+// first match.
+
+// IMPORTANT: SKU codes are concatenated (e.g. "GPMP38", not "GP MP 38"),
+// so \b word boundaries don't fire between letters. Use plain substring
+// matches (case-insensitive). Order matters: more specific first.
+
+const PRODUCT_FAMILY_PATTERNS = [
+  // Pillow Protectors — codes ending in PPK/PPQ or containing PP\d
+  { family: "Pillow Protector",   pattern: /PP[KQ]\d*$|PP\d/i },
+  // Mattress Protectors — MP\d
+  { family: "Mattress Protector", pattern: /MP\d/i },
+  // Encasements
+  { family: "Sleeper Encasement", pattern: /SE\d/i },
+  { family: "Total Encasement",   pattern: /TE\d/i },
+  // Sheet sets — multiple naming conventions
+  { family: "Sheet Set",          pattern: /CSS|JFCSS|^SLP|SHTSET|SHEET|(?:^|[^A-Z])SS[-_]/i },
+  // Pillow cases (standalone)
+  { family: "Pillow Case",        pattern: /PC\d|PILLOWCASE|PILLCASE|PCASE/i },
+  // Bedding accents
+  { family: "Comforter",          pattern: /COMF|CMFTR|COMFORTER/i },
+  { family: "Duvet Cover",        pattern: /DC\d|DUVET|DUV\d/i },
+  { family: "Mattress Topper",    pattern: /TOPPER|TPR\d|MATTOP|MTOP/i },
+  { family: "Bed Skirt",          pattern: /BEDSKIRT|BSK\d|SKRT\d|BSKT/i },
+  { family: "Throw",              pattern: /THROW|THRW|BLANKET|BLNKT/i },
+];
+
+/**
+ * Detect product family from an SKU code or product name.
+ * Returns the first matching family, or null.
+ *
+ * @param {string} input  e.g. "GPMP38", "PCSJMO-Q-WH"
+ * @returns {string|null} e.g. "Mattress Protector"
+ */
+export function productFamilyOf(input) {
+  if (!input) return null;
+  const s = String(input);
+  for (const { family, pattern } of PRODUCT_FAMILY_PATTERNS) {
+    if (pattern.test(s)) return family;
+  }
+  return null;
+}
+
+/** All registered product family names. */
+export const PRODUCT_FAMILIES = Object.freeze(
+  PRODUCT_FAMILY_PATTERNS.map((p) => p.family),
+);
+
 // Test / inspection helpers — exported under a single namespace so they
 // don't pollute the main API surface.
 export const _internals = {
   REGISTRY,
   REVERSE_INDEX,
   norm,
+  DIRECTION_BY_PART,
+  PRODUCT_FAMILY_PATTERNS,
 };
