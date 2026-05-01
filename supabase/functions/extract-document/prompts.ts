@@ -11,7 +11,7 @@ export type ExtractionKind = "tech_pack" | "master_data";
 
 export const PROMPT_VERSION_BY_KIND: Record<ExtractionKind, string> = {
   tech_pack: "tech_pack.v1",
-  master_data: "master_data.v1",
+  master_data: "master_data.v2",  // v2 (2026-05-01): explicit component_type vs fabric_type distinction
 };
 
 // Phase E2: every kind starts on Haiku and escalates to Sonnet on low
@@ -78,6 +78,35 @@ Sheets you may encounter:
 Map each input sheet to the matching output array. Sheets you do not recognise: ignore.
 Sheets that are obviously empty (header only, no rows): omit the section entirely from
 the output rather than emitting an empty array.
+
+CRITICAL DISTINCTIONS — these two fields look similar but mean different things:
+
+  fabric_consumption.component_type
+    The GARMENT PART that this fabric is used for. Examples:
+      "Flat Sheet", "Fitted Sheet", "Pillow Case", "Sham", "Fabric Bag",
+      "Top Fabric", "Skirt", "Bottom", "Front", "Back", "Binding",
+      "Piping", "Filling", "Lamination", "Platform", "Sleeper Flap".
+    NEVER put the fabric description here. If the source row says "Jersey
+    Knit" or "85% Modal Jersey Knit, 170 GSM" in the column you're tempted
+    to call component_type, that is fabric_type, not component_type.
+    A SKU like a sheet set typically has 3-4 fabric_consumption rows
+    sharing the same fabric_type but with DIFFERENT component_type
+    values (one per part). Mass-collapsing them under a single
+    component_type loses that part-level breakdown and breaks the
+    fabric working sheet.
+
+  fabric_consumption.fabric_type
+    The FABRIC DESCRIPTION — what material/construction/GSM. Examples:
+      "85% Modal & 10% Egyptian Cotton & 5% Spandex Jersey Knit, 170 GSM"
+      "100% Cotton Sateen, 300 TC"
+      "Polyester Microfiber, 90 GSM"
+    Multiple component_types within one SKU can share the same fabric_type.
+
+  accessory_consumption.category
+    Accessory CATEGORY: "Care Label", "Hang Tag", "Polybag", "Sticker",
+    "Insert Card", "Stiffener", "Zipper", "Thread", "Elastic", etc.
+    For accessories, the category IS the role — there isn't a separate
+    component_type field.
 
 Produce one tool call to "extract_master_data".
 

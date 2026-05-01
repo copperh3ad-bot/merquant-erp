@@ -591,37 +591,50 @@ export default function FileFeeder() {
           let ext = await fetchExtraction(data.extraction_id);
           if (!ext) throw new Error("Could not load the staged extraction");
 
-          // Master-data extractions often contain near-duplicate rows (one
-          // per garment part — flat sheet, fitted sheet, pillow case, sham
-          // — that all share the same item_code+component_type+color
-          // triple). The DB has a unique constraint on that triple, so the
-          // validator flags them as DUPLICATE_KEY errors and apply refuses.
-          // Dedupe BEFORE the user sees the card so the apply path is
-          // unblocked. consumption_per_unit is summed across parts so total
-          // fabric per SKU is preserved (which is what BOM explosion needs).
+          // Master-data extractions can contain rows that share the same DB
+          // unique key (item_code, component_type, color) for fabric_consumption.
+          // Two cases to handle differently:
+          //   - EXACT duplicates: every field identical → safe to collapse
+          //     silently (pure data-entry duplicates).
+          //   - KEY-only duplicates: same key but different consumption →
+          //     usually means the AI mis-categorised (e.g. all 4 parts of
+          //     a sheet set labelled with the same component_type). DO NOT
+          //     auto-sum: that loses per-part info irrecoverably. Flag for
+          //     the user instead so they can re-extract or fix manually.
           let dedupNotice = null;
+          let flaggedNotice = null;
           if (ext.kind === "master_data") {
             const { data: deduped, summary } = dedupeMasterData(ext.extracted_data || {});
-            const fabricCollapsed = summary.fabric.before - summary.fabric.after;
-            const accessoryCollapsed = summary.accessory.before - summary.accessory.after;
-            if (fabricCollapsed > 0 || accessoryCollapsed > 0) {
-              // Persist the deduped data + drop DUPLICATE_KEY validation
-              // issues + downgrade status from 'failed' to 'warned' if that
-              // was the only blocker.
+            const exactCollapsed =
+              (summary.fabric.before - summary.fabric.after - summary.fabric.flagged.length) +
+              (summary.accessory.before - summary.accessory.after - summary.accessory.flagged.length);
+            const flaggedCount = summary.fabric.flagged.length + summary.accessory.flagged.length;
+
+            if (exactCollapsed > 0 || flaggedCount > 0) {
               const { error: updErr } = await supabase
                 .from("ai_extractions")
                 .update({
                   extracted_data: deduped,
                   validation_issues: (ext.validation_issues || []).filter((i) => i?.code !== "DUPLICATE_KEY"),
                   validation_status: ext.validation_status === "failed" ? "warned" : ext.validation_status,
-                  review_notes: `[file-feeder ${new Date().toISOString().slice(0,10)}] auto-dedup: collapsed ${fabricCollapsed} fabric + ${accessoryCollapsed} accessory duplicate row(s); consumption_per_unit summed across parts.`,
+                  review_notes: `[file-feeder ${new Date().toISOString().slice(0,10)}] dedup: ${exactCollapsed} exact duplicate(s) collapsed; ${flaggedCount} group(s) flagged for review.`,
                 })
                 .eq("id", ext.id);
               if (updErr) {
                 console.warn("[FileFeeder] dedup update failed (non-fatal):", updErr);
               } else {
                 ext = await fetchExtraction(ext.id);
-                dedupNotice = `Auto-deduplicated ${fabricCollapsed} fabric + ${accessoryCollapsed} accessory row(s) with the same key.`;
+                if (exactCollapsed > 0) {
+                  dedupNotice = `Removed ${exactCollapsed} exact duplicate row(s) (every field matched).`;
+                }
+                if (flaggedCount > 0) {
+                  // Build a readable list of flagged keys for the notice.
+                  const samples = [...summary.fabric.flagged, ...summary.accessory.flagged]
+                    .slice(0, 3)
+                    .map((f) => `${f.key} (${f.rowCount} rows)`)
+                    .join(", ");
+                  flaggedNotice = `${flaggedCount} group(s) had different consumption values under the same key — likely an AI miscategorisation (e.g. multiple parts labelled with the same component_type). Kept the first row of each. Examples: ${samples}. Recommend opening in Review and either re-extracting or editing component_type per part before applying.`;
+                }
               }
             }
           }
@@ -634,9 +647,15 @@ export default function FileFeeder() {
                   Done. Here's what I found in <strong>{file.name}</strong>. Review and click <em>Validate &amp; Apply</em> to commit, or <em>Reject</em> to discard.
                 </p>
                 {dedupNotice && (
-                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">
+                  <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 mb-2">
+                    <CheckCircle2 className="w-3 h-3 inline mr-1" />
+                    {dedupNotice}
+                  </p>
+                )}
+                {flaggedNotice && (
+                  <p className="text-[11px] text-rose-800 bg-rose-50 border border-rose-300 rounded px-2 py-1 mb-2 leading-relaxed">
                     <AlertTriangle className="w-3 h-3 inline mr-1" />
-                    {dedupNotice} Consumption was summed so totals per SKU are preserved.
+                    <strong>Heads up — possible mis-categorisation:</strong> {flaggedNotice}
                   </p>
                 )}
                 <ExtractionValidationCard
