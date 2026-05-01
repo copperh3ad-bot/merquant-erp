@@ -1,0 +1,434 @@
+[
+  {
+    "id": "50b7a376-a1b1-42d1-8cfd-b1f3ebc4a873",
+    "name": "Woven Standard",
+    "product_type": "Woven",
+    "milestones": [
+      {
+        "name": "PO Confirmation",
+        "category": "PO",
+        "days_before_exfactory": 90
+      },
+      {
+        "name": "Fabric Booking to Mill",
+        "category": "Fabric",
+        "days_before_exfactory": 85
+      },
+      {
+        "name": "Lab Dip Submission",
+        "category": "Approvals",
+        "days_before_exfactory": 75
+      },
+      {
+        "name": "Strike-off Submission",
+        "category": "Approvals",
+        "days_before_exfactory": 70
+      },
+      {
+        "name": "Lab Dip Approval",
+        "category": "Approvals",
+        "days_before_exfactory": 62
+      },
+      {
+        "name": "Strike-off Approval",
+        "category": "Approvals",
+        "days_before_exfactory": 58
+      },
+      {
+        "name": "Trim & Accessory Order",
+        "category": "Trims",
+        "days_before_exfactory": 70
+      },
+      {
+        "name": "Fit Sample",
+        "category": "Sampling",
+        "days_before_exfactory": 50
+      },
+      {
+        "name": "PP Sample Dispatch",
+        "category": "Sampling",
+        "days_before_exfactory": 35
+      },
+      {
+        "name": "PP Sample Approval",
+        "category": "Approvals",
+        "days_before_exfactory": 25
+      },
+      {
+        "name": "Bulk Fabric In-house",
+        "category": "Fabric",
+        "days_before_exfactory": 45
+      },
+      {
+        "name": "Cutting Start",
+        "category": "Production",
+        "days_before_exfactory": 35
+      },
+      {
+        "name": "Stitching Complete",
+        "category": "Production",
+        "days_before_exfactory": 18
+      },
+      {
+        "name": "Finishing",
+        "category": "Production",
+        "days_before_exfactory": 12
+      },
+      {
+        "name": "Packing Complete",
+        "category": "Production",
+        "days_before_exfactory": 5
+      },
+      {
+        "name": "Final Inspection",
+        "category": "QC",
+        "days_before_exfactory": 3
+      },
+      {
+        "name": "Ex-Factory",
+        "category": "Shipping",
+        "days_before_exfactory": 0
+      },
+      {
+        "name": "Loading & ETD",
+        "category": "Shipping",
+        "days_before_exfactory": -2
+      }
+    ],
+    "created_at": "2026-04-15 18:12:33.637993+00"
+  },
+  {
+    "id": "53a2dddf-0220-4f97-80e2-398180641fe5",
+    "name": "Knit Standard",
+    "product_type": "Knit",
+    "milestones": [
+      {
+        "name": "PO Confirmation",
+        "category": "PO",
+        "days_before_exfactory": 70
+      },
+      {
+        "name": "Fabric Booking",
+        "category": "Fabric",
+        "days_before_exfactory": 65
+      },
+      {
+        "name": "Lab Dip Submission",
+        "category": "Approvals",
+        "days_before_exfactory": 60
+      },
+      {
+        "name": "Lab Dip Approval",
+        "category": "Approvals",
+        "days_before_exfactory": 50
+      },
+      {
+        "name": "Trim & Accessory Order",
+        "category": "Trims",
+        "days_before_exfactory": 55
+      },
+      {
+        "name": "Development Sample",
+        "category": "Sampling",
+        "days_before_exfactory": 45
+      },
+      {
+        "name": "Fit Sample",
+        "category": "Sampling",
+        "days_before_exfactory": 38
+      },
+      {
+        "name": "PP Sample Dispatch",
+        "category": "Sampling",
+        "days_before_exfactory": 28
+      },
+      {
+        "name": "PP Sample Approval",
+        "category": "Approvals",
+        "days_before_exfactory": 21
+      },
+      {
+        "name": "Bulk Fabric In-house",
+        "category": "Fabric",
+        "days_before_exfactory": 35
+      },
+      {
+        "name": "Cutting Start",
+        "category": "Production",
+        "days_before_exfactory": 28
+      },
+      {
+        "name": "Stitching Complete",
+        "category": "Production",
+        "days_before_exfactory": 14
+      },
+      {
+        "name": "Finishing & Washing",
+        "category": "Production",
+        "days_before_exfactory": 10
+      },
+      {
+        "name": "Packing Complete",
+        "category": "Production",
+        "days_before_exfactory": 5
+      },
+      {
+        "name": "Final Inspection",
+        "category": "QC",
+        "days_before_exfactory": 3
+      },
+      {
+        "name": "Ex-Factory",
+        "category": "Shipping",
+        "days_before_exfactory": 0
+      },
+      {
+        "name": "Loading & ETD",
+        "category": "Shipping",
+        "days_before_exfactory": -2
+      }
+    ],
+    "created_at": "2026-04-15 18:12:33.637993+00"
+  },
+  {
+    "id": "9c5df210-b746-44e9-baa4-e6bdd5cb38d9",
+    "name": "Standard Textile Export (60-day)",
+    "product_type": "Knit",
+    "milestones": [
+      {
+        "name": "PO Received",
+        "category": "PO",
+        "days_before_exfactory": 60
+      },
+      {
+        "name": "PO Acknowledged",
+        "category": "PO",
+        "days_before_exfactory": 58
+      },
+      {
+        "name": "Tech Pack Reviewed",
+        "category": "PO",
+        "days_before_exfactory": 57
+      },
+      {
+        "name": "Costing Approved",
+        "category": "PO",
+        "days_before_exfactory": 55
+      },
+      {
+        "name": "Fabric Booking",
+        "category": "Fabric",
+        "days_before_exfactory": 55
+      },
+      {
+        "name": "Yarn Procurement",
+        "category": "Fabric",
+        "days_before_exfactory": 52
+      },
+      {
+        "name": "Knitting Start",
+        "category": "Fabric",
+        "days_before_exfactory": 48
+      },
+      {
+        "name": "Knitting Complete",
+        "category": "Fabric",
+        "days_before_exfactory": 42
+      },
+      {
+        "name": "Lab Dip Submission",
+        "category": "Approvals",
+        "days_before_exfactory": 50
+      },
+      {
+        "name": "Lab Dip Approval",
+        "category": "Approvals",
+        "days_before_exfactory": 45
+      },
+      {
+        "name": "Strike-off Submission",
+        "category": "Approvals",
+        "days_before_exfactory": 42
+      },
+      {
+        "name": "Strike-off Approval",
+        "category": "Approvals",
+        "days_before_exfactory": 38
+      },
+      {
+        "name": "Fit Sample Submission",
+        "category": "Sampling",
+        "days_before_exfactory": 40
+      },
+      {
+        "name": "Fit Sample Approval",
+        "category": "Sampling",
+        "days_before_exfactory": 35
+      },
+      {
+        "name": "PP Sample Submission",
+        "category": "Sampling",
+        "days_before_exfactory": 30
+      },
+      {
+        "name": "PP Sample Approval",
+        "category": "Sampling",
+        "days_before_exfactory": 25
+      },
+      {
+        "name": "Trims Booking",
+        "category": "Trims",
+        "days_before_exfactory": 35
+      },
+      {
+        "name": "Trims In-house",
+        "category": "Trims",
+        "days_before_exfactory": 22
+      },
+      {
+        "name": "Dyeing Complete",
+        "category": "Fabric",
+        "days_before_exfactory": 35
+      },
+      {
+        "name": "Fabric In-house",
+        "category": "Fabric",
+        "days_before_exfactory": 28
+      },
+      {
+        "name": "Cutting Start",
+        "category": "Production",
+        "days_before_exfactory": 20
+      },
+      {
+        "name": "Sewing Start",
+        "category": "Production",
+        "days_before_exfactory": 18
+      },
+      {
+        "name": "Sewing Complete",
+        "category": "Production",
+        "days_before_exfactory": 8
+      },
+      {
+        "name": "Finishing Complete",
+        "category": "Production",
+        "days_before_exfactory": 5
+      },
+      {
+        "name": "In-line QC",
+        "category": "QC",
+        "days_before_exfactory": 12
+      },
+      {
+        "name": "Final QC / Pre-Shipment",
+        "category": "QC",
+        "days_before_exfactory": 3
+      },
+      {
+        "name": "QC Approval",
+        "category": "QC",
+        "days_before_exfactory": 2
+      },
+      {
+        "name": "Packing Complete",
+        "category": "Shipping",
+        "days_before_exfactory": 1
+      },
+      {
+        "name": "Ex-Factory",
+        "category": "Shipping",
+        "days_before_exfactory": 0
+      },
+      {
+        "name": "Shipped",
+        "category": "Shipping",
+        "days_before_exfactory": -3
+      }
+    ],
+    "created_at": "2026-04-18 17:25:33.666246+00"
+  },
+  {
+    "id": "b81a63fb-2c19-4756-8cbf-17c4629d0382",
+    "name": "Home Textile",
+    "product_type": "Home Textile",
+    "milestones": [
+      {
+        "name": "PO Confirmation",
+        "category": "PO",
+        "days_before_exfactory": 80
+      },
+      {
+        "name": "Yarn Booking",
+        "category": "Fabric",
+        "days_before_exfactory": 75
+      },
+      {
+        "name": "Lab Dip Submission",
+        "category": "Approvals",
+        "days_before_exfactory": 65
+      },
+      {
+        "name": "Lab Dip Approval",
+        "category": "Approvals",
+        "days_before_exfactory": 55
+      },
+      {
+        "name": "Accessory Order",
+        "category": "Trims",
+        "days_before_exfactory": 60
+      },
+      {
+        "name": "PP Sample Dispatch",
+        "category": "Sampling",
+        "days_before_exfactory": 40
+      },
+      {
+        "name": "PP Sample Approval",
+        "category": "Approvals",
+        "days_before_exfactory": 30
+      },
+      {
+        "name": "Weaving / Knitting Start",
+        "category": "Production",
+        "days_before_exfactory": 45
+      },
+      {
+        "name": "Fabric Processing Complete",
+        "category": "Production",
+        "days_before_exfactory": 25
+      },
+      {
+        "name": "Cutting & Stitching",
+        "category": "Production",
+        "days_before_exfactory": 20
+      },
+      {
+        "name": "Embroidery / Print",
+        "category": "Production",
+        "days_before_exfactory": 15
+      },
+      {
+        "name": "Packing Complete",
+        "category": "Production",
+        "days_before_exfactory": 5
+      },
+      {
+        "name": "Final Inspection",
+        "category": "QC",
+        "days_before_exfactory": 3
+      },
+      {
+        "name": "Ex-Factory",
+        "category": "Shipping",
+        "days_before_exfactory": 0
+      },
+      {
+        "name": "Loading & ETD",
+        "category": "Shipping",
+        "days_before_exfactory": -2
+      }
+    ],
+    "created_at": "2026-04-15 18:12:33.637993+00"
+  }
+]

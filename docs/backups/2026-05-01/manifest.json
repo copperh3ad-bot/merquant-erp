@@ -1,0 +1,98 @@
+{
+  "project": "jcbxmpgjirxqszodotmx",
+  "dumped_at": "2026-05-01T10:03:02.728Z",
+  "tables": [
+    {
+      "name": "ai_extractions",
+      "rows": 7,
+      "file": "data/ai_extractions.json",
+      "md5": "eaa6e8e4474191a04c851e480fa53f54"
+    },
+    {
+      "name": "articles",
+      "rows": 92,
+      "file": "data/articles.json",
+      "md5": "451df951ad303bdf9a205459b12bc092"
+    },
+    {
+      "name": "consumption_library",
+      "rows": 774,
+      "file": "data/consumption_library.json",
+      "md5": "41f6d3e72a075a18ba25bea9c562c5c7"
+    },
+    {
+      "name": "po_items",
+      "rows": 89,
+      "file": "data/po_items.json",
+      "md5": "61f1290afde63dad9805b031c1ca310b"
+    },
+    {
+      "name": "price_list",
+      "rows": 158,
+      "file": "data/price_list.json",
+      "md5": "07f673a20ddb66ee06dc440fce2d0164"
+    },
+    {
+      "name": "production_lines",
+      "rows": 2,
+      "file": "data/production_lines.json",
+      "md5": "052b4321a60fdcf13d1893afccccf1f0"
+    },
+    {
+      "name": "production_stages",
+      "rows": 5,
+      "file": "data/production_stages.json",
+      "md5": "6c23e32206e6d85d96aa867787cb8a8a"
+    },
+    {
+      "name": "purchase_orders",
+      "rows": 5,
+      "file": "data/purchase_orders.json",
+      "md5": "2cd480019bb0de4a61661071f69260d8"
+    },
+    {
+      "name": "signup_whitelist",
+      "rows": 1,
+      "file": "data/signup_whitelist.json",
+      "md5": "fe6e30de309badd6de1c74419f48b216"
+    },
+    {
+      "name": "status_logs",
+      "rows": 39,
+      "file": "data/status_logs.json",
+      "md5": "03a62c2d21bf786305519c81003b54aa"
+    },
+    {
+      "name": "suppliers",
+      "rows": 6,
+      "file": "data/suppliers.json",
+      "md5": "00fac5c40f75532ca0662d56172e5f65"
+    },
+    {
+      "name": "teams",
+      "rows": 5,
+      "file": "data/teams.json",
+      "md5": "b4e6647327176d97c999ecd4dd7a4e66"
+    },
+    {
+      "name": "tech_packs",
+      "rows": 47,
+      "file": "data/tech_packs.json",
+      "md5": "be43d4a947f5ff8a1c6902ccd8c93a15"
+    },
+    {
+      "name": "tna_templates",
+      "rows": 4,
+      "file": "data/tna_templates.json",
+      "md5": "062d993cd6e3f09a68b632acd3c53cfb"
+    }
+  ],
+  "schema": {
+    "tables": 73,
+    "views": 12,
+    "policies": 87,
+    "functions": 22,
+    "source": "migrations/up/0001_init.sql + 0002 → 0008",
+    "note": "Live schema is exactly the migration baseline + the normalize-trigger backfill applied during cutover"
+  }
+}

@@ -6,7 +6,7 @@ import {
   Inbox, ClipboardList, Calendar, Droplets, Package2, Shield, ShieldCheck,
   DollarSign, CreditCard, ShieldAlert, Shirt, Sun, Users,
   ClipboardCheck, FileSearch, FileBox, BookOpen, FileImage,
-  Briefcase, MessageSquare, TrendingUp, PackageCheck, Settings, Warehouse, ChevronDown, ChevronRight, Star
+  Briefcase, MessageSquare, TrendingUp, PackageCheck, Settings, Warehouse, ChevronDown, ChevronRight, Star, Upload
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import UserMenu from "@/components/shared/UserMenu";
@@ -15,6 +15,7 @@ import { skuQueue, tna, labDips, supabase } from "@/api/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
 
 const ALL_NAV = [
+  { group: "",               name: "File Feeder",              icon: Upload,           page: "FileFeeder",            accent: true, pinned: true },
   { group: "",               name: "AI Assistant",             icon: Sparkles,         page: "AIAssistant",            permission: "AI_DATA_QUERY", accent: true, pinned: true },
   // ── Orders & Planning ──────────────────────────────────────────
   { group: "Orders",          name: "Dashboard",                icon: LayoutDashboard,  page: "Dashboard" },

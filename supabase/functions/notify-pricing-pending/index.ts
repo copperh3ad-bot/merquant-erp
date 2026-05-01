@@ -11,8 +11,12 @@
 //   { rows: [{ item_code: string, description?: string, effective_from?: string }] }
 //
 // Env vars (shared with user-approval):
-//   RESEND_API_KEY, APP_URL, OWNER_EMAIL, EMAIL_FROM
+//   RESEND_API_KEY, APP_URL, OWNER_EMAIL, EMAIL_FROM, SUPABASE_URL, SUPABASE_ANON_KEY
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const SUPABASE_URL      = Deno.env.get("SUPABASE_URL") || "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const RESEND_KEY  = Deno.env.get("RESEND_API_KEY") || "";
 const APP_URL     = Deno.env.get("APP_URL") || "https://merquanterp.netlify.app";
 const OWNER_EMAIL = Deno.env.get("OWNER_EMAIL") || "waqas.ahmed@unionfabrics.com";
@@ -104,6 +108,24 @@ function escapeHtml(s: unknown): string {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return j({ error: "method_not_allowed" }, 405);
+
+  // Auth gate. Without this, anyone on the internet could POST to this
+  // function and spam OWNER_EMAIL via Resend (and risk Resend rate-limiting
+  // the sending domain). verify_jwt: true is also set at the platform level
+  // — both layers in place as defence in depth.
+  const auth = req.headers.get("Authorization") || "";
+  if (!auth) return j({ error: "unauthorised" }, 401);
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return j({ error: "auth_backend_misconfigured" }, 500);
+  }
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: auth } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData?.user) {
+    return j({ error: "unauthorised", detail: userErr?.message ?? "no user" }, 401);
+  }
 
   let body: { rows?: Array<{ item_code: string; description?: string; effective_from?: string }> };
   try {

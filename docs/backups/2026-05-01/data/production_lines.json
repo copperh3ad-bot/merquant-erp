@@ -1,0 +1,24 @@
+[
+  {
+    "id": "5a32e9fb-fca8-4d5d-ace8-bcd76c92736d",
+    "name": "Line 1",
+    "line_type": "stitching",
+    "daily_capacity": 500,
+    "operator_count": 15,
+    "is_active": true,
+    "notes": "Main stitching line",
+    "created_at": "2026-04-20 21:07:23.054548+00",
+    "updated_at": "2026-04-20 21:07:23.054548+00"
+  },
+  {
+    "id": "f737c4bd-d7d8-4fbd-a715-f6db5851020f",
+    "name": "Line A - Encasement",
+    "line_type": "Cut & Sew",
+    "daily_capacity": 400,
+    "operator_count": 12,
+    "is_active": true,
+    "notes": "Total encasement assembly",
+    "created_at": "2026-04-24 18:25:17.766274+00",
+    "updated_at": "2026-04-24 18:25:17.766274+00"
+  }
+]

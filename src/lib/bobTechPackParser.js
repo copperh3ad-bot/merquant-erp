@@ -472,15 +472,7 @@ function toFabricSpecs(fabrications, trims) {
 
 // Main parse entry point
 export async function parseBobTechPack(file) {
-  if (!window.XLSX) {
-    await new Promise((res, rej) => {
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-      s.onload = res; s.onerror = rej;
-      document.head.appendChild(s);
-    });
-  }
-  const XLSX = window.XLSX;
+  const XLSX = await import("xlsx");
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array" });
 

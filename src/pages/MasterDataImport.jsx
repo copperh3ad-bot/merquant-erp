@@ -13,17 +13,6 @@ import ValidationReport from "@/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
 import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
 
-async function loadSheetJS() {
-  if (window.XLSX) return window.XLSX;
-  await new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-    s.onload = res; s.onerror = rej;
-    document.head.appendChild(s);
-  });
-  return window.XLSX;
-}
-
 // AI extraction for non-XLSX formats (PDF, images, text, CSV)
 // Returns an object structured like { sheet_name: [row_objects] }
 async function extractMasterDataFromAI(file) {
@@ -439,6 +428,11 @@ export default function MasterData() {
 
   const handleFile = async (f) => {
     if (!f) return;
+    if (f.size > 10 * 1024 * 1024) {
+      setStage("error");
+      setMessage(`${f.name} is ${(f.size / (1024 * 1024)).toFixed(1)} MB. Max 10 MB.`);
+      return;
+    }
     setStage("parsing"); setMessage(`Reading ${f.name}…`);
     try {
       const ext = f.name.split('.').pop().toLowerCase();
@@ -453,7 +447,7 @@ export default function MasterData() {
       if (isXLSX) {
         // Original XLSX path
         setMessage(`Parsing ${f.name}…`);
-        const XLSX = await loadSheetJS();
+        const XLSX = await import("xlsx");
         const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
         for (const sheetName of SHEET_ORDER) {
           const rows = readSheet(XLSX, wb, sheetName);
@@ -693,7 +687,7 @@ export default function MasterData() {
   const handleExport = async () => {
     setStage("importing"); setMessage("Exporting current data…");
     try {
-      const XLSX = await loadSheetJS();
+      const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
       for (const sheetName of SHEET_ORDER) {
         const cfg = SHEETS[sheetName];

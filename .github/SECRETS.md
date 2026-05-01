@@ -6,7 +6,7 @@ Go to: Settings → Secrets and variables → Actions → New repository secret
 
 | Secret | Value |
 |--------|-------|
-| `VITE_SUPABASE_URL` | `https://ecjqdyruwqlesfthgphv.supabase.co` |
+| `VITE_SUPABASE_URL` | `https://jcbxmpgjirxqszodotmx.supabase.co` |
 | `VITE_SUPABASE_ANON_KEY` | Your Supabase project anon key (from Supabase → Settings → API) |
 
 ## Optional (Netlify backup deploy)
