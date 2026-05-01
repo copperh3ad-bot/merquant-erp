@@ -66,6 +66,21 @@ function fmtTime(d = new Date()) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// Guess extraction kind from filename. Master-data files usually contain
+// "master", "consumption", "price", "supplier", etc.; everything else
+// defaults to tech_pack. The user can always override via the selector.
+function guessKindFromFilename(name) {
+  const n = (name || "").toLowerCase();
+  if (/master.?data|consumption|price.?list|supplier|article.?master|carton.?master/.test(n)) {
+    return "master_data";
+  }
+  if (/tech.?pack|tp|spec|pillow.?protector|encasement|sheet.?set|sheet|comforter|duvet|skirt|throw|sham/.test(n)) {
+    return "tech_pack";
+  }
+  // Default: tech pack — most uploads are tech packs.
+  return "tech_pack";
+}
+
 // ── Subcomponents ───────────────────────────────────────────────────────────
 
 function AssistantBubble({ children, time }) {
@@ -113,24 +128,28 @@ function FileChip({ file }) {
 }
 
 // ── Validation card ─────────────────────────────────────────────────────────
+//
+// Renders a different summary table depending on extraction.kind:
+//   tech_pack   → skus, fabric_specs, trim_specs, accessory_specs, labels
+//   master_data → articles, fabric_consumption, accessory_consumption,
+//                 carton_master, price_list, suppliers, seasons,
+//                 production_lines
 
 function ExtractionValidationCard({ extraction, onApply, onReject, onOpenReview, busy }) {
   const data = extraction.extracted_data || {};
-  const skus = data.skus || [];
-  const fabricSpecs = data.fabric_specs || [];
-  const trimSpecs = data.trim_specs || [];
-  const accessorySpecs = data.accessory_specs || [];
-  const labels = data.labels || [];
-  const confidence = data._confidence?.overall ?? extraction.confidence_score;
+  const kind = extraction.kind;
+  const confidence = data._confidence?.overall;
 
-  const sectionCount =
-    (skus.length > 0 ? 1 : 0) +
-    (fabricSpecs.length > 0 ? 1 : 0) +
-    (trimSpecs.length > 0 ? 1 : 0) +
-    (accessorySpecs.length > 0 ? 1 : 0) +
-    (labels.length > 0 ? 1 : 0);
+  // Build section list polymorphically. Each section becomes a SummaryRow
+  // showing count + first few sample identifiers.
+  const sections = kind === "master_data"
+    ? buildMasterDataSections(data)
+    : buildTechPackSections(data);
 
+  const sectionCount = sections.filter((s) => s.count > 0).length;
   const lowConfidence = confidence != null && confidence < 0.6;
+
+  const kindLabel = kind === "master_data" ? "Master data" : "Tech pack";
 
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
@@ -138,7 +157,7 @@ function ExtractionValidationCard({ extraction, onApply, onReject, onOpenReview,
         <div>
           <div className="text-sm font-bold">{extraction.file_name}</div>
           <div className="text-xs text-muted-foreground mt-0.5">
-            Tech pack · {sectionCount} section{sectionCount !== 1 ? "s" : ""} extracted
+            {kindLabel} · {sectionCount} section{sectionCount !== 1 ? "s" : ""} extracted
           </div>
         </div>
         {confidence != null && (
@@ -158,41 +177,13 @@ function ExtractionValidationCard({ extraction, onApply, onReject, onOpenReview,
       </div>
 
       <div className="px-4 py-3 space-y-2">
-        {skus.length > 0 && (
-          <SummaryRow
-            label={`${skus.length} SKU${skus.length !== 1 ? "s" : ""}`}
-            sample={skus.slice(0, 5).map((s) => s.item_code).filter(Boolean).join(", ") +
-              (skus.length > 5 ? ` (+${skus.length - 5})` : "")}
-          />
-        )}
-        {fabricSpecs.length > 0 && (
-          <SummaryRow
-            label={`${fabricSpecs.length} fabric component${fabricSpecs.length !== 1 ? "s" : ""}`}
-            sample={fabricSpecs.slice(0, 3).map((f) => f.component_type || f.fabric_type).filter(Boolean).join(", ")}
-          />
-        )}
-        {trimSpecs.length > 0 && (
-          <SummaryRow
-            label={`${trimSpecs.length} trim${trimSpecs.length !== 1 ? "s" : ""}`}
-            sample={trimSpecs.slice(0, 3).map((t) => t.trim_type || t.description).filter(Boolean).join(", ")}
-          />
-        )}
-        {accessorySpecs.length > 0 && (
-          <SummaryRow
-            label={`${accessorySpecs.length} accessor${accessorySpecs.length !== 1 ? "ies" : "y"}`}
-            sample={accessorySpecs.slice(0, 3).map((a) => a.accessory_type || a.description).filter(Boolean).join(", ")}
-          />
-        )}
-        {labels.length > 0 && (
-          <SummaryRow
-            label={`${labels.length} label${labels.length !== 1 ? "s" : ""}`}
-            sample={labels.slice(0, 3).map((l) => l.type || l.section).filter(Boolean).join(", ")}
-          />
-        )}
+        {sections.filter((s) => s.count > 0).map((s) => (
+          <SummaryRow key={s.label} label={`${s.count} ${s.label}`} sample={s.sample} />
+        ))}
         {sectionCount === 0 && (
           <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
             <AlertTriangle className="w-3 h-3 inline mr-1" />
-            No structured data found — likely not a tech pack, or AI couldn't parse it. Open in full review to inspect raw output.
+            No structured data found. AI couldn't parse meaningful content from this file. Open in full review to inspect raw output.
           </div>
         )}
       </div>
@@ -223,6 +214,45 @@ function ExtractionValidationCard({ extraction, onApply, onReject, onOpenReview,
       </div>
     </div>
   );
+}
+
+function buildTechPackSections(data) {
+  const sample = (arr, fieldGetters, n = 5) =>
+    arr.slice(0, n).map((r) => {
+      for (const get of fieldGetters) {
+        const v = get(r);
+        if (v) return v;
+      }
+      return null;
+    }).filter(Boolean).join(", ") + (arr.length > n ? ` (+${arr.length - n})` : "");
+  return [
+    { label: "SKU(s)",                    count: (data.skus || []).length,            sample: sample(data.skus || [],            [(r) => r.item_code]) },
+    { label: "fabric component(s)",       count: (data.fabric_specs || []).length,    sample: sample(data.fabric_specs || [],    [(r) => r.component_type, (r) => r.fabric_type], 3) },
+    { label: "trim(s)",                   count: (data.trim_specs || []).length,      sample: sample(data.trim_specs || [],      [(r) => r.trim_type, (r) => r.description], 3) },
+    { label: "accessor(ies)",             count: (data.accessory_specs || []).length, sample: sample(data.accessory_specs || [], [(r) => r.accessory_type, (r) => r.description], 3) },
+    { label: "label(s)",                  count: (data.labels || []).length,          sample: sample(data.labels || [],          [(r) => r.type, (r) => r.section], 3) },
+  ];
+}
+
+function buildMasterDataSections(data) {
+  const sample = (arr, fieldGetters, n = 5) =>
+    arr.slice(0, n).map((r) => {
+      for (const get of fieldGetters) {
+        const v = get(r);
+        if (v) return v;
+      }
+      return null;
+    }).filter(Boolean).join(", ") + (arr.length > n ? ` (+${arr.length - n})` : "");
+  return [
+    { label: "article(s)",                count: (data.articles || []).length,              sample: sample(data.articles || [],              [(r) => r.item_code]) },
+    { label: "fabric consumption row(s)", count: (data.fabric_consumption || []).length,    sample: sample(data.fabric_consumption || [],    [(r) => `${r.item_code}/${r.component_type}`], 3) },
+    { label: "accessory consumption row(s)", count: (data.accessory_consumption || []).length, sample: sample(data.accessory_consumption || [], [(r) => `${r.item_code}/${r.category}`], 3) },
+    { label: "carton master row(s)",      count: (data.carton_master || []).length,         sample: sample(data.carton_master || [],         [(r) => r.item_code]) },
+    { label: "price list row(s)",         count: (data.price_list || []).length,            sample: sample(data.price_list || [],            [(r) => r.item_code]) },
+    { label: "supplier(s)",               count: (data.suppliers || []).length,             sample: sample(data.suppliers || [],             [(r) => r.name]) },
+    { label: "season(s)",                 count: (data.seasons || []).length,               sample: sample(data.seasons || [],               [(r) => r.name]) },
+    { label: "production line(s)",        count: (data.production_lines || []).length,      sample: sample(data.production_lines || [],      [(r) => r.name]) },
+  ];
 }
 
 function SummaryRow({ label, sample }) {
@@ -326,10 +356,13 @@ export default function FileFeeder() {
         <div>
           <p className="font-semibold text-foreground mb-1">Welcome to File Feeder.</p>
           <p>
-            Drop a tech pack file here — XLSX, PDF, or photos of paper tech packs. I'll parse it (including any embedded images), then show you what I found before anything gets saved.
+            Drop a file here — tech packs (XLSX, PDF, photos) or master-data sheets (consumption library, price list, suppliers). I'll parse it, then show you what I found before anything gets saved.
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
             <strong>Validation gate:</strong> nothing is written to the database until you click <em>Validate &amp; Apply</em> on each file.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Use the <strong>type selector</strong> in the top right if I guess wrong about what kind of file you're uploading.
           </p>
         </div>
       ),
@@ -338,6 +371,9 @@ export default function FileFeeder() {
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [applyingId, setApplyingId] = useState(null);
+  // Selected file kind for the next upload. "auto" lets us guess from the
+  // filename; otherwise pin the kind explicitly.
+  const [kindOverride, setKindOverride] = useState("auto");
 
   // Scroll to bottom on every new message.
   useEffect(() => {
@@ -359,20 +395,30 @@ export default function FileFeeder() {
 
   const handleFiles = useCallback(
     async (files) => {
-      const list = Array.from(files);
-      if (list.length === 0) return;
+      console.log("[FileFeeder] handleFiles entered, count:", files?.length);
+      const list = Array.from(files || []);
+      if (list.length === 0) {
+        console.warn("[FileFeeder] handleFiles called with empty list");
+        return;
+      }
+      console.log("[FileFeeder] files:", list.map((f) => ({ name: f.name, size: f.size, type: f.type })));
 
       // Echo what the user dropped as a user bubble.
-      append({
-        type: "user",
-        content: (
-          <div className="flex flex-wrap gap-1.5">
-            {list.map((f, i) => (
-              <FileChip key={i} file={f} />
-            ))}
-          </div>
-        ),
-      });
+      try {
+        append({
+          type: "user",
+          content: (
+            <div className="flex flex-wrap gap-1.5">
+              {list.map((f, i) => (
+                <FileChip key={i} file={f} />
+              ))}
+            </div>
+          ),
+        });
+        console.log("[FileFeeder] user bubble appended");
+      } catch (err) {
+        console.error("[FileFeeder] FAILED to append user bubble:", err);
+      }
 
       setBusy(true);
 
@@ -447,20 +493,24 @@ export default function FileFeeder() {
 
         // Call the edge function.
         try {
+          console.log("[FileFeeder] Starting:", file.name, file.type, file.size);
           // Phase 1: read file → base64. For tiny files this is fast; for
           // 8–10 MB files it can take a second or two. We update percent in
           // 25/50/75/100 bands so the bar visibly moves.
           setPhase("reading", 10);
           const b64 = await fileToBase64(file);
+          console.log("[FileFeeder] base64 length:", b64.length);
           setPhase("reading", 100);
 
           // Phase 2: hand off to the edge function (network upload).
           // supabase.functions.invoke doesn't expose upload progress, but
           // the indeterminate pulse + phase label communicates the handoff.
           setPhase("uploading");
+          const kind = kindOverride === "auto" ? guessKindFromFilename(file.name) : kindOverride;
+          console.log("[FileFeeder] kind:", kind, "(override:", kindOverride, ")");
           const invokePromise = supabase.functions.invoke("extract-document", {
             body: {
-              kind: "tech_pack",
+              kind,
               file_name: file.name,
               file_mime: file.type || "application/octet-stream",
               file_size_bytes: file.size,
@@ -473,10 +523,15 @@ export default function FileFeeder() {
           setTimeout(() => setPhase("parsing"), 1500);
 
           const { data, error } = await invokePromise;
+          console.log("[FileFeeder] invoke result:", { data, error });
 
           if (error) {
             setPhase("error");
-            throw new Error(error.message || "Edge function call failed");
+            throw new Error(error.message || error.name || "Edge function call failed");
+          }
+          if (!data) {
+            setPhase("error");
+            throw new Error("Edge function returned empty response");
           }
           setPhase("done", 100);
 
@@ -534,6 +589,7 @@ export default function FileFeeder() {
             ),
           });
         } catch (e) {
+          console.error("[FileFeeder] EXCEPTION for", file.name, e);
           setPhase("error");
           append({
             type: "assistant",
@@ -541,6 +597,9 @@ export default function FileFeeder() {
               <div className="text-rose-800 bg-rose-50 border border-rose-200 rounded p-2 text-xs">
                 <AlertTriangle className="w-3 h-3 inline mr-1" />
                 <strong>{file.name}:</strong> {e.message || String(e)}
+                <div className="text-[10px] text-rose-600 mt-1 font-mono">
+                  Check browser DevTools console (F12) for full stack trace.
+                </div>
               </div>
             ),
           });
@@ -549,13 +608,16 @@ export default function FileFeeder() {
 
       setBusy(false);
     },
-    [append, applyingId, navigate],
+    [append, applyingId, navigate, kindOverride, updateMessage],
   );
 
   async function fetchExtraction(id) {
+    // ai_extractions schema (migration 0002): no confidence_score column
+    // — overall confidence lives inside extracted_data._confidence.overall.
+    // The validation column is `validation_issues` (jsonb), not validation_errors.
     const { data, error } = await supabase
       .from("ai_extractions")
-      .select("id, file_name, kind, extracted_data, confidence_score, review_status, validation_status, validation_errors")
+      .select("id, file_name, kind, extracted_data, review_status, validation_status, validation_issues")
       .eq("id", id)
       .maybeSingle();
     if (error) {
@@ -568,27 +630,61 @@ export default function FileFeeder() {
   async function doApply(ext) {
     setApplyingId(ext.id);
     try {
-      const skuCodes = (ext.extracted_data?.skus ?? []).map((s) => s.item_code).filter(Boolean);
-      const { data, error } = await supabase.rpc("fn_apply_tech_pack_extraction", {
-        p_extraction_id: ext.id,
-        p_sku_codes: skuCodes,
-      });
-      if (error) throw error;
-      if (!data?.ok) {
-        throw new Error(data?.user_message || data?.code || "Apply failed");
+      let data, error, createdSummary;
+      if (ext.kind === "master_data") {
+        // Master data goes through fn_apply_master_data_extraction with a
+        // row filter naming every row to apply. p_force=false means the
+        // RPC will refuse to overwrite existing rows; we surface that via
+        // the conflict path. p_dry_run=false means commit on success.
+        const filter = buildAllRowsFilter(ext.extracted_data);
+        ({ data, error } = await supabase.rpc("fn_apply_master_data_extraction", {
+          p_extraction_id: ext.id,
+          p_row_filter: filter,
+          p_force: false,
+          p_dry_run: false,
+        }));
+        if (error) throw error;
+        if (data?.code === "APPLY_TARGET_CONFLICT") {
+          // Some rows already exist with different values. Direct user
+          // to the full Review page where they can resolve per-row.
+          throw new Error(
+            `${data?.dev_detail?.conflict_count ?? "Some"} row(s) conflict with existing data. Open in full review to resolve.`,
+          );
+        }
+        if (!data?.ok) {
+          throw new Error(data?.user_message || data?.code || "Apply failed");
+        }
+        const counts = data?.dev_detail?.applied_counts ?? {};
+        const parts = Object.entries(counts).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${k.replaceAll("_", " ")}`);
+        createdSummary = parts.length ? parts.join(", ") : "no rows";
+      } else {
+        // Tech pack
+        const skuCodes = (ext.extracted_data?.skus ?? []).map((s) => s.item_code).filter(Boolean);
+        ({ data, error } = await supabase.rpc("fn_apply_tech_pack_extraction", {
+          p_extraction_id: ext.id,
+          p_sku_codes: skuCodes,
+        }));
+        if (error) throw error;
+        if (!data?.ok) {
+          throw new Error(data?.user_message || data?.code || "Apply failed");
+        }
+        createdSummary = data?.dev_detail?.created_count ? `${data.dev_detail.created_count} record(s) created` : "applied";
       }
+
       append({
         type: "assistant",
         content: (
           <div className="text-emerald-800 bg-emerald-50 border border-emerald-200 rounded p-2 text-xs">
             <CheckCircle2 className="w-3.5 h-3.5 inline mr-1" />
-            Applied <strong>{ext.file_name}</strong> to the system.{" "}
-            {data?.dev_detail?.created_count ? `${data.dev_detail.created_count} record(s) created.` : ""}
+            Applied <strong>{ext.file_name}</strong> to the system. {createdSummary && <span className="font-mono">({createdSummary})</span>}
           </div>
         ),
       });
       qc.invalidateQueries({ queryKey: ["ai_extractions"] });
       qc.invalidateQueries({ queryKey: ["techPacks"] });
+      qc.invalidateQueries({ queryKey: ["consumption_library"] });
+      qc.invalidateQueries({ queryKey: ["articles"] });
+      qc.invalidateQueries({ queryKey: ["price_list"] });
     } catch (e) {
       append({
         type: "assistant",
@@ -602,6 +698,29 @@ export default function FileFeeder() {
     } finally {
       setApplyingId(null);
     }
+  }
+
+  // Helper for master-data apply: build a row-filter that selects every row
+  // in every section. Mirrors buildAllRowsFilter from AIExtractionReview.jsx.
+  function buildAllRowsFilter(extracted) {
+    const f = {};
+    if (Array.isArray(extracted?.articles) && extracted.articles.length)
+      f.articles = extracted.articles.map((r) => r.item_code).filter(Boolean);
+    if (Array.isArray(extracted?.fabric_consumption) && extracted.fabric_consumption.length)
+      f.fabric_consumption = extracted.fabric_consumption.map((r) => ({ item_code: r.item_code, component_type: r.component_type, color: r.color ?? "" }));
+    if (Array.isArray(extracted?.accessory_consumption) && extracted.accessory_consumption.length)
+      f.accessory_consumption = extracted.accessory_consumption.map((r) => ({ item_code: r.item_code, category: r.category, material: r.material ?? "" }));
+    if (Array.isArray(extracted?.carton_master) && extracted.carton_master.length)
+      f.carton_master = extracted.carton_master.map((r) => r.item_code).filter(Boolean);
+    if (Array.isArray(extracted?.price_list) && extracted.price_list.length)
+      f.price_list = extracted.price_list.map((r) => r.item_code).filter(Boolean);
+    if (Array.isArray(extracted?.suppliers) && extracted.suppliers.length)
+      f.suppliers = extracted.suppliers.map((r) => r.name).filter(Boolean);
+    if (Array.isArray(extracted?.seasons) && extracted.seasons.length)
+      f.seasons = extracted.seasons.map((r) => r.name).filter(Boolean);
+    if (Array.isArray(extracted?.production_lines) && extracted.production_lines.length)
+      f.production_lines = extracted.production_lines.map((r) => r.name).filter(Boolean);
+    return f;
   }
 
   async function doReject(ext) {
@@ -665,18 +784,41 @@ export default function FileFeeder() {
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-background">
+      <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-background gap-4 flex-wrap">
         <div>
           <h1 className="text-lg font-bold flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-primary" /> File Feeder
           </h1>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Drop tech-pack files. AI parses them. You validate before anything is saved.
+            Drop tech packs, master data, or photos. AI parses. You validate.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => navigate("/AIExtractionReview")} className="gap-1">
-          <ExternalLink className="w-3.5 h-3.5" /> All extractions
-        </Button>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Type:</span>
+          <div className="inline-flex rounded-lg border border-border overflow-hidden">
+            {[
+              { id: "auto",        label: "Auto-detect" },
+              { id: "tech_pack",   label: "Tech Pack" },
+              { id: "master_data", label: "Master Data" },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setKindOverride(opt.id)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  kindOverride === opt.id
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-card text-foreground hover:bg-muted"
+                }`}
+                disabled={busy}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <Button variant="outline" size="sm" onClick={() => navigate("/AIExtractionReview")} className="gap-1 ml-1">
+            <ExternalLink className="w-3.5 h-3.5" /> All extractions
+          </Button>
+        </div>
       </div>
 
       <div
@@ -711,11 +853,15 @@ export default function FileFeeder() {
           accept={ACCEPTED_EXTS.join(",")}
           multiple
           onChange={(e) => {
-            const files = e.target.files;
+            console.log("[FileFeeder] file input onChange fired, files:", e.target.files?.length);
+            // Snapshot files BEFORE clearing the input — Chrome and
+            // Firefox empty the FileList when input.value is reset, even
+            // through a captured reference.
+            const filesArr = e.target.files ? Array.from(e.target.files) : [];
             e.target.value = "";
-            if (files?.length) handleFiles(files);
+            if (filesArr.length) handleFiles(filesArr);
           }}
-          className="hidden"
+          style={{ display: "none" }}
         />
         <div className="flex items-center gap-2">
           <Button
