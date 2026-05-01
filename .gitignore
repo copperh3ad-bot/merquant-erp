@@ -63,3 +63,8 @@ supabase/.branches/
 # Buyer artifacts (don't commit)
 *.zip
 merquant-master-data-*.xlsx
+.supabase-token
+
+# Migration tooling work-products (regeneratable)
+scripts/clean-migrations-tmp/
+scripts/init-chunks/

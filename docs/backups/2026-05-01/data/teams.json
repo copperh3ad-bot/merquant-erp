@@ -1,0 +1,62 @@
+[
+  {
+    "id": "35310909-05a8-460a-8e49-69c9d6bedb07",
+    "name": "Merchandising",
+    "department": "Merchandising",
+    "description": "Handles PO management, buyer communication, and costing",
+    "manager_id": null,
+    "created_at": "2026-04-15 18:30:04.915961+00",
+    "updated_at": "2026-04-24 12:46:48.277038+00",
+    "line_manager_id": null,
+    "color": "#6366f1",
+    "is_active": true
+  },
+  {
+    "id": "53d95d2b-5a78-446b-bdad-0f02bc8c2e97",
+    "name": "Production",
+    "department": "Production",
+    "description": "Factory coordination, job cards, and output tracking",
+    "manager_id": null,
+    "created_at": "2026-04-15 18:30:04.915961+00",
+    "updated_at": "2026-04-16 08:40:13.869799+00",
+    "line_manager_id": null,
+    "color": "#10b981",
+    "is_active": true
+  },
+  {
+    "id": "67434252-6d5c-4513-9742-eff216f0e868",
+    "name": "Quality Control",
+    "department": "QC",
+    "description": "Inspections, lab dips, and compliance",
+    "manager_id": null,
+    "created_at": "2026-04-15 18:30:04.915961+00",
+    "updated_at": "2026-04-16 08:40:13.869799+00",
+    "line_manager_id": null,
+    "color": "#f59e0b",
+    "is_active": true
+  },
+  {
+    "id": "7e3b5332-dda8-46c1-a8fb-d63dbf281621",
+    "name": "Finance",
+    "department": "Finance",
+    "description": "Costing, payments, and LC management",
+    "manager_id": null,
+    "created_at": "2026-04-15 18:30:04.915961+00",
+    "updated_at": "2026-04-16 08:40:13.869799+00",
+    "line_manager_id": null,
+    "color": "#ec4899",
+    "is_active": true
+  },
+  {
+    "id": "d1ee7ba7-a88c-4006-9865-fa7094ca9ae9",
+    "name": "Sourcing",
+    "department": "Sourcing",
+    "description": "Fabric procurement, yarn, and trim sourcing",
+    "manager_id": null,
+    "created_at": "2026-04-15 18:30:04.915961+00",
+    "updated_at": "2026-04-16 08:40:13.869799+00",
+    "line_manager_id": null,
+    "color": "#3b82f6",
+    "is_active": true
+  }
+]
