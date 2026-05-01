@@ -33,17 +33,10 @@ export default function UploadPackagingSheet({ onSuccess }) {
     let text = "";
     if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
       try {
-        if (!window.XLSX) {
-          await new Promise((res, rej) => {
-            const s = document.createElement("script");
-            s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-            s.onload = res; s.onerror = rej;
-            document.head.appendChild(s);
-          });
-        }
+        const XLSX = await import("xlsx");
         const buf = await file.arrayBuffer();
-        const wb = window.XLSX.read(buf, { type: "array" });
-        text = window.XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+        const wb = XLSX.read(buf, { type: "array" });
+        text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
       } catch (e) {
         setStatus("error"); setMessage("Could not read Excel file: " + e.message); return;
       }

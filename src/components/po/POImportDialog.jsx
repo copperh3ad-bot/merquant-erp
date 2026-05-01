@@ -45,19 +45,11 @@ async function readFileAsText(file) {
 }
 
 async function readXLSX(file) {
-  // Dynamically load SheetJS from CDN
-  if (!window.XLSX) {
-    await new Promise((res, rej) => {
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-      s.onload = res; s.onerror = rej;
-      document.head.appendChild(s);
-    });
-  }
+  const XLSX = await import("xlsx");
   const buf = await file.arrayBuffer();
-  const wb = window.XLSX.read(buf, { type: "array" });
+  const wb = XLSX.read(buf, { type: "array" });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  return window.XLSX.utils.sheet_to_csv(ws);
+  return XLSX.utils.sheet_to_csv(ws);
 }
 
 async function extractTextFromPDF(file) {
