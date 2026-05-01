@@ -12,6 +12,7 @@ import FabricEditDialog from "@/components/fabric/FabricEditDialog";
 import ArticleFabricSetup from "@/components/fabric/ArticleFabricSetup";
 import EmptyState from "@/components/shared/EmptyState";
 import { getColorLabel, getBaseCode } from "@/lib/articleUtils";
+import { canonicalPartName } from "@/lib/partNameCanonical";
 import { useArticleComponentUpdate } from "@/hooks/useArticleComponentUpdate";
 import { isFabricComponentWithWarn } from "@/lib/fabricClassifier";
 
@@ -145,23 +146,34 @@ export default function FabricWorking() {
   // which renders as a dash in the UI. The optional `part` argument (e.g.
   // "Flat Sheet", "Fitted Sheet", "Pillow Case") narrows the lookup to that
   // specific component for sheet-set tech packs that store per-part dimensions.
-  // Try to find a part dimension in a Map<partKey, dim>, with fuzzy fallback:
-  //   exact match  →  return
-  //   no match     →  strip parenthesized qualifier from partKey and retry
-  //                   (e.g. "Fitted Sheet (Split Head)" → "Fitted Sheet" matches
-  //                   the tech-pack key "Fitted Sheet")
-  //   still none   →  null
+  // Try to find a part dimension in a Map<partKey, dim>, with multi-strategy
+  // fuzzy fallback:
+  //   1. exact key match
+  //   2. canonicalise the requested partKey via partNameCanonical and retry
+  //   3. canonicalise EVERY map key and find one that matches our canonical
+  //
+  // Step 3 catches the case where the tech pack stored a non-canonical key
+  // (e.g. AI emitted "Top Sheet" instead of "Flat Sheet") and the article
+  // uses the canonical name. Step 2 catches the inverse.
+  //
+  // Both partKey and the map keys arrive here already lowercase-normalised
+  // by normalizeSizeKey; we pass them through canonicalPartName which is
+  // case-insensitive.
   const resolvePartFuzzy = (partMap, partKey) => {
     if (!partMap || !partKey) return null;
     const direct = partMap.get(partKey);
     if (direct) return direct;
-    // Strip "(qualifier)" from the part key. The tech-pack typically uses
-    // the bare part name; the article's component_type may add a qualifier
-    // (Split Head, 2pc Split, etc.) for SKU-specific shapes.
-    const stripped = partKey.replace(/\s*\([^)]*\)\s*$/, "").trim();
-    if (stripped && stripped !== partKey) {
-      const hit = partMap.get(stripped);
-      if (hit) return hit;
+
+    const requestedCanonical = canonicalPartName(partKey).toLowerCase();
+    if (!requestedCanonical) return null;
+
+    // Try the canonicalised form against the map
+    const canonHit = partMap.get(requestedCanonical);
+    if (canonHit) return canonHit;
+
+    // Walk map keys, canonicalise each, return on canonical equality
+    for (const [k, v] of partMap.entries()) {
+      if (canonicalPartName(k).toLowerCase() === requestedCanonical) return v;
     }
     return null;
   };
