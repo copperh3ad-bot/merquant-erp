@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createPageUrl } from "@/utils";
 import { db, mfg, priceList as priceListAPI, supabase } from "@/api/supabaseClient";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
+import { resolveProductSize } from "@/lib/skuSizeInference";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -318,9 +319,19 @@ export default function PurchaseOrders() {
           const code = item.item_code.trim();
           const qty  = Number(item.quantity) || 0;
           const clRows = clByCode.get(code) || [];
-          // product_size = finish dimensions (e.g. "39x75x18\"") from the article table,
-          // or fall back to the size label (Twin/Queen/King) if dimensions aren't set
-          const productSize = item.finish_dimensions || item.size || clRows.find(r => r.size)?.size || null;
+          // product_size resolution chain:
+          //   1. finish_dimensions on the PO item (e.g. "39x75x18\"")
+          //   2. size label on the PO item (Twin / Queen / King / ...)
+          //   3. size column on consumption_library (rare, but used when set)
+          //   4. SKU-suffix inference (last resort): SLPCSS-KCK-GY → "King/Cal King",
+          //      GPMP38 → "38". Better than blank when master data only carries
+          //      item_code without a size column.
+          const productSize = resolveProductSize({
+            finishDimensions:       item.finish_dimensions,
+            itemSize:               item.size,
+            consumptionLibrarySize: clRows.find((r) => r.size)?.size,
+            articleCode:            code,
+          });
 
           const components = clRows
             .sort((a, b) => {
