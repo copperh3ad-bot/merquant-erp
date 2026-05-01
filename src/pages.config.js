@@ -49,6 +49,7 @@ import CustomerOrderStatus from './pages/CustomerOrderStatus';
 import ShortageAlerts from './pages/ShortageAlerts';
 import MasterDataImport from './pages/MasterDataImport';
 import AIExtractionReview from './pages/AIExtractionReview';
+import FileFeeder from './pages/FileFeeder';
 import Layout from './Layout.jsx';
 
 export const PAGES = {
@@ -100,6 +101,7 @@ export const PAGES = {
   ShortageAlerts,
   MasterDataImport,
   AIExtractionReview,
+  FileFeeder,
   "auth/gmail-callback":     GmailCallback,
   PendingApproval,
   AuditDashboard,
