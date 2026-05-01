@@ -33,6 +33,7 @@ import { supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Upload, Paperclip, FileText, Image as ImageIcon, AlertTriangle, CheckCircle2, XCircle, Loader2, ExternalLink, Trash2 } from "lucide-react";
 import { dedupeMasterData } from "@/lib/masterDataDedup";
+import { detectAndAutoFix } from "@/lib/extractionAnomalyDetector";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB — matches extract-document's server limit
 const ACCEPTED_EXTS = [".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png", ".webp"];
@@ -603,37 +604,74 @@ export default function FileFeeder() {
           //     the user instead so they can re-extract or fix manually.
           let dedupNotice = null;
           let flaggedNotice = null;
+          let anomalyNotice = null;
+          let autoFixNotice = null;
           if (ext.kind === "master_data") {
-            const { data: deduped, summary } = dedupeMasterData(ext.extracted_data || {});
+            // Step 1 — anomaly detection + auto-fix BEFORE dedup. This catches
+            // the column-swap case (fabric description in component_type)
+            // which would otherwise look like duplicate rows after dedup.
+            const anomalyResult = detectAndAutoFix(ext.extracted_data || {});
+            let workingData = anomalyResult.patchedData;
+            const autoFixCount = anomalyResult.summary.auto_fixed;
+            const warnCount = anomalyResult.summary.warnings;
+            const errorCount = anomalyResult.summary.errors;
+
+            // Step 2 — dedup on the (possibly auto-fixed) data.
+            const { data: deduped, summary } = dedupeMasterData(workingData);
+            workingData = deduped;
             const exactCollapsed =
               (summary.fabric.before - summary.fabric.after - summary.fabric.flagged.length) +
               (summary.accessory.before - summary.accessory.after - summary.accessory.flagged.length);
             const flaggedCount = summary.fabric.flagged.length + summary.accessory.flagged.length;
 
-            if (exactCollapsed > 0 || flaggedCount > 0) {
+            // Persist if anything changed.
+            if (autoFixCount > 0 || warnCount > 0 || errorCount > 0 || exactCollapsed > 0 || flaggedCount > 0) {
+              const newIssues = (ext.validation_issues || [])
+                .filter((i) => i?.code !== "DUPLICATE_KEY")
+                .concat(
+                  anomalyResult.anomalies.map((a) => ({
+                    code:     a.code,
+                    severity: a.severity,
+                    path:     a.path,
+                    message:  a.message,
+                  })),
+                );
               const { error: updErr } = await supabase
                 .from("ai_extractions")
                 .update({
-                  extracted_data: deduped,
-                  validation_issues: (ext.validation_issues || []).filter((i) => i?.code !== "DUPLICATE_KEY"),
-                  validation_status: ext.validation_status === "failed" ? "warned" : ext.validation_status,
-                  review_notes: `[file-feeder ${new Date().toISOString().slice(0,10)}] dedup: ${exactCollapsed} exact duplicate(s) collapsed; ${flaggedCount} group(s) flagged for review.`,
+                  extracted_data: workingData,
+                  validation_issues: newIssues,
+                  validation_status: errorCount > 0 ? "failed" : (ext.validation_status === "failed" ? "warned" : ext.validation_status),
+                  review_notes:
+                    `[file-feeder ${new Date().toISOString().slice(0,10)}] anomaly: ${autoFixCount} auto-fix, ${warnCount} warn, ${errorCount} error. dedup: ${exactCollapsed} exact, ${flaggedCount} flagged.`,
                 })
                 .eq("id", ext.id);
               if (updErr) {
-                console.warn("[FileFeeder] dedup update failed (non-fatal):", updErr);
+                console.warn("[FileFeeder] post-process update failed (non-fatal):", updErr);
               } else {
                 ext = await fetchExtraction(ext.id);
+                if (autoFixCount > 0) {
+                  // Pull the message of the auto-fix anomaly to surface specifically.
+                  const fixMsg = anomalyResult.anomalies.find((a) => a.code.startsWith("AUTO_FIXED"));
+                  autoFixNotice = fixMsg ? fixMsg.message : `Applied ${autoFixCount} auto-fix(es) to extracted data.`;
+                }
+                if (warnCount > 0 || errorCount > 0) {
+                  const top = anomalyResult.anomalies
+                    .filter((a) => a.severity === "warn" || a.severity === "error")
+                    .slice(0, 3)
+                    .map((a) => `[${a.severity}] ${a.message}`)
+                    .join(" • ");
+                  anomalyNotice = `${errorCount} error(s) and ${warnCount} warning(s) detected. ${top}`;
+                }
                 if (exactCollapsed > 0) {
                   dedupNotice = `Removed ${exactCollapsed} exact duplicate row(s) (every field matched).`;
                 }
                 if (flaggedCount > 0) {
-                  // Build a readable list of flagged keys for the notice.
                   const samples = [...summary.fabric.flagged, ...summary.accessory.flagged]
                     .slice(0, 3)
                     .map((f) => `${f.key} (${f.rowCount} rows)`)
                     .join(", ");
-                  flaggedNotice = `${flaggedCount} group(s) had different consumption values under the same key — likely an AI miscategorisation (e.g. multiple parts labelled with the same component_type). Kept the first row of each. Examples: ${samples}. Recommend opening in Review and either re-extracting or editing component_type per part before applying.`;
+                  flaggedNotice = `${flaggedCount} group(s) had different consumption values under the same key — likely an AI miscategorisation. Kept the first row of each. Examples: ${samples}.`;
                 }
               }
             }
@@ -646,6 +684,18 @@ export default function FileFeeder() {
                 <p className="text-xs mb-2">
                   Done. Here's what I found in <strong>{file.name}</strong>. Review and click <em>Validate &amp; Apply</em> to commit, or <em>Reject</em> to discard.
                 </p>
+                {autoFixNotice && (
+                  <p className="text-[11px] text-blue-800 bg-blue-50 border border-blue-200 rounded px-2 py-1 mb-2 leading-relaxed">
+                    <CheckCircle2 className="w-3 h-3 inline mr-1" />
+                    <strong>Auto-corrected:</strong> {autoFixNotice}
+                  </p>
+                )}
+                {anomalyNotice && (
+                  <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2 leading-relaxed">
+                    <AlertTriangle className="w-3 h-3 inline mr-1" />
+                    <strong>Anomalies:</strong> {anomalyNotice}
+                  </p>
+                )}
                 {dedupNotice && (
                   <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 mb-2">
                     <CheckCircle2 className="w-3 h-3 inline mr-1" />
