@@ -32,6 +32,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Upload, Paperclip, FileText, Image as ImageIcon, AlertTriangle, CheckCircle2, XCircle, Loader2, ExternalLink, Trash2 } from "lucide-react";
+import { dedupeMasterData } from "@/lib/masterDataDedup";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB — matches extract-document's server limit
 const ACCEPTED_EXTS = [".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png", ".webp"];
@@ -522,8 +523,26 @@ export default function FileFeeder() {
           // a faster done/error.
           setTimeout(() => setPhase("parsing"), 1500);
 
-          const { data, error } = await invokePromise;
+          let { data, error } = await invokePromise;
           console.log("[FileFeeder] invoke result:", { data, error });
+
+          // The Supabase JS client throws an error on any non-2xx status, but
+          // the real response body still contains useful info (e.g. the
+          // EXTRACTION_DUPLICATE code returned with status 409). Recover the
+          // body off error.context (which is the underlying Response object)
+          // so we can route on it the same way as a 2xx.
+          if (error && error.context && typeof error.context.json === "function") {
+            try {
+              const recovered = await error.context.json();
+              console.log("[FileFeeder] recovered body from error:", recovered);
+              if (recovered && typeof recovered === "object") {
+                data = recovered;
+                error = null;
+              }
+            } catch (parseErr) {
+              console.warn("[FileFeeder] could not parse error.context body:", parseErr);
+            }
+          }
 
           if (error) {
             setPhase("error");
@@ -536,7 +555,8 @@ export default function FileFeeder() {
           setPhase("done", 100);
 
           // Duplicate handling: extract-document returns ok:false + EXTRACTION_DUPLICATE
-          // when the same file (by hash) was uploaded recently and is still pending.
+          // (HTTP 409) when the same file hash was uploaded recently and is
+          // still pending review.
           if (!data?.ok) {
             if (data?.code === "EXTRACTION_DUPLICATE" && data?.dev_detail?.existing_extraction_id) {
               const existingId = data.dev_detail.existing_extraction_id;
@@ -568,8 +588,43 @@ export default function FileFeeder() {
           }
 
           // Success — fetch the staged row to render.
-          const ext = await fetchExtraction(data.extraction_id);
+          let ext = await fetchExtraction(data.extraction_id);
           if (!ext) throw new Error("Could not load the staged extraction");
+
+          // Master-data extractions often contain near-duplicate rows (one
+          // per garment part — flat sheet, fitted sheet, pillow case, sham
+          // — that all share the same item_code+component_type+color
+          // triple). The DB has a unique constraint on that triple, so the
+          // validator flags them as DUPLICATE_KEY errors and apply refuses.
+          // Dedupe BEFORE the user sees the card so the apply path is
+          // unblocked. consumption_per_unit is summed across parts so total
+          // fabric per SKU is preserved (which is what BOM explosion needs).
+          let dedupNotice = null;
+          if (ext.kind === "master_data") {
+            const { data: deduped, summary } = dedupeMasterData(ext.extracted_data || {});
+            const fabricCollapsed = summary.fabric.before - summary.fabric.after;
+            const accessoryCollapsed = summary.accessory.before - summary.accessory.after;
+            if (fabricCollapsed > 0 || accessoryCollapsed > 0) {
+              // Persist the deduped data + drop DUPLICATE_KEY validation
+              // issues + downgrade status from 'failed' to 'warned' if that
+              // was the only blocker.
+              const { error: updErr } = await supabase
+                .from("ai_extractions")
+                .update({
+                  extracted_data: deduped,
+                  validation_issues: (ext.validation_issues || []).filter((i) => i?.code !== "DUPLICATE_KEY"),
+                  validation_status: ext.validation_status === "failed" ? "warned" : ext.validation_status,
+                  review_notes: `[file-feeder ${new Date().toISOString().slice(0,10)}] auto-dedup: collapsed ${fabricCollapsed} fabric + ${accessoryCollapsed} accessory duplicate row(s); consumption_per_unit summed across parts.`,
+                })
+                .eq("id", ext.id);
+              if (updErr) {
+                console.warn("[FileFeeder] dedup update failed (non-fatal):", updErr);
+              } else {
+                ext = await fetchExtraction(ext.id);
+                dedupNotice = `Auto-deduplicated ${fabricCollapsed} fabric + ${accessoryCollapsed} accessory row(s) with the same key.`;
+              }
+            }
+          }
 
           append({
             type: "assistant",
@@ -578,6 +633,12 @@ export default function FileFeeder() {
                 <p className="text-xs mb-2">
                   Done. Here's what I found in <strong>{file.name}</strong>. Review and click <em>Validate &amp; Apply</em> to commit, or <em>Reject</em> to discard.
                 </p>
+                {dedupNotice && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">
+                    <AlertTriangle className="w-3 h-3 inline mr-1" />
+                    {dedupNotice} Consumption was summed so totals per SKU are preserved.
+                  </p>
+                )}
                 <ExtractionValidationCard
                   extraction={ext}
                   busy={applyingId === ext.id}
