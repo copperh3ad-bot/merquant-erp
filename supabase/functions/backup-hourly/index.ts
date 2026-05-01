@@ -105,10 +105,15 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   
   try {
-    // Simple secret check
+    // Simple secret check. Fail closed when the secret is unset — without
+    // this guard, an empty BACKUP_SECRET turned the gate off entirely and
+    // any anonymous caller could trigger a full DB dump (cost / DoS).
+    if (!BACKUP_SECRET) {
+      return j({ error: "not_configured" }, 503);
+    }
     const auth = req.headers.get("Authorization") || "";
     const providedSecret = auth.replace(/^Bearer\s+/i, "");
-    if (BACKUP_SECRET && providedSecret !== BACKUP_SECRET) {
+    if (providedSecret !== BACKUP_SECRET) {
       return j({ error: "unauthorized" }, 401);
     }
     
