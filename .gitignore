@@ -68,3 +68,6 @@ merquant-master-data-*.xlsx
 # Migration tooling work-products (regeneratable)
 scripts/clean-migrations-tmp/
 scripts/init-chunks/
+
+# One-off recovery scratch files
+scripts/*.xlsx
