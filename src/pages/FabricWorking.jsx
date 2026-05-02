@@ -15,8 +15,7 @@ import { getColorLabel, getBaseCode } from "@/lib/articleUtils";
 import { canonicalPartName } from "@/lib/partNameCanonical";
 import { useArticleComponentUpdate } from "@/hooks/useArticleComponentUpdate";
 import { isFabricComponentWithWarn } from "@/lib/fabricClassifier";
-import { useUnitSystem } from "@/hooks/useUnitSystem";
-import { formatWidth, widthUnitLabel } from "@/lib/unitSystem";
+import { formatWidth, widthUnitLabel, DEFAULT_UNIT_SYSTEM } from "@/lib/unitSystem";
 
 // Session 10 — Fabric Working is the source of the printout handed to Union
 // Fabrics central-ERP data-entry operators. It must show fabric components
@@ -52,10 +51,26 @@ export default function FabricWorking() {
   const [editingArticle, setEditingArticle] = useState(null);
   const [readOnly, setReadOnly] = useState(false);
   const [showAddArticle, setShowAddArticle] = useState(false);
-  // Unit-system preference (metric/imperial). Width is stored in cm in the
-  // DB and converted at display time. See @/lib/unitSystem for rationale.
-  const [unitSystem] = useUnitSystem();
+  // Unit-system preference is per-PO (purchase_orders.unit_system column).
+  // Different customers / orders use different conventions — US buyers
+  // tend to read inches + oz/sq.yd, EU + APAC tend to read cm + GSM.
+  // Width / weight are stored in metric SI in the DB and converted at
+  // display time. See @/lib/unitSystem for the conversion math.
+  // NULL on the row → fallback to DEFAULT_UNIT_SYSTEM (metric) so old
+  // POs keep rendering exactly as before.
+  const unitSystem = activePo?.unit_system || DEFAULT_UNIT_SYSTEM;
   const widthLabel = widthUnitLabel(unitSystem);
+  const [savingUnits, setSavingUnits] = useState(false);
+  const handleUnitSystemChange = async (next) => {
+    if (!activePo?.id || next === unitSystem) return;
+    setSavingUnits(true);
+    try {
+      await db.purchaseOrders.update(activePo.id, { unit_system: next });
+      qc.invalidateQueries({ queryKey: ["purchaseOrders"] });
+    } finally {
+      setSavingUnits(false);
+    }
+  };
 
   const { data: pos = [] } = useQuery({ queryKey: ["purchaseOrders"], queryFn: () => db.purchaseOrders.list("-created_at") });
   const activePo = useMemo(() => selectedPoId ? pos.find(p => p.id === selectedPoId) : pos[0], [pos, selectedPoId]);
@@ -801,6 +816,22 @@ export default function FabricWorking() {
           <Select value={selectedPoId || activePo?.id || ""} onValueChange={setSelectedPoId}>
             <SelectTrigger className="w-60 h-8 text-xs"><SelectValue placeholder="Select PO" /></SelectTrigger>
             <SelectContent>{pos.map(p => <SelectItem key={p.id} value={p.id}>{p.po_number} – {p.customer_name}</SelectItem>)}</SelectContent>
+          </Select>
+          {/* Per-PO unit-system selector. Saved on purchase_orders.unit_system
+              so different customers / orders can have different display
+              conventions. Affects this page's HTML, CSV, and PDF output. */}
+          <Select
+            value={unitSystem}
+            onValueChange={handleUnitSystemChange}
+            disabled={!activePo || savingUnits || readOnly}
+          >
+            <SelectTrigger className="w-44 h-8 text-xs" title="Display units for this PO">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="metric">Metric (cm · GSM)</SelectItem>
+              <SelectItem value="imperial">Imperial (in · oz/sq.yd)</SelectItem>
+            </SelectContent>
           </Select>
         </div>
         <div className="flex gap-2 flex-wrap items-center">

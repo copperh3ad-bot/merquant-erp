@@ -4,14 +4,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Settings as SettingsIcon, Mail, Save, Loader2, CheckCircle2, Link2, Unlink, AlertCircle, Ruler } from "lucide-react";
-import { useUnitSystem } from "@/hooks/useUnitSystem";
+import { Settings as SettingsIcon, Mail, Save, Loader2, CheckCircle2, Link2, Unlink, AlertCircle } from "lucide-react";
 
 const GOOGLE_CLIENT_ID = "1065030216386-m1odk5g9end0ltlc8vjg3cntuv323491.apps.googleusercontent.com";
 const GMAIL_SCOPES = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email";
 
 export default function Settings() {
-  const [unitSystem, setUnitSystem] = useUnitSystem();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -107,37 +105,6 @@ export default function Settings() {
         <h1 className="text-2xl font-semibold flex items-center gap-2"><SettingsIcon className="h-6 w-6" />Settings</h1>
         <p className="text-sm text-muted-foreground">Configure your crawler preferences and email accounts.</p>
       </div>
-
-      <Card>
-        <CardContent className="p-6 space-y-4">
-          <div className="flex items-center gap-2 pb-3 border-b">
-            <Ruler className="h-5 w-5 text-primary" />
-            <h2 className="font-semibold">Display Units</h2>
-          </div>
-          <p className="text-xs text-muted-foreground -mt-2">
-            All values are stored internally in metric SI units (cm, GSM). This
-            preference only affects how widths and fabric weights are
-            <em> displayed</em> across the app — width in cm or inches, weight
-            in GSM or oz/sq.yd. Switching is safe and never modifies data.
-          </p>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant={unitSystem === "metric" ? "default" : "outline"}
-              onClick={() => setUnitSystem("metric")}
-            >
-              Metric (cm · GSM)
-            </Button>
-            <Button
-              size="sm"
-              variant={unitSystem === "imperial" ? "default" : "outline"}
-              onClick={() => setUnitSystem("imperial")}
-            >
-              Imperial (inches · oz/sq.yd)
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardContent className="p-6 space-y-4">
