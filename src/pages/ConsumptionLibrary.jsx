@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Pencil, Save, X, Plus, Trash2, Loader2, Search, Filter, CheckCircle2 } from "lucide-react";
+import { directionForPart } from "@/lib/textileVocabulary";
 import { cn } from "@/lib/utils";
 
 const FIELDS = [
@@ -174,14 +175,11 @@ export default function ConsumptionLibrary() {
     const { data: cl } = await supabase.from("consumption_library")
       .select("*").eq("item_code", itemCode);
 
-    const directionFor = (component_type, kind) => {
-      if (kind !== "fabric") return null;
-      const t = (component_type || "").toLowerCase();
-      if (t === "skirt") return "LXW";
-      if (t === "piping" || t === "binding") return "WXL";
-      if (/platform|bottom|sleeper|evalon|sheet|front|back|top fabric|pillow case/.test(t)) return "WXL";
-      return null;
-    };
+    // Delegates to textileVocabulary.directionForPart — single source of
+    // truth shared with PurchaseOrders.jsx. Only fabric components have a
+    // conventional cut direction.
+    const directionFor = (component_type, kind) =>
+      kind === "fabric" ? directionForPart(component_type) : null;
 
     const components = (cl || []).map(c => ({
       component_type: c.component_type,

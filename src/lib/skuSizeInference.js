@@ -14,34 +14,15 @@
 // We only handle the alphabetic suffix family for now; numeric sizes
 // (38/46/50/...) are passed through unchanged because they're already
 // human-meaningful.
+//
+// 2026-05-02 — migrated to read sizes + colour codes from the central
+// textileVocabulary. Both lists used to live here as a hardcoded copy of
+// the vocab — the duplication caused drift (e.g. when the vocab grew a
+// new "Cloud Gray" canonical we'd forget to mirror it here, and SKUs
+// ending in -CG would get mis-classified as a size). Now there's one
+// source of truth: textileVocabulary.SIZES + .COLOURS.
 
-/** Suffix code → label mapping. Lower-cased keys for case-insensitive match. */
-const SIZE_CODE_LABELS = {
-  // Bed sheet / sheet-set sizes
-  "f":     "Full",
-  "fxl":   "Full XL",
-  "q":     "Queen",
-  "k":     "King",
-  "ck":    "Cal King",
-  "kck":   "King/Cal King",
-  "spk":   "Split King",
-  "spck":  "Split Cal King",
-  "shk":   "Split Head King",
-  "shq":   "Split Head Queen",
-  "shck":  "Split Head Cal King",
-  "ttxl":  "Twin/Twin XL",
-  "tx":    "Twin XL",
-  "txl":   "Twin XL",
-  "t":     "Twin",
-};
-
-// Known color suffixes we should NOT treat as a size. Used when the SKU
-// has only two segments (e.g. SLPCSS-GY) and we need to disambiguate
-// "GY = color" from a real size segment.
-const COMMON_COLOR_CODES = new Set([
-  "gy", "wh", "bl", "iv", "cg", "mb", "bk", "rd", "bg",
-  "white", "black", "blue", "gray", "grey", "ivory", "red", "beige",
-]);
+import { canonical, isInCategory } from "@/lib/textileVocabulary";
 
 /**
  * Extract the SIZE token from an SKU code, then map to a label.
@@ -59,17 +40,18 @@ export function inferSizeFromSku(articleCode) {
   const segments = code.split("-").map((s) => s.trim()).filter(Boolean);
   if (segments.length >= 2) {
     // Try second segment first (the standard PCSJMO / SLPCSS layout).
-    const candidate = segments[1].toLowerCase();
-    if (SIZE_CODE_LABELS[candidate]) return SIZE_CODE_LABELS[candidate];
+    const candidate = segments[1];
+    const sizeLabel = canonical("size", candidate);
+    if (sizeLabel) return sizeLabel;
 
     // Some SKUs are just "FAMILY-SIZE" without a color. If the second
     // segment isn't a known color, try treating it as a size anyway —
     // but only return if we have a label for it, otherwise fall through.
-    if (!COMMON_COLOR_CODES.has(candidate)) {
+    if (!isInCategory("colour", candidate)) {
       // Unknown alphabetic code — return the raw code so the operator at
       // least sees it on the working sheet rather than blank. Numeric
       // codes pass through too (e.g. "38" for GPMP38 if it was hyphenated).
-      if (/^[A-Z0-9]{1,5}$/i.test(segments[1])) return segments[1];
+      if (/^[A-Z0-9]{1,5}$/i.test(candidate)) return candidate;
     }
   }
 
