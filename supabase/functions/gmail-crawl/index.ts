@@ -50,8 +50,21 @@ async function ensureAccessToken(userId: string): Promise<{ access_token: string
     return { access_token: rec.access_token, email: rec.email };
   }
 
+  // Resolve plaintext refresh_token: prefer the encrypted column,
+  // fall back to legacy plaintext during the encryption rollout.
+  const tokenKey = Deno.env.get("GMAIL_TOKEN_KEY") || "";
+  let refreshPlaintext: string | null = null;
+  if (rec.refresh_token_encrypted && tokenKey) {
+    const { data: dec } = await supabaseAdmin.rpc("decrypt_gmail_token", {
+      ciphertext: rec.refresh_token_encrypted, passphrase: tokenKey,
+    });
+    refreshPlaintext = dec ?? null;
+  }
+  if (!refreshPlaintext) refreshPlaintext = rec.refresh_token ?? null;
+  if (!refreshPlaintext) return { error: "no_refresh_token_stored" };
+
   const params = new URLSearchParams({
-    refresh_token: rec.refresh_token,
+    refresh_token: refreshPlaintext,
     client_id: GOOGLE_CLIENT_ID,
     client_secret: GOOGLE_CLIENT_SECRET,
     grant_type: "refresh_token",
@@ -65,8 +78,16 @@ async function ensureAccessToken(userId: string): Promise<{ access_token: string
   if (!resp.ok) return { error: "refresh_failed" };
 
   const exp = new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString();
+  let access_token_encrypted: string | null = null;
+  if (tokenKey) {
+    const { data: enc } = await supabaseAdmin.rpc("encrypt_gmail_token", {
+      plaintext: data.access_token, passphrase: tokenKey,
+    });
+    access_token_encrypted = enc ?? null;
+  }
   await supabaseAdmin.from("gmail_oauth").update({
     access_token: data.access_token,
+    access_token_encrypted,
     token_expires_at: exp,
     updated_at: new Date().toISOString(),
   }).eq("user_id", userId);
