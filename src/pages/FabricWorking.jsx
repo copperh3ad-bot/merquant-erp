@@ -12,6 +12,7 @@ import FabricEditDialog from "@/components/fabric/FabricEditDialog";
 import ArticleFabricSetup from "@/components/fabric/ArticleFabricSetup";
 import EmptyState from "@/components/shared/EmptyState";
 import { getColorLabel, getBaseCode } from "@/lib/articleUtils";
+import { canonicalPartName } from "@/lib/partNameCanonical";
 import { useArticleComponentUpdate } from "@/hooks/useArticleComponentUpdate";
 import { isFabricComponentWithWarn } from "@/lib/fabricClassifier";
 
@@ -145,6 +146,56 @@ export default function FabricWorking() {
   // which renders as a dash in the UI. The optional `part` argument (e.g.
   // "Flat Sheet", "Fitted Sheet", "Pillow Case") narrows the lookup to that
   // specific component for sheet-set tech packs that store per-part dimensions.
+  // Try to find a part dimension in a Map<partKey, dim>, with multi-strategy
+  // fuzzy fallback:
+  //   1. exact key match
+  //   2. canonicalise the requested partKey via partNameCanonical and retry
+  //   3. canonicalise EVERY map key and find one that matches our canonical
+  //
+  // Step 3 catches the case where the tech pack stored a non-canonical key
+  // (e.g. AI emitted "Top Sheet" instead of "Flat Sheet") and the article
+  // uses the canonical name. Step 2 catches the inverse.
+  //
+  // Both partKey and the map keys arrive here already lowercase-normalised
+  // by normalizeSizeKey; we pass them through canonicalPartName which is
+  // case-insensitive.
+  const resolvePartFuzzy = (partMap, partKey) => {
+    if (!partMap || !partKey) return null;
+    const direct = partMap.get(partKey);
+    if (direct) return direct;
+
+    const requestedCanonical = canonicalPartName(partKey).toLowerCase();
+    if (!requestedCanonical) return null;
+
+    // Try the canonicalised form against the map
+    const canonHit = partMap.get(requestedCanonical);
+    if (canonHit) return canonHit;
+
+    // Walk map keys, canonicalise each, return on canonical equality
+    for (const [k, v] of partMap.entries()) {
+      if (canonicalPartName(k).toLowerCase() === requestedCanonical) return v;
+    }
+    return null;
+  };
+
+  // Last-resort lookup for "family" tech-packs: walk every byCodeSizePart
+  // entry and return the FIRST one whose size_chart has both this size and
+  // this part. Solves the case where the article's article_code doesn't
+  // exist in byItemPart (because the tech-pack's own item_code for that
+  // size is different — e.g. master uses PCSJMO-SPK but tech-pack
+  // size_chart["Split King"].item_code is PCSJMO-SK).
+  // Only fires when sizeKey + partKey are both known.
+  const resolveByFamilySize = (sizeKey, partKey) => {
+    if (!sizeKey || !partKey || !dimsIndex?.byCodeSizePart) return null;
+    for (const sizePartMap of dimsIndex.byCodeSizePart.values()) {
+      const partMap = sizePartMap.get(sizeKey);
+      if (!partMap) continue;
+      const hit = resolvePartFuzzy(partMap, partKey);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
   const resolveDims = (article, productSize, part, component = null) => {
     // Layer 0: per-component manual override. Lets a Manager fill in a
     // missing fabric-bag (or any per-component) dimension without affecting
@@ -159,10 +210,13 @@ export default function FabricWorking() {
     const partKey = part ? normalizeSizeKey(part) : null;
     const sizeKey = productSize ? normalizeSizeKey(productSize) : null;
 
-    // Layer 2a: per-part item_code match (sheet-set tech packs).
+    // Layer 2a: per-part item_code match (sheet-set tech packs). Now uses
+    // the fuzzy part lookup so component_type values with qualifiers
+    // (e.g. "Fitted Sheet (Split Head)") still match the tech pack's
+    // bare part name (e.g. "Fitted Sheet").
     if (partKey && article?.article_code && dimsIndex.byItemPart?.has(article.article_code)) {
       const partMap = dimsIndex.byItemPart.get(article.article_code);
-      const hit = partMap.get(partKey);
+      const hit = resolvePartFuzzy(partMap, partKey);
       if (hit) return hit;
     }
 
@@ -189,7 +243,7 @@ export default function FabricWorking() {
       if (sizePartMap?.has(sizeKey)) {
         isStructuredByCodeSize = true;
         const partMap = sizePartMap.get(sizeKey);
-        const hit = partMap.get(partKey);
+        const hit = resolvePartFuzzy(partMap, partKey);
         if (hit) return hit;
       }
     }
@@ -204,6 +258,15 @@ export default function FabricWorking() {
         if (hit) return hit;
       }
     }
+
+    // Layer 4: family-tech-pack fallback. The article's article_code didn't
+    // match any tech-pack-keyed map, but a SIBLING tech-pack (uploaded under
+    // a different family base, like PCSJMO-Q for the whole sheet-set family)
+    // may have a size_chart entry for this productSize with the right part.
+    // Walk every byCodeSizePart and return the first hit.
+    const familyHit = resolveByFamilySize(sizeKey, partKey);
+    if (familyHit) return familyHit;
+
     return "";
   };
 

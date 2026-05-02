@@ -22,63 +22,46 @@
 // candidate) or flag for the user.
 
 // ── Lexicon ─────────────────────────────────────────────────────────────────
+//
+// Migrated 2026-05-02 onto src/lib/textileVocabulary as the single source of
+// truth. The local lists used to drift from the canonical vocabulary (e.g.
+// fabricClassifier had a different cut), so anomaly detection sometimes
+// disagreed with the printout gate. Now both consult the same registry.
 
-// Fabric descriptors — words/phrases that should NEVER appear in
-// component_type. If component_type contains any of these, it's
-// almost certainly a fabric description.
-const FABRIC_DESCRIPTOR_PATTERNS = [
-  /\b\d{2,4}\s*gsm\b/i,                                            // "170 GSM", "300GSM"
-  /\b\d{1,3}\s*%/i,                                                // "85%", "100%"
-  /\bjersey\s+knit\b/i,
-  /\bmodal\b/i,
-  /\bcotton\b/i,
-  /\bspandex\b/i,
-  /\bpolyester\b/i,
-  /\bpoly\b/i,
-  /\bnylon\b/i,
-  /\bsilk\b/i,
-  /\blinen\b/i,
-  /\bbamboo\b/i,
-  /\btencel\b/i,
-  /\blyocell\b/i,
-  /\bsateen\b/i,
-  /\bpercale\b/i,
-  /\bflannel\b/i,
-  /\bmicrofiber\b/i,
-  /\b\d+s?\s*(?:single|d|denier)\b/i,                              // yarn count
+import { canonical, isInCategory, _internals } from "@/lib/textileVocabulary";
+import { canonicalPartName } from "@/lib/partNameCanonical";
+
+// Format/measurement patterns. Kept hardcoded because they're units, not
+// vocabulary terms — GSM, percentages, thread count, denier, yarn count.
+// If component_type matches ANY of these, it's almost certainly a fabric
+// descriptor that landed in the wrong column.
+const MEASUREMENT_PATTERNS = [
+  /\b\d{2,4}\s*gsm\b/i,                  // "170 GSM", "300GSM"
+  /\b\d{1,3}\s*%/i,                      // "85%", "100%"
+  /\b\d+s?\s*(?:single|d|denier)\b/i,    // yarn count / denier
   /\bthread\s+count\b/i,
-  /\b\d+tc\b/i,
-  /\begyptian\b/i,
-  /\bsupima\b/i,
-  /\bpima\b/i,
+  /\b\d+tc\b/i,                          // "300TC"
 ];
 
-// Known good component_type values (canonical part names). When
-// component_type matches one of these (or a near-match), it's correct.
-const KNOWN_COMPONENT_TYPES = new Set([
-  // Sheet sets
-  "flat sheet", "fitted sheet", "pillow case", "pillowcase", "sham", "fabric bag",
-  // Mattress / pillow / encasement
-  "top fabric", "bottom", "skirt", "platform", "binding", "piping", "filling",
-  "front", "back", "lamination", "sleeper flap", "evalon membrane",
-  // Pillow protectors
-  "pillow case (1pc)", "pillow case (2pc)", "fitted sheet (2pc split)",
-  "fitted sheet (split head)",
-  // Other fabric components
-  "quilting", "pillow compression", "outer", "inner",
-  // Accessory + packaging (sometimes appear)
-  "polybag", "poly bag", "pvc bag", "stiffener", "insert", "insert card",
-  "label", "size label", "care label", "law tag", "hang tag", "barcode sticker",
-  "size sticker", "zipper", "thread", "elastic",
-]);
+// Build a single OR-regex from every alias registered under a category.
+// Lets us ask "does this string mention ANY fibre / fabric_type word?"
+// while keeping the source of truth in textileVocabulary.
+function buildContainsAnyRegex(category) {
+  const idx = _internals.REVERSE_INDEX[category];
+  if (!idx || idx.size === 0) return null;
+  const parts = [];
+  for (const alias of idx.keys()) {
+    const esc = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    parts.push(`\\b${esc}\\b`);
+  }
+  // Sort longest-first so multi-word aliases (e.g. "egyptian cotton") win
+  // over their single-word substrings.
+  parts.sort((a, b) => b.length - a.length);
+  return new RegExp(parts.join("|"), "i");
+}
 
-// Known good accessory categories.
-const KNOWN_ACCESSORY_CATEGORIES = new Set([
-  "polybag", "poly bag", "pvc bag", "stiffener", "insert card", "label",
-  "size label", "care label", "law tag", "hang tag", "barcode sticker",
-  "size sticker", "zipper", "thread", "elastic", "tape", "binding",
-  "packaging", "sticker",
-]);
+const FIBRE_REGEX = buildContainsAnyRegex("fibre");
+const FABRIC_TYPE_REGEX = buildContainsAnyRegex("fabric_type");
 
 // ── Per-row checks ──────────────────────────────────────────────────────────
 
@@ -93,12 +76,22 @@ function classifyComponentType(value) {
   const v = value.trim().toLowerCase();
   if (!v) return "unknown";
 
-  if (KNOWN_COMPONENT_TYPES.has(v)) return "ok";
+  // 1. Vocabulary fast-path. A component_type is "ok" if it resolves to a
+  //    canonical part, accessory, or trim. Variant qualifiers like
+  //    "(Split Head)" are stripped by canonicalPartName and the stripped
+  //    form is then re-checked against the part vocabulary.
+  if (canonical("part", v)) return "ok";
+  const stripped = canonicalPartName(v); // strips "(qualifier)" suffix
+  if (stripped && canonical("part", stripped)) return "ok";
+  if (isInCategory("accessory", v)) return "ok";
+  if (isInCategory("trim", v)) return "ok";
 
-  // Check fabric-descriptor patterns
-  for (const re of FABRIC_DESCRIPTOR_PATTERNS) {
+  // 2. Looks like a fabric descriptor → wrong column.
+  for (const re of MEASUREMENT_PATTERNS) {
     if (re.test(value)) return "fabric";
   }
+  if (FIBRE_REGEX && FIBRE_REGEX.test(value)) return "fabric";
+  if (FABRIC_TYPE_REGEX && FABRIC_TYPE_REGEX.test(value)) return "fabric";
 
   return "unknown";
 }
@@ -111,11 +104,14 @@ function classifyComponentType(value) {
 function looksLikeFabricDescription(value) {
   if (!value || typeof value !== "string") return false;
   let hits = 0;
-  for (const re of FABRIC_DESCRIPTOR_PATTERNS) {
+  for (const re of MEASUREMENT_PATTERNS) {
     if (re.test(value)) hits++;
     if (hits >= 2) return true; // 2+ fabric markers = high confidence
   }
-  return false;
+  if (FIBRE_REGEX && FIBRE_REGEX.test(value)) hits++;
+  if (hits >= 2) return true;
+  if (FABRIC_TYPE_REGEX && FABRIC_TYPE_REGEX.test(value)) hits++;
+  return hits >= 2;
 }
 
 // ── Anomaly detection over a fabric_consumption array ───────────────────────
@@ -238,7 +234,10 @@ export function detectAccessoryConsumptionAnomalies(accessoryRows) {
       });
     }
     const cat = (r.category ?? "").toString().trim().toLowerCase();
-    if (cat && !KNOWN_ACCESSORY_CATEGORIES.has(cat) && !cat.includes(" ")) {
+    // Vocabulary covers accessory + trim categories. (Trim items like
+    // "Binding" historically appeared in the accessory consumption list.)
+    const isKnown = isInCategory("accessory", cat) || isInCategory("trim", cat);
+    if (cat && !isKnown && !cat.includes(" ")) {
       // Single-word unknown category — lightly warn.
       anomalies.push({
         code: "UNKNOWN_ACCESSORY_CATEGORY",

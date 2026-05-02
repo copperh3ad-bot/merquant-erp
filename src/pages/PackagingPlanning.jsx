@@ -7,18 +7,21 @@ import { Save, Plus, Trash2, Upload, Download, Printer, Package, Settings } from
 import UploadPackagingSheet from "@/components/packaging/UploadPackagingSheet";
 import { db, mfg, accessoryTemplates, supabase } from "@/api/supabaseClient";
 import { resolveDescription, findTechPackForArticle } from "@/lib/descriptionResolver";
+import { allCanonicals } from "@/lib/textileVocabulary";
 
 // ── Tab configuration ─────────────────────────────────────────────────────
+//
+// 2026-05-02 — typeOptions arrays now sourced from textileVocabulary
+// sub-type registries (label_type, polybag_type, sticker_type, zipper_type,
+// stiffener_type, insert_card_type, carton_type, trim_detail_type). Adding
+// a new sub-type to the central vocab automatically surfaces it as a
+// dropdown option here. The per-tab CONTEXT settings (labels, placeholders,
+// wastage defaults) stay local because they're UI concerns.
 
 const TAB_CONFIG = {
   Labels: {
     category: "Label",
-    typeOptions: [
-      "Brand Label","Care Label","Size Label","Direction Label","GOTS Label",
-      "Barcode Label","Hang Tag","Country of Origin Label","Composition Label",
-      "Wash Label","Price Ticket","Compliance Label","Retailer Label","Eco Label",
-      "Care label in 3 Languages 1X3","Custom Label",
-    ],
+    typeOptions: allCanonicals("label_type"),
     typeLabel: "Label Type",
     qualityLabel: "Quality / Description",
     qualityPlaceholder: "e.g. Woven, Satin, 3x5cm",
@@ -27,7 +30,7 @@ const TAB_CONFIG = {
   },
   "Insert Card": {
     category: "Insert Card",
-    typeOptions: ["Art Card","Box Packaging","Bleach Card","Bux Board","Custom"],
+    typeOptions: allCanonicals("insert_card_type"),
     typeLabel: "Insert Card Type",
     qualityLabel: "Quality / Size",
     qualityPlaceholder: "e.g. 300gsm, 10x15cm",
@@ -36,7 +39,7 @@ const TAB_CONFIG = {
   },
   Polybag: {
     category: "Polybag",
-    typeOptions: ["PVC","PP","PE","LDPE","OPP"],
+    typeOptions: allCanonicals("polybag_type"),
     typeLabel: "Polybag Type",
     splitDescSize: true,
     descLabel: "Description",
@@ -47,7 +50,7 @@ const TAB_CONFIG = {
   },
   Stiffener: {
     category: "Stiffener",
-    typeOptions: ["Cardboard","PVC Sheet","Foam Board","MDF","Corrugated","Other"],
+    typeOptions: allCanonicals("stiffener_type"),
     typeLabel: "Material Type",
     splitDescSize: true,
     descLabel: "Description",
@@ -58,7 +61,7 @@ const TAB_CONFIG = {
   },
   Carton: {
     category: "Carton",
-    typeOptions: ["Printed","Plain","Brown","White"],
+    typeOptions: allCanonicals("carton_type"),
     typeLabel: "Carton Type",
     splitDescSize: true,
     descLabel: "Description",
@@ -69,7 +72,7 @@ const TAB_CONFIG = {
   },
   Sticker: {
     category: "Sticker",
-    typeOptions: ["UPC Sticker","Packaging Info Sticker","Retailer Sticker","Warning Sticker","QR Code Sticker","Compliance Sticker","Custom Sticker"],
+    typeOptions: allCanonicals("sticker_type"),
     typeLabel: "Sticker Type",
     qualityLabel: "Size / Description",
     qualityPlaceholder: "e.g. 5x3cm, matte",
@@ -78,7 +81,7 @@ const TAB_CONFIG = {
   },
   Zipper: {
     category: "Zipper",
-    typeOptions: ["SBS Nylon Zipper","Coil Zipper","Metal Zipper","Invisible Zipper","Plastic Molded Zipper","Custom"],
+    typeOptions: allCanonicals("zipper_type"),
     typeLabel: "Zipper Type",
     qualityLabel: "Length / Description",
     qualityPlaceholder: "e.g. #3 SBS locking, 120cm, white",
@@ -86,7 +89,7 @@ const TAB_CONFIG = {
   },
   Trim: {
     category: "Trim",
-    typeOptions: ["Elastic","Drawcord","Cord Lock","Drawcord Stopper","Jacquard Band","Velcro","Rivet","Button","Ribbon","Piping","Custom"],
+    typeOptions: allCanonicals("trim_detail_type"),
     typeLabel: "Trim Type",
     qualityLabel: "Material / Description",
     qualityPlaceholder: "e.g. 0.6cm elastic, grey jacquard",

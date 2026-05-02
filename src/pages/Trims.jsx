@@ -8,6 +8,7 @@ import { Save, Plus, Trash2, Download, Printer, Layers, Info, FileText } from "l
 import { jsPDF } from "jspdf";
 import { Skeleton } from "@/components/ui/skeleton";
 import EmptyState from "@/components/shared/EmptyState";
+import { allCanonicals, canonical } from "@/lib/textileVocabulary";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Calculation engine                                                        */
@@ -90,11 +91,10 @@ const CALC_TYPES = {
   },
 };
 
-const TRIM_CATEGORIES = [
-  "Zipper", "Elastic", "Button", "Dori", "Eyelet", "Stitching Thread",
-  "Velcro", "Snap Button", "Hook & Eye", "Buckle", "Drawstring",
-  "Ribbon", "Tape", "Interlining", "Lace", "Patch", "Thread", "Other",
-];
+// Sourced from textileVocabulary's trim category. Adding a new trim to
+// the central vocab surfaces it here automatically. "Other" sentinel is
+// kept locally — it represents free-form input, not a vocabulary entry.
+const TRIM_CATEGORIES = [...allCanonicals("trim"), "Other"];
 
 const UNITS = ["Pcs", "Meters", "Kgs", "Rolls", "Dozens", "Gross", "Sets", "Pairs"];
 
@@ -121,18 +121,29 @@ const defaultRow = () => ({
   existing_id: null,
 });
 
-/* Helper: infer trim category from description text */
+/* Helper: infer trim category from description text. Tries the central
+ * vocabulary first (catches every alias from textileVocabulary.TRIM_TYPES),
+ * with a small regex pass for the historically-supported ambiguous forms
+ * ("dori"/"drawstring"/"string", "tape" → Ribbon) where one term groups
+ * to a different category than its literal canonical. */
 function inferCategory(text = "") {
-  const s = text.toLowerCase();
-  if (/zip|slider/.test(s)) return "Zipper";
-  if (/elastic/.test(s)) return "Elastic";
-  if (/button/.test(s)) return "Button";
-  if (/thread/.test(s)) return "Stitching Thread";
-  if (/eyelet/.test(s)) return "Eyelet";
-  if (/dori|draw|string/.test(s)) return "Dori";
-  if (/velcro/.test(s)) return "Velcro";
+  const s = (text || "").toLowerCase();
+  if (!s) return "Other";
+
+  // Try the longest substring match against any vocab alias first.
+  // This handles every term in TRIM_TYPES + their aliases.
+  const direct = canonical("trim", s);
+  if (direct) return direct;
+
+  // Walk individual words to catch "stitching thread, white" etc.
+  for (const word of s.split(/[\s,/]+/)) {
+    const c = canonical("trim", word);
+    if (c) return c;
+  }
+
+  // Legacy fuzzy rules — preserve historical groupings.
+  if (/string/.test(s)) return "Drawstring";
   if (/tape|ribbon/.test(s)) return "Ribbon";
-  if (/snap/.test(s)) return "Snap Button";
   return "Other";
 }
 

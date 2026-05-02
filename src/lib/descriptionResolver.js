@@ -18,6 +18,8 @@
  * map + matchesCategory() bridges both shapes onto the page's tab list.
  */
 
+import { productFamilyOf } from "@/lib/textileVocabulary";
+
 // ── Category alias map ────────────────────────────────────────────────────
 // Each tab's `cfg.category` (left key) maps to a list of substrings that,
 // when found in a tech-pack element's category-flavoured field
@@ -238,9 +240,15 @@ function shouldFallThrough(rows) {
 // that explicitly tag a different product family. Untagged segments stay
 // (they're descriptive headers like "White ground with black fonts").
 //
-// Inferred from the SKU's article_code via PRODUCT_TYPE_PATTERNS in
-// componentClassifier.js — but we re-implement the lookup inline here to
-// avoid pulling that whole module into the resolver's import graph.
+// Description-text keywords per product family. Used by
+// extractSkuRelevantPortion to filter combined-product descriptions like
+// "76mmx23mm (mattress protector) / 64mmX23mm (Pillow Protector)" down
+// to only the segment(s) relevant to THIS SKU's family.
+//
+// The product-family identification (regex on article_code) is delegated
+// to textileVocabulary.productFamilyOf so we don't carry a parallel copy
+// of the patterns here. The keyword arrays below are this resolver's
+// only contribution — they're filter-side, not classification-side.
 const PRODUCT_TYPE_KEYWORDS = {
   "Pillow Protector":   ["pillow protector", "pillow protect"],
   "Mattress Protector": ["mattress protector", "mattress protect"],
@@ -252,18 +260,11 @@ const PRODUCT_TYPE_KEYWORDS = {
   "Duvet Cover":        ["duvet cover", "duvet"],
 };
 
+// Thin wrapper kept for naming clarity within this module — productFamilyOf
+// reads through the central PRODUCT_FAMILY_PATTERNS so any drift in family
+// codes (new SKU prefix, renamed family) lands here automatically.
 function inferProductType(articleCode) {
-  if (!articleCode) return null;
-  const c = String(articleCode).toUpperCase();
-  if (/PP[KQ]\d*$/.test(c) || /PP\d/.test(c)) return "Pillow Protector";
-  if (/MP\d/.test(c))                          return "Mattress Protector";
-  if (/SE\d/.test(c))                          return "Sleeper Encasement";
-  if (/TE\d/.test(c))                          return "Total Encasement";
-  if (/(?:CSS|JFCSS|^SLP|SHTSET|SHEET)/.test(c)) return "Sheet Set";
-  if (/PC\d|PILLOWCASE/.test(c))               return "Pillow Case";
-  if (/COMF|CMFTR|COMFORTER/.test(c))          return "Comforter";
-  if (/DC\d|DUVET/.test(c))                    return "Duvet Cover";
-  return null;
+  return productFamilyOf(articleCode);
 }
 
 export function extractSkuRelevantPortion(description, articleCode) {

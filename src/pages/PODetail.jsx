@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArrowLeft, Pencil, Plus, Trash2, Package, AlertTriangle, Upload, Download, Layers, Scissors, PackageCheck, Tag, FlaskConical, TestTube, ClipboardList, DollarSign, FileText, ShieldCheck, Calendar, Ship, ShieldAlert, Receipt, FileBox, Shirt, ClipboardCheck, Image, Copy } from "lucide-react";
+import { ArrowLeft, Pencil, Plus, Trash2, Package, AlertTriangle, Upload, Download, Layers, Scissors, PackageCheck, Tag, FlaskConical, TestTube, ClipboardList, DollarSign, FileText, ShieldCheck, Calendar, Ship, ShieldAlert, Receipt, FileBox, Shirt, ClipboardCheck, Image, Copy, Zap, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import StatusBadge from "@/components/shared/StatusBadge";
@@ -54,6 +54,87 @@ async function parsePOItemsCSV(text, poId, poNumber) {
 }
 
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM yyyy") : "—"; } catch { return "—"; } };
+
+// Panel that surfaces the bom_exploded state of the PO and lets the user
+// trigger explode_po_bom() to copy tech-pack JSONB specs into the per-PO
+// planning tables (trim_items, accessory_items, fabric_orders).
+//
+// Uses force_redo=true so re-running clears prior auto-exploded rows and
+// re-inserts them with the latest tech-pack data — which is what the user
+// wants after re-extracting a tech pack or fixing missing fields.
+function BomExplosionPanel({ po, qc }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const handleExplode = async () => {
+    setBusy(true); setError(null); setResult(null);
+    try {
+      const { data, error: rpcErr } = await supabase.rpc("explode_po_bom", {
+        p_po_id: po.id,
+        p_force_redo: true,
+      });
+      if (rpcErr) throw rpcErr;
+      setResult(data);
+      // Invalidate every planning-page query so the user sees fresh rows
+      // when they navigate to Trims / Packaging / Fabric Orders next.
+      qc.invalidateQueries({ queryKey: ["trims", po.id] });
+      qc.invalidateQueries({ queryKey: ["accessoryItems"] });
+      qc.invalidateQueries({ queryKey: ["allArticles"] });
+      qc.invalidateQueries({ queryKey: ["fabricOrders"] });
+      qc.invalidateQueries({ queryKey: ["po", po.id] });
+    } catch (err) {
+      setError(err?.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exploded = !!po.bom_exploded;
+  const explodedAt = po.bom_exploded_at;
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${exploded ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+              <Zap className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-foreground">
+                BOM Explosion {exploded ? "✓ Done" : "— Not yet run"}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {exploded
+                  ? `Last run ${explodedAt ? format(new Date(explodedAt), "dd MMM yyyy HH:mm") : "(unknown)"} — copies tech-pack specs into Trims / Accessories / Fabric Orders for this PO.`
+                  : "Run this to populate the Trims and Accessories & Packaging pages from the tech packs already extracted on this PO."}
+              </div>
+            </div>
+          </div>
+          <Button onClick={handleExplode} disabled={busy} size="sm" variant={exploded ? "outline" : "default"}>
+            {busy
+              ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Exploding…</>
+              : <><Zap className="h-3.5 w-3.5 mr-1.5" />{exploded ? "Re-explode BOM" : "Explode BOM now"}</>}
+          </Button>
+        </div>
+        {result && (
+          <div className="mt-3 text-xs bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-emerald-800">
+            Explosion complete — created {result.fabrics ?? 0} fabric · {result.trims ?? 0} trim · {result.accessories ?? 0} accessory · {result.cartons ?? 0} carton row(s).
+            {Array.isArray(result.errors) && result.errors.length > 0 && (
+              <> {result.errors.length} item(s) had no master article or tech pack and were skipped.</>
+            )}
+          </div>
+        )}
+        {error && (
+          <div className="mt-3 text-xs bg-red-50 border border-red-200 rounded px-3 py-2 text-red-800">
+            Couldn't explode BOM: {error}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function InfoRow({ label, value }) {
   return (
@@ -234,6 +315,13 @@ export default function PODetail() {
 
       {/* Approval Panel */}
       <POApprovalPanel po={po} />
+
+      {/* BOM explosion — copies extracted_*_specs from tech packs into the
+          per-PO trim_items / accessory_items / fabric_orders tables that
+          drive the planning pages. Without this, the Trims and
+          Accessories & Packaging pages stay empty even when tech packs
+          carry full specs. */}
+      <BomExplosionPanel po={po} qc={qc} />
 
       {/* Quick navigation to planning modules */}
       <div className="flex flex-wrap gap-2">

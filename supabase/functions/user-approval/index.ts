@@ -41,17 +41,30 @@ const EMAIL_FROM   = Deno.env.get("EMAIL_FROM") || "MerQuant <onboarding@resend.
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY);
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
-const j = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS, "Content-Type": "application/json" },
-  });
+// Origin allowlist for CORS — tightened from `*` per hardening audit
+// Finding 17. Env var `ALLOWED_ORIGINS` extends the defaults.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://merquanterp.netlify.app",
+  "https://merquant-mas.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+const ALLOWED_ORIGINS = new Set(
+  (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .concat(DEFAULT_ALLOWED_ORIGINS),
+);
+function corsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
 // ---------- Helpers ----------
 
@@ -236,6 +249,12 @@ function emailRejection(fullName: string, reason: string | null) {
 // ---------- Request handler ----------
 
 Deno.serve(async (req) => {
+  // Per-request CORS headers (allowlist-checked against the Origin
+  // header). Helper functions defined below close over `CORS`.
+  const CORS = corsHeaders(req);
+  const j = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
+
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
 
   try {
@@ -244,12 +263,43 @@ Deno.serve(async (req) => {
     const action = body.action;
     console.log(`[user-approval] action=${action} requester=${requesterId || "anon"}`);
 
-    // ---- PUBLIC ACTION: notify_owner ---------------------------------
-    // Called by the frontend immediately after a new user signs up.
-    // No auth required (the user just signed up and isn't approved yet).
+    // ---- SEMI-PUBLIC ACTION: notify_owner ------------------------------
+    // Called by the frontend immediately after a new user signs up. No
+    // session token is reliably available yet (email-confirmation flows
+    // delay session issuance), so we cannot require a JWT. Instead we
+    // gate per hardening-audit Finding 8:
+    //   1. body.user_id must reference an existing auth.users row.
+    //   2. That row must be < 10 minutes old (recent signup).
+    //   3. body.email must match the auth.users.email exactly.
+    //   4. Any of the above failing → 401.
+    // Combined with Supabase's built-in per-IP rate limit on signUp(),
+    // this raises the cost of the spam vector from "free at any volume"
+    // to "one fake row per IP per few seconds". Still not bulletproof,
+    // but commensurate with the actual blast radius (one email to the
+    // owner per fake signup).
     if (action === "notify_owner") {
       const { user_id, email, full_name, signup_method } = body;
       if (!user_id || !email) return j({ error: "user_id and email required" }, 400);
+
+      // 1+2+3. Confirm the user_id is a real, just-signed-up auth user
+      //        whose email matches the body.
+      const { data: authUserData, error: authUserErr } =
+        await admin.auth.admin.getUserById(String(user_id));
+      if (authUserErr || !authUserData?.user) {
+        console.warn(`[user-approval] notify_owner: user_id ${user_id} not found in auth.users`);
+        return j({ error: "invalid_user_id" }, 401);
+      }
+      const authUser = authUserData.user;
+      const createdAt = authUser.created_at ? new Date(authUser.created_at).getTime() : 0;
+      const ageMs = Date.now() - createdAt;
+      if (ageMs > 10 * 60 * 1000) {
+        console.warn(`[user-approval] notify_owner: user_id ${user_id} too old (age=${Math.round(ageMs / 1000)}s)`);
+        return j({ error: "stale_signup" }, 401);
+      }
+      if ((authUser.email ?? "").toLowerCase() !== String(email).toLowerCase()) {
+        console.warn(`[user-approval] notify_owner: email mismatch (body=${email}, auth=${authUser.email})`);
+        return j({ error: "email_mismatch" }, 401);
+      }
 
       // Set approval_status=pending so they show up in Pending tab
       const { error: upsertErr } = await admin.from("user_profiles").upsert({

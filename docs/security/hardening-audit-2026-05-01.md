@@ -4,6 +4,36 @@
 
 ---
 
+## Closure status — 2026-05-02
+
+All 18 findings have been remediated as of 2026-05-02. Closure commits:
+
+| # | Title | Status | Commit |
+|---|---|---|---|
+| 1 | `user_profiles` readable by unauthenticated users | ✅ Closed | `f19cd73` |
+| 2 | `email_crawl` open to PUBLIC (read/write/delete) | ✅ Closed | `f19cd73` |
+| 3 | `ai-proxy` edge function has no JWT verification | ✅ Closed | `787411c` |
+| 4 | Other tables open to PUBLIC | ✅ Closed | `94d93f1` |
+| 5 | Almost every business table has `USING (true)` for `authenticated` | ✅ Closed | Group commits `03008f4`, `a4ac244`, `b6fef6f`, `791c7ba`, `50b2467`, `ea5a39e`, `2660743`, `a0df5a1` |
+| 6 | `notify-pricing-pending` edge function has no auth | ✅ Closed | `b397dd2` |
+| 7 | `classify-components` and `extract-barcodes` do not actually verify the JWT | ✅ Closed | `d1be33b` |
+| 8 | `user-approval` `notify_owner` action accepts unauthenticated input | ✅ Closed | `bcf5403` (this session) |
+| 9 | `exec_sql` RPC bypasses RLS and uses regex-based input validation | ✅ Closed | `fd1a6eb` (this session) |
+| 10 | gmail OAuth refresh tokens stored in plaintext | ✅ Closed | `02e5798` (this session) |
+| 11 | Front-end role checks not backed by server-side enforcement | ✅ Closed (covered by #5) | (group commits) |
+| 12 | No client-side file size or type cap on several upload paths | ✅ Closed | `72fc03d` |
+| 13 | CDN-loaded XLSX library has no Subresource Integrity | ✅ Closed | `c9f6414` |
+| 14 | xlsx 0.18.5 has known CVEs | ✅ Closed | `d13a94e`, `36e1b90` |
+| 15 | Storage bucket `ai-extraction-sources` has no per-user scoping | ✅ Closed | `bcf5403` (this session) |
+| 16 | No security headers in the deployment | ✅ Closed | `8c2a16e` |
+| 17 | Wide CORS on every edge function | ✅ Closed | `fd1a6eb` (this session) |
+| 18 | `backup-hourly` auth uses a shared static secret | ✅ Closed | `83ab157` |
+
+For Supabase secrets created during this work, see
+[`docs/security/SUPABASE_SECRETS.md`](SUPABASE_SECRETS.md).
+
+---
+
 ## Plain-English summary (read this first)
 
 I went through MerQuant's code, database schema (from the migration baseline), edge functions, deployment config, and dependencies. **I found a small number of issues that need to be fixed urgently and several smaller hardening items.** The good news: the basics are mostly right — your real secrets (Anthropic key, Resend key, Google client secret, service-role key) live on the server and are not in your client code, your `.gitignore` correctly blocks `.env` files, and your auth flow uses Supabase properly.

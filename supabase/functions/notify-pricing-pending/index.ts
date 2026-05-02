@@ -22,17 +22,30 @@ const APP_URL     = Deno.env.get("APP_URL") || "https://merquanterp.netlify.app"
 const OWNER_EMAIL = Deno.env.get("OWNER_EMAIL") || "waqas.ahmed@unionfabrics.com";
 const EMAIL_FROM  = Deno.env.get("EMAIL_FROM") || "MerQuant <onboarding@resend.dev>";
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
-const j = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { ...CORS, "Content-Type": "application/json" },
-  });
+// Origin allowlist for CORS — tightened from `*` per hardening audit
+// Finding 17. Env var `ALLOWED_ORIGINS` extends the defaults.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://merquanterp.netlify.app",
+  "https://merquant-mas.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+const ALLOWED_ORIGINS = new Set(
+  (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .concat(DEFAULT_ALLOWED_ORIGINS),
+);
+function corsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
 async function sendEmail(to: string, subject: string, html: string) {
   if (!RESEND_KEY) {
@@ -106,6 +119,12 @@ function escapeHtml(s: unknown): string {
 }
 
 Deno.serve(async (req) => {
+  // Per-request CORS headers (allowlist-checked against the Origin
+  // header). Helper functions defined below close over `CORS`.
+  const CORS = corsHeaders(req);
+  const j = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
+
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return j({ error: "method_not_allowed" }, 405);
 

@@ -937,13 +937,28 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
                 // Session 11 - wire through labels, packaging, accessories,
                 // measurements, and construction that the parser already
                 // extracts but the old fast path threw away.
+                // 2026-05-02 — field-name canonicalised to match what
+                // bom_explode_po SQL reads (size_spec, color,
+                // quantity_per_unit, unit, supplier) so trim_items /
+                // accessory_items don't end up with empty cells. Old
+                // names (size, colours, dimensions) are dropped — the
+                // SQL is patched in migration 0012 to fall back across
+                // them so legacy rows still resolve.
                 extracted_label_specs: (bob.labels || []).map(l => ({
-                  label_type: l.type,
-                  description: l.material,
-                  dimensions: l.size,
-                  placement: l.placement,
-                  colours: l.color,
-                  section: l.section,
+                  label_type:        l.type,
+                  description:       l.material,
+                  size_spec:         l.size_spec || l.size || l.dimensions || null,
+                  color:             l.color || null,
+                  placement:         l.placement,
+                  section:           l.section,
+                  quantity_per_unit: l.quantity_per_unit ?? null,
+                  unit:              l.unit || null,
+                  supplier:          l.supplier || null,
+                  // Aliases retained ONE more cycle so descriptionResolver +
+                  // techPackAudit don't lose data on freshly-extracted rows
+                  // while their reads are tightened — drop after S13.
+                  dimensions:        l.size_spec || l.size || l.dimensions || null,
+                  colours:           l.color || null,
                 })),
                 // Re-classify each accessory through componentClassifier so
                 // the BOB-parser-supplied accessory_type (often verbatim from
@@ -958,33 +973,68 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
                   });
                   const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : a.accessory_type;
                   return {
-                    accessory_type: finalType,
-                    description: a.description,
-                    material: a.material,
-                    placement: a.placement,
-                    source_label: a.source_label,
+                    accessory_type:    finalType,
+                    description:       a.description,
+                    material:          a.material,
+                    color:             a.color || null,
+                    size_spec:         a.size_spec || a.size || null,
+                    placement:         a.placement,
+                    quantity_per_unit: a.quantity_per_unit ?? null,
+                    unit:              a.unit || null,
+                    supplier:          a.supplier || null,
+                    source_label:      a.source_label,
                   };
                 }),
-                // Packaging items live in extracted_trim_specs because the
-                // existing audit UI reads trim_type from that column. Terminology
-                // to be revisited when the Accessories page is rebuilt.
-                // Same classifier pass — the small "Polybag" accessory bag
-                // shouldn't surface on the Polybag tab.
-                extracted_trim_specs: (bob.packaging || []).map(p => {
-                  const r = classifyComponent({
-                    raw_category: p.category,
-                    material: p.value,
-                    description: p.value,
-                  });
-                  const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : p.category;
-                  return {
-                    trim_type: finalType,
-                    description: p.value,
-                    size_spec: null,
-                    variant: p.variant,
-                    source_label: p.label,
-                  };
-                }),
+                // extracted_trim_specs now sources from BOTH bob.trims
+                // (when the AI extracted a dedicated trims section under
+                // prompt v2) AND bob.packaging (legacy fallback — the
+                // pre-v2 schema had no trims bucket so packaging rows
+                // were routed here). Both are classified through
+                // componentClassifier so the per-tab routing in
+                // PackagingPlanning + Trims keeps working.
+                extracted_trim_specs: [
+                  ...(bob.trims || []).map(t => {
+                    const r = classifyComponent({
+                      raw_category: t.trim_type,
+                      material: t.description,
+                      description: t.description,
+                      placement: t.placement,
+                    });
+                    const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : t.trim_type;
+                    return {
+                      trim_type:         finalType,
+                      description:       t.description,
+                      color:             t.color || null,
+                      size_spec:         t.size_spec || null,
+                      placement:         t.placement || null,
+                      quantity_per_unit: t.quantity_per_unit ?? null,
+                      unit:              t.unit || null,
+                      wastage_percent:   t.wastage_percent ?? null,
+                      supplier:          t.supplier || null,
+                      source: "trims",
+                    };
+                  }),
+                  ...(bob.packaging || []).map(p => {
+                    const r = classifyComponent({
+                      raw_category: p.category,
+                      material: p.value,
+                      description: p.value,
+                    });
+                    const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : p.category;
+                    return {
+                      trim_type:         finalType,
+                      description:       p.value,
+                      color:             p.color || null,
+                      size_spec:         p.size_spec || null,
+                      quantity_per_unit: p.quantity_per_unit ?? null,
+                      unit:              p.unit || null,
+                      supplier:          p.supplier || null,
+                      variant:           p.variant,
+                      source_label:      p.label,
+                      source: "packaging",
+                    };
+                  }),
+                ],
                 extracted_measurements: {
                   sizes: (bob.skus || []).map(s => s.size).filter(Boolean),
                   size_chart: Object.fromEntries(

@@ -5,7 +5,15 @@
  * This lets the audit skip "missing component" warnings on items where that
  * component is legitimately not part of the product (e.g. pillow protector
  * has no Skirt).
+ *
+ * 2026-05-02 — code-pattern detection delegated to
+ * textileVocabulary.productFamilyOf so MerQuant has ONE place where SKU
+ * code → product family rules live. The PRODUCT_TYPES taxonomy below
+ * (component/accessory applicability lists) stays local because it
+ * encodes audit-policy decisions, not raw vocabulary.
  */
+
+import { productFamilyOf } from "@/lib/textileVocabulary";
 
 /* ──── Product-type taxonomy ──────────────────────────────────────────── */
 
@@ -64,47 +72,48 @@ export const PRODUCT_TYPES = {
 
 /* ──── Inference rules ────────────────────────────────────────────────── */
 
+// Map vocab's product-family canonical names → the PRODUCT_TYPES entry that
+// carries this module's component/accessory applicability lists. Vocab
+// returns "Pillow Protector"; we return PRODUCT_TYPES.PILLOW_PROTECTOR.
+// Families without a 1:1 match (Pillow Case, Duvet Cover, Mattress
+// Topper, Bed Skirt, Throw) fall through to GENERIC for now — extend
+// PRODUCT_TYPES above when audit rules for them are added.
+const VOCAB_TO_PRODUCT_TYPE = {
+  "Pillow Protector":   "PILLOW_PROTECTOR",
+  "Total Encasement":   "TOTAL_ENCASEMENT",
+  "Sleeper Encasement": "SLEEPER_ENCASEMENT",
+  "Mattress Protector": "MATTRESS_PROTECTOR",
+  "Sheet Set":          "BED_SHEET_SET",
+  "Comforter":          "COMFORTER_SET",
+};
+
 // Classify an article by its code and/or name. Returns PRODUCT_TYPES[...] key.
-// Priority: explicit hints in name > code prefix > fallback GENERIC.
+// Priority: code-pattern via productFamilyOf > name keywords > GENERIC.
 export function classifyArticle({ article_code = "", article_name = "", product_type = "" }) {
+  // Step 1 — vocab-driven SKU pattern match (covers PP/MP/SE/TE/CSS/SS/etc.)
+  const family = productFamilyOf(article_code) || productFamilyOf(article_name) || productFamilyOf(product_type);
+  if (family) {
+    const key = VOCAB_TO_PRODUCT_TYPE[family];
+    if (key) return PRODUCT_TYPES[key];
+  }
+
+  // Step 2 — name-only signals that vocab regexes don't catch.
   const txt = `${article_code} ${article_name} ${product_type}`.toLowerCase();
 
-  // Pillow protector — check first because MP codes can contain "PP"
-  if (/pillow\s*protector/.test(txt) || /\bpp[kq]?\b/i.test(article_code) ||
-      /GP(FRIO)?PP[kKQ]?/i.test(article_code)) {
-    return PRODUCT_TYPES.PILLOW_PROTECTOR;
-  }
+  // Encasement disambiguation when only the name carries the signal —
+  // "sleeper encasement" inside a generic-coded article.
+  if (/total\s*encasement/.test(txt)) return PRODUCT_TYPES.TOTAL_ENCASEMENT;
+  if (/sleeper/.test(txt) && /(protector|encasement)/.test(txt)) return PRODUCT_TYPES.SLEEPER_ENCASEMENT;
+  if (/\bencasement\b/.test(txt))    return PRODUCT_TYPES.TOTAL_ENCASEMENT;
 
-  // Total encasement (must precede sleeper check and MP check)
-  if (/total\s*encasement/.test(txt) || /\bencasement\b/.test(txt)) {
-    if (/sleeper/.test(txt)) return PRODUCT_TYPES.SLEEPER_ENCASEMENT;
-    return PRODUCT_TYPES.TOTAL_ENCASEMENT;
-  }
-
-  // Sleeper encasement explicit
-  if (/sleeper/.test(txt) && /(protector|encasement)/.test(txt)) {
-    return PRODUCT_TYPES.SLEEPER_ENCASEMENT;
-  }
-  // GPSE code prefix = Sleeper Encasement
-  if (/^GPSE/i.test(article_code)) return PRODUCT_TYPES.SLEEPER_ENCASEMENT;
-
-  // Total encasement codes
-  if (/^GPTE/i.test(article_code)) return PRODUCT_TYPES.TOTAL_ENCASEMENT;
-
-  // Bolster
+  // Bolster — not in vocab's PRODUCT_FAMILIES yet.
   if (/bolster/.test(txt)) return PRODUCT_TYPES.BOLSTER_PROTECTOR;
 
-  // Sheet set
+  // Sheet set / comforter set — name-driven catches when SKU code is opaque.
   if (/sheet\s*set|bed\s*sheet/.test(txt)) return PRODUCT_TYPES.BED_SHEET_SET;
-
-  // Comforter set
-  if (/comforter\s*set|comforter/.test(txt)) return PRODUCT_TYPES.COMFORTER_SET;
-
-  // Mattress protector (broadest — check last before generic)
-  if (/mattress\s*protector/.test(txt) || /^GP(FRIO)?MP/i.test(article_code) ||
-      /\bmp\d/i.test(article_code)) {
-    return PRODUCT_TYPES.MATTRESS_PROTECTOR;
-  }
+  if (/comforter/.test(txt))               return PRODUCT_TYPES.COMFORTER_SET;
+  if (/pillow\s*protector/.test(txt))      return PRODUCT_TYPES.PILLOW_PROTECTOR;
+  if (/mattress\s*protector/.test(txt))    return PRODUCT_TYPES.MATTRESS_PROTECTOR;
 
   return PRODUCT_TYPES.GENERIC;
 }

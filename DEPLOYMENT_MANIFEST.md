@@ -28,7 +28,17 @@
 | GitHub Repo | copperh3ad-bot/Merquant-AI |
 
 ## Supabase Secrets Required
-- `ANTHROPIC_API_KEY` — set in Supabase Edge Functions → Secrets
+
+Full inventory + rotation procedures: see [`docs/security/SUPABASE_SECRETS.md`](docs/security/SUPABASE_SECRETS.md).
+
+Quick list (set in Supabase Dashboard → Edge Functions → Secrets):
+- `ANTHROPIC_API_KEY` — Claude API access
+- `BACKUP_SECRET` — gates the hourly DB backup function (fail closed if unset)
+- `RESEND_API_KEY` — owner-notification emails
+- `OWNER_EMAIL`, `EMAIL_FROM`, `APP_URL` — email templating
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — Gmail OAuth integration
+- `GMAIL_TOKEN_KEY` — pgcrypto passphrase for encrypted Gmail refresh tokens (Finding 10 closure, 2026-05-02)
+- `ALLOWED_ORIGINS` — optional CORS allowlist extension for branch deploys (Finding 17 closure, 2026-05-02)
 
 ---
 

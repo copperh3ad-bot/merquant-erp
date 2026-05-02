@@ -6,6 +6,7 @@ import { createPageUrl } from "@/utils";
 import { db, mfg, priceList as priceListAPI, supabase } from "@/api/supabaseClient";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { resolveProductSize } from "@/lib/skuSizeInference";
+import { directionForPart } from "@/lib/textileVocabulary";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -306,14 +307,13 @@ export default function PurchaseOrders() {
 
         // Build authoritative BOM from consumption_library — replaces any existing article.components[]
         setImportMsg("Building BOM from Master Data…");
-        const directionFor = (component_type, kind) => {
-          if (kind !== "fabric") return null;
-          const t = (component_type || "").toLowerCase();
-          if (t === "skirt") return "LXW";                              // strip cut along fabric length
-          if (t === "piping" || t === "binding") return "WXL";          // bias strips cut across width
-          if (/platform|bottom|sleeper|evalon|sheet|front|back|top fabric|pillow case/.test(t)) return "WXL";
-          return null;
-        };
+        // Direction lookup is delegated to textileVocabulary.directionForPart()
+        // (single source of truth — same table is used by ConsumptionLibrary
+        // and any future planning page). Only fabric components have a
+        // conventional cut direction; non-fabric (accessory/trim/packaging)
+        // returns null per the consumption_library convention.
+        const directionFor = (component_type, kind) =>
+          kind === "fabric" ? directionForPart(component_type) : null;
 
         const articleRecords = enrichedItems.map((item) => {
           const code = item.item_code.trim();

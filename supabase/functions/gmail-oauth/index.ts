@@ -1,11 +1,31 @@
 // supabase/functions/gmail-oauth/index.ts v2 (verbose errors)
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+// Origin allowlist for CORS — tightened from `*` per hardening audit
+// Finding 17. Env var `ALLOWED_ORIGINS` (comma-separated) extends the
+// defaults for branch deploys / staging.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://merquanterp.netlify.app",
+  "https://merquant-mas.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+const ALLOWED_ORIGINS = new Set(
+  (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .concat(DEFAULT_ALLOWED_ORIGINS),
+);
+function corsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
@@ -14,9 +34,6 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-function j(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
-}
 
 async function getUserIdFromAuth(req: Request): Promise<string | null> {
   const authHeader = req.headers.get("Authorization") || "";
@@ -28,6 +45,11 @@ async function getUserIdFromAuth(req: Request): Promise<string | null> {
 }
 
 Deno.serve(async (req) => {
+  // Per-request CORS headers (allowlist-checked against the Origin
+  // header). Helper functions defined below close over `CORS`.
+  const CORS = corsHeaders(req);
+  const j = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
 
   try {
@@ -68,6 +90,21 @@ Deno.serve(async (req) => {
 
       const expires_at = new Date(Date.now() + (expires_in || 3600) * 1000).toISOString();
 
+      // Encrypt tokens at rest. The plaintext columns are written too
+      // for backward compat during rollout — a follow-up migration will
+      // backfill encrypted-only and drop the plaintext columns.
+      const tokenKey = Deno.env.get("GMAIL_TOKEN_KEY") || "";
+      let refresh_token_encrypted: string | null = null;
+      let access_token_encrypted: string | null = null;
+      if (tokenKey) {
+        const { data: enc1 } = await supabaseAdmin.rpc("encrypt_gmail_token", { plaintext: refresh_token, passphrase: tokenKey });
+        const { data: enc2 } = await supabaseAdmin.rpc("encrypt_gmail_token", { plaintext: access_token,  passphrase: tokenKey });
+        refresh_token_encrypted = enc1 ?? null;
+        access_token_encrypted  = enc2 ?? null;
+      } else {
+        console.warn("[gmail-oauth] GMAIL_TOKEN_KEY not set — storing tokens in plaintext only (encryption skipped)");
+      }
+
       const { data: saved, error: upsertErr } = await supabaseAdmin
         .from("gmail_oauth")
         .upsert({
@@ -75,6 +112,8 @@ Deno.serve(async (req) => {
           email,
           refresh_token,
           access_token,
+          refresh_token_encrypted,
+          access_token_encrypted,
           token_expires_at: expires_at,
           scope,
           updated_at: new Date().toISOString(),
@@ -94,8 +133,21 @@ Deno.serve(async (req) => {
       const { data: rec } = await supabaseAdmin.from("gmail_oauth").select("*").eq("user_id", userId).maybeSingle();
       if (!rec) return j({ error: "no_oauth_record" }, 404);
 
+      // Resolve plaintext refresh_token: prefer the encrypted column,
+      // fall back to legacy plaintext until the rollout backfill runs.
+      const tokenKey = Deno.env.get("GMAIL_TOKEN_KEY") || "";
+      let refreshPlaintext: string | null = null;
+      if (rec.refresh_token_encrypted && tokenKey) {
+        const { data: dec } = await supabaseAdmin.rpc("decrypt_gmail_token", {
+          ciphertext: rec.refresh_token_encrypted, passphrase: tokenKey,
+        });
+        refreshPlaintext = dec ?? null;
+      }
+      if (!refreshPlaintext) refreshPlaintext = rec.refresh_token ?? null;
+      if (!refreshPlaintext) return j({ error: "no_refresh_token_stored" }, 500);
+
       const params = new URLSearchParams({
-        refresh_token: rec.refresh_token,
+        refresh_token: refreshPlaintext,
         client_id: GOOGLE_CLIENT_ID,
         client_secret: GOOGLE_CLIENT_SECRET,
         grant_type: "refresh_token",
@@ -109,8 +161,16 @@ Deno.serve(async (req) => {
       if (!resp.ok) return j({ error: "refresh_failed", details: data }, 400);
 
       const expires_at = new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString();
+      let access_token_encrypted: string | null = null;
+      if (tokenKey) {
+        const { data: enc } = await supabaseAdmin.rpc("encrypt_gmail_token", {
+          plaintext: data.access_token, passphrase: tokenKey,
+        });
+        access_token_encrypted = enc ?? null;
+      }
       await supabaseAdmin.from("gmail_oauth").update({
         access_token: data.access_token,
+        access_token_encrypted,
         token_expires_at: expires_at,
         updated_at: new Date().toISOString(),
       }).eq("user_id", userId);
