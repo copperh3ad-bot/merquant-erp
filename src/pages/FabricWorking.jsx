@@ -389,6 +389,12 @@ export default function FabricWorking() {
               color: fs.color || null,
               finish: fs.finish || null,
               construction: fs.construction || null,
+              // Yarn fields are extracted as structured fields on the
+              // tech pack now (see extract-document/prompts.ts → "YARN
+              // FIELDS"). Preserve them on the component so YarnPlanning
+              // can read them without re-parsing the construction string.
+              yarn_count: fs.yarn_count || null,
+              yarn_type:  fs.yarn_type  || null,
               net_total: +net.toFixed(4),
               total_required: +(net * (1 + wastage / 100)).toFixed(4),
             };

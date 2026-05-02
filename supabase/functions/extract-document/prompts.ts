@@ -24,8 +24,8 @@ import {
 export type ExtractionKind = "tech_pack" | "master_data";
 
 export const PROMPT_VERSION_BY_KIND: Record<ExtractionKind, string> = {
-  tech_pack: "tech_pack.v2",   // v2 (2026-05-02): added trims[]; added color/size_spec/quantity_per_unit/unit/supplier to accessories; renamed labels.size → size_spec for downstream consistency
-  master_data: "master_data.v4",  // v4 (2026-05-02): canonical part / accessory / fibre / fabric_type lists now codegen'd from src/lib/textileVocabulary so prompt instructions stay in sync with the rest of the system
+  tech_pack: "tech_pack.v3",   // v3 (2026-05-03): added structured yarn_count + yarn_type fields to fabric_specs (drives YarnPlanning page); explicit "YARN FIELDS" guidance added to system prompt
+  master_data: "master_data.v5",  // v5 (2026-05-03): added structured yarn_count + yarn_type to fabric_consumption (parity with tech_pack.v3)
 };
 
 // Phase E2: every kind starts on Haiku and escalates to Sonnet on low
@@ -82,6 +82,44 @@ These three buckets are NOT interchangeable. Route each item correctly:
 
 For each item, populate every field you can read from the source. NEVER
 leave color or size_spec null when the source clearly shows them.
+
+═══════════════════════════════════════════════════════════════════════
+YARN FIELDS — fabric_specs[].yarn_count and yarn_type
+═══════════════════════════════════════════════════════════════════════
+Every fabric_specs entry has two structured yarn fields. Tech packs
+typically embed yarn info inside the construction string ("32S Loop /
+100D bottom") or the fabric description ("100% Polyester 75D"). Pull
+that info out into these dedicated fields whenever it's there.
+
+• yarn_count — the spinning / denier notation. Common shapes:
+    "30/1"        cotton single
+    "40/2"        cotton two-ply
+    "30s" or "40S" English count (Ne)
+    "Ne 30"       explicit Ne notation
+    "Nm 60"       metric count
+    "75D"         denier (filament yarns — polyester, nylon, spandex)
+    "150D/48F"    denier / filament count
+  If a fabric component has TWO yarn counts (e.g. "32S Loop / 100D
+  bottom" — terry-knit constructions), join them with " / " in source
+  order: "32S / 100D".
+  Leave null if the source genuinely doesn't state a count (e.g.
+  "Compact Knit Jersey" with no further detail).
+
+• yarn_type — the fibre composition with percentages. Common shapes:
+    "100% Cotton"
+    "100% Polyester"
+    "85% Modal / 10% Polyester / 5% Spandex"
+    "Egyptian Cotton"   (when no percentages stated, just the fibre name)
+  Use canonical fibre names (Cotton, Polyester, Modal, Nylon, Spandex,
+  Viscose, Bamboo, Wool, Linen, Silk, etc.). Preserve the percentages
+  as the source shows them.
+  If yarn_type can be cleanly extracted from fabric_type (e.g.
+  fabric_type = "100% Polyester terry knit fabric" → yarn_type =
+  "100% Polyester"), do it.
+  If the source doesn't clearly state composition, leave null.
+
+These two fields drive the YarnPlanning page downstream — getting them
+right at extraction time avoids a brittle regex pass later.
 
 Produce one tool call to "extract_tech_pack". The "skus" array is required and must
 contain at least one row. If the source genuinely has no SKU rows (e.g. the file is
@@ -204,6 +242,12 @@ const TECH_PACK_TOOL = {
             color:          { type: ["string", "null"] },
             construction:   { type: ["string", "null"] },
             finish:         { type: ["string", "null"] },
+            // Structured yarn fields — see "YARN FIELDS" section in the
+            // system prompt. Extract these whenever the source spells the
+            // count/composition out (typically inside `construction` or
+            // `fabric_type`); leave null when the source doesn't.
+            yarn_count:     { type: ["string", "null"] },
+            yarn_type:      { type: ["string", "null"] },
           },
         },
       },
@@ -350,6 +394,13 @@ const MASTER_DATA_TOOL = {
             width_cm:             { type: ["number", "null"] },
             consumption_per_unit: { type: ["number", "null"] },
             wastage_percent:      { type: ["number", "null"] },
+            // Same structured yarn fields as tech-pack fabric_specs.
+            // See "YARN FIELDS" section in TECH_PACK_SYSTEM_PROMPT for
+            // the format. Customers often spell yarn count out in a
+            // dedicated column ("Yarn Count: 30/1") or inline in the
+            // fabric description.
+            yarn_count:           { type: ["string", "null"] },
+            yarn_type:            { type: ["string", "null"] },
           },
           required: ["item_code", "component_type"],
         },

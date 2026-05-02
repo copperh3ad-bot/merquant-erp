@@ -126,13 +126,18 @@ export default function YarnPlanning() {
         (art.components || []).forEach(comp => {
           const key = `${comp.fabric_type}||${comp.gsm}||${comp.width}`;
           if (!fabricMap[key]) {
-            // Derive yarn_type + yarn_count from the fabric description
-            // strings present on the component. Prefer the explicit
-            // material/fabric_type/construction fields (in that order)
-            // since none of these fields are stored as separate yarn
-            // columns on articles.components — they're inlined into
-            // the fabric description string.
-            const { yarn_type, yarn_count } = deriveYarnFields(
+            // Priority chain for yarn fields:
+            //   1. Structured fields on the component (carried over from
+            //      tech-pack extraction — see extract-document/prompts.ts
+            //      "YARN FIELDS" and FabricWorking.handleRefreshFromTechPacks).
+            //      These are the source of truth when the tech pack
+            //      spelled them out.
+            //   2. Regex inference over material / fabric_type /
+            //      construction strings — fallback for older articles
+            //      whose components were created before the structured
+            //      fields shipped, or when the source doc didn't state
+            //      a count clearly.
+            const inferred = deriveYarnFields(
               comp.material, comp.fabric_type, comp.construction
             );
             fabricMap[key] = {
@@ -140,8 +145,8 @@ export default function YarnPlanning() {
               gsm:         comp.gsm   || 0,
               width_cm:    comp.width || 0,
               total_meters: 0,
-              yarn_type,
-              yarn_count,
+              yarn_type:  comp.yarn_type  || inferred.yarn_type,
+              yarn_count: comp.yarn_count || inferred.yarn_count,
             };
           }
           fabricMap[key].total_meters += comp.total_required || 0;
