@@ -275,6 +275,18 @@ exports[`getPromptForKind (drift detection) > master_data tool schema matches sn
                 "null",
               ],
             },
+            "yarn_count": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "yarn_type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
           },
           "required": [
             "item_code",
@@ -434,6 +446,44 @@ These three buckets are NOT interchangeable. Route each item correctly:
 For each item, populate every field you can read from the source. NEVER
 leave color or size_spec null when the source clearly shows them.
 
+═══════════════════════════════════════════════════════════════════════
+YARN FIELDS — fabric_specs[].yarn_count and yarn_type
+═══════════════════════════════════════════════════════════════════════
+Every fabric_specs entry has two structured yarn fields. Tech packs
+typically embed yarn info inside the construction string ("32S Loop /
+100D bottom") or the fabric description ("100% Polyester 75D"). Pull
+that info out into these dedicated fields whenever it's there.
+
+• yarn_count — the spinning / denier notation. Common shapes:
+    "30/1"        cotton single
+    "40/2"        cotton two-ply
+    "30s" or "40S" English count (Ne)
+    "Ne 30"       explicit Ne notation
+    "Nm 60"       metric count
+    "75D"         denier (filament yarns — polyester, nylon, spandex)
+    "150D/48F"    denier / filament count
+  If a fabric component has TWO yarn counts (e.g. "32S Loop / 100D
+  bottom" — terry-knit constructions), join them with " / " in source
+  order: "32S / 100D".
+  Leave null if the source genuinely doesn't state a count (e.g.
+  "Compact Knit Jersey" with no further detail).
+
+• yarn_type — the fibre composition with percentages. Common shapes:
+    "100% Cotton"
+    "100% Polyester"
+    "85% Modal / 10% Polyester / 5% Spandex"
+    "Egyptian Cotton"   (when no percentages stated, just the fibre name)
+  Use canonical fibre names (Cotton, Polyester, Modal, Nylon, Spandex,
+  Viscose, Bamboo, Wool, Linen, Silk, etc.). Preserve the percentages
+  as the source shows them.
+  If yarn_type can be cleanly extracted from fabric_type (e.g.
+  fabric_type = "100% Polyester terry knit fabric" → yarn_type =
+  "100% Polyester"), do it.
+  If the source doesn't clearly state composition, leave null.
+
+These two fields drive the YarnPlanning page downstream — getting them
+right at extraction time avoids a brittle regex pass later.
+
 Produce one tool call to "extract_tech_pack". The "skus" array is required and must
 contain at least one row. If the source genuinely has no SKU rows (e.g. the file is
 not a tech pack at all), still call the tool with skus=[] and set _notes to explain.
@@ -574,6 +624,18 @@ exports[`getPromptForKind (drift detection) > tech_pack tool schema matches snap
             "gsm": {
               "type": [
                 "number",
+                "null",
+              ],
+            },
+            "yarn_count": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "yarn_type": {
+              "type": [
+                "string",
                 "null",
               ],
             },

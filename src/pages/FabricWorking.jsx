@@ -15,6 +15,8 @@ import { getColorLabel, getBaseCode } from "@/lib/articleUtils";
 import { canonicalPartName } from "@/lib/partNameCanonical";
 import { useArticleComponentUpdate } from "@/hooks/useArticleComponentUpdate";
 import { isFabricComponentWithWarn } from "@/lib/fabricClassifier";
+import { useUnitSystem } from "@/hooks/useUnitSystem";
+import { formatWidth, widthUnitLabel } from "@/lib/unitSystem";
 
 // Session 10 — Fabric Working is the source of the printout handed to Union
 // Fabrics central-ERP data-entry operators. It must show fabric components
@@ -50,6 +52,10 @@ export default function FabricWorking() {
   const [editingArticle, setEditingArticle] = useState(null);
   const [readOnly, setReadOnly] = useState(false);
   const [showAddArticle, setShowAddArticle] = useState(false);
+  // Unit-system preference (metric/imperial). Width is stored in cm in the
+  // DB and converted at display time. See @/lib/unitSystem for rationale.
+  const [unitSystem] = useUnitSystem();
+  const widthLabel = widthUnitLabel(unitSystem);
 
   const { data: pos = [] } = useQuery({ queryKey: ["purchaseOrders"], queryFn: () => db.purchaseOrders.list("-created_at") });
   const activePo = useMemo(() => selectedPoId ? pos.find(p => p.id === selectedPoId) : pos[0], [pos, selectedPoId]);
@@ -383,6 +389,12 @@ export default function FabricWorking() {
               color: fs.color || null,
               finish: fs.finish || null,
               construction: fs.construction || null,
+              // Yarn fields are extracted as structured fields on the
+              // tech pack now (see extract-document/prompts.ts → "YARN
+              // FIELDS"). Preserve them on the component so YarnPlanning
+              // can read them without re-parsing the construction string.
+              yarn_count: fs.yarn_count || null,
+              yarn_type:  fs.yarn_type  || null,
               net_total: +net.toFixed(4),
               total_required: +(net * (1 + wastage / 100)).toFixed(4),
             };
@@ -417,7 +429,7 @@ export default function FabricWorking() {
 
   const handleDownloadCSV = () => {
     const rows = [["PO", activePo?.po_number, "Customer", activePo?.customer_name], []];
-    rows.push(["Article", "Colors", "Total Qty", "Part", "Prod Size", "Dimensions", "Direction", "Fabrication", "Width cm", "Cut/Unit m", "Net Mtrs", "Wastage%", "Total Mtrs"]);
+    rows.push(["Article", "Colors", "Total Qty", "Part", "Prod Size", "Dimensions", "Direction", "Fabrication", `Width ${widthLabel}`, "Cut/Unit m", "Net Mtrs", "Wastage%", "Total Mtrs"]);
     combinedGroups.forEach(g => {
       g.components.forEach((comp, i) => {
         const dims = resolveDims(g.template, comp.product_size, comp.component_type, comp);
@@ -430,7 +442,7 @@ export default function FabricWorking() {
           dims,
           comp.direction||"",
           comp.fabric_type,
-          comp.width||"",
+          comp.width ? formatWidth(comp.width, unitSystem) : "",
           (comp.consumption_per_unit||0).toFixed(4),
           (comp.net_total||0).toFixed(2),
           (comp.wastage_percent||6)+"%",
@@ -439,7 +451,7 @@ export default function FabricWorking() {
       });
     });
     rows.push([], ["FABRIC SUMMARY"], ["Fabric Type","Width","Net Mtrs","Total Mtrs (w/ wastage)"]);
-    fabricSummary.forEach(f => rows.push([f.fabric_type, f.width?f.width+"cm":"", (f.net_total||0).toFixed(2), (f.total_with_wastage||0).toFixed(2)]));
+    fabricSummary.forEach(f => rows.push([f.fabric_type, f.width ? formatWidth(f.width, unitSystem) : "", (f.net_total||0).toFixed(2), (f.total_with_wastage||0).toFixed(2)]));
     rows.push([], ["Fabric components only. Trims, accessories & packaging are printed from a separate sheet."]);
     const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
     const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([csv], {type:"text/csv"})), download: `FWS_${activePo?.po_number||"PO"}.csv` });
@@ -589,7 +601,7 @@ export default function FabricWorking() {
       { label: "Dimensions",     width: 20,  align: "center", mode: "clip" },
       { label: "Dir",            width: 10,  align: "center", mode: "clip" },
       { label: "Fabrication",    width: 55,  align: "left",   mode: "wrap" },
-      { label: "Width",          width: 12,  align: "center", mode: "clip" },
+      { label: `Width ${widthLabel}`, width: 12, align: "center", mode: "clip" },
       { label: "Cut/Unit",       width: 14,  align: "right",  mode: "clip" },
       { label: "Net Mtrs",       width: 14,  align: "right",  mode: "clip" },
       { label: "Wastage",        width: 11,  align: "right",  mode: "clip" },
@@ -604,7 +616,7 @@ export default function FabricWorking() {
       { label: "Dimensions",  width: 20,  align: "center", mode: "clip" },
       { label: "Dir",         width: 10,  align: "center", mode: "clip" },
       { label: "Fabrication", width: 55,  align: "left",   mode: "wrap" },
-      { label: "Width",       width: 12,  align: "center", mode: "clip" },
+      { label: `Width ${widthLabel}`, width: 12, align: "center", mode: "clip" },
       { label: "Cut/Unit",    width: 14,  align: "right",  mode: "clip" },
       { label: "Net Mtrs",    width: 14,  align: "right",  mode: "clip" },
       { label: "Wastage",     width: 11,  align: "right",  mode: "clip" },
@@ -612,7 +624,7 @@ export default function FabricWorking() {
     ];
     const SUMMARY_COLS = [
       { label: "Fabric Type", width: 170, align: "left",   mode: "wrap" },
-      { label: "Width",       width: 20,  align: "center", mode: "clip" },
+      { label: `Width ${widthLabel}`, width: 20, align: "center", mode: "clip" },
       { label: "Net Mtrs",    width: 38,  align: "right",  mode: "clip" },
       { label: "Total Mtrs",  width: 45,  align: "right",  mode: "clip" },
     ];
@@ -640,7 +652,7 @@ export default function FabricWorking() {
             dims || "",
             comp.direction || "",
             comp.fabric_type || "",
-            comp.width ? `${comp.width}cm` : "",
+            comp.width ? formatWidth(comp.width, unitSystem) : "",
             (comp.consumption_per_unit || 0).toFixed(4),
             (comp.net_total || 0).toFixed(2),
             `${comp.wastage_percent == null ? 6 : comp.wastage_percent}%`,
@@ -691,7 +703,7 @@ export default function FabricWorking() {
               dims || "",
               comp.direction || "",
               comp.fabric_type || "",
-              comp.width ? `${comp.width}cm` : "",
+              comp.width ? formatWidth(comp.width, unitSystem) : "",
               (comp.consumption_per_unit || 0).toFixed(4),
               net.toFixed(2),
               `${comp.wastage_percent == null ? 6 : comp.wastage_percent}%`,
@@ -725,7 +737,7 @@ export default function FabricWorking() {
     fabricSummary.forEach((f, idx) => {
       const values = [
         f.fabric_type || "",
-        f.width ? `${f.width}cm` : "",
+        f.width ? formatWidth(f.width, unitSystem) : "",
         (f.net_total || 0).toFixed(2),
         (f.total_with_wastage || 0).toFixed(2),
       ];
@@ -842,7 +854,7 @@ export default function FabricWorking() {
               <table className="w-full text-xs border-collapse" style={{ fontFamily:"Arial,sans-serif" }}>
                 <thead>
                   <tr style={thStyle}>
-                    {["Article (Base)","Colors","Total Qty","Part","Prod. Size","Dimensions","Direction","Fabrication","Width cm","Cut/Unit m","Net Mtrs","Wastage %","Total Mtrs", ...(readOnly ? [] : [""])].map(col => (
+                    {["Article (Base)","Colors","Total Qty","Part","Prod. Size","Dimensions","Direction","Fabrication",`Width ${widthLabel}`,"Cut/Unit m","Net Mtrs","Wastage %","Total Mtrs", ...(readOnly ? [] : [""])].map(col => (
                       <th key={col} className={thCls}>{col}</th>
                     ))}
                   </tr>
@@ -874,7 +886,7 @@ export default function FabricWorking() {
                           <td className={`${tdCls} text-center font-mono`}>{dims||"—"}</td>
                           <td className={`${tdCls} text-center`}>{comp.direction||"—"}</td>
                           <td className={tdCls}>{comp.fabric_type}</td>
-                          <td className={`${tdCls} text-center`}>{comp.width?`${comp.width}cm`:"—"}</td>
+                          <td className={`${tdCls} text-center`}>{formatWidth(comp.width, unitSystem)}</td>
                           <td className={`${tdCls} text-center`}>{(comp.consumption_per_unit||0).toFixed(4)}</td>
                           <td className={`${tdCls} text-center`}>{(comp.net_total||0).toFixed(2)}</td>
                           <td className={`${tdCls} text-center`}>{comp.wastage_percent??6}%</td>
@@ -904,7 +916,7 @@ export default function FabricWorking() {
                     <table className="w-full text-xs border-collapse" style={{ fontFamily:"Arial,sans-serif" }}>
                       <thead>
                         <tr style={thStyle}>
-                          {["Article","Code","Qty","Part","Prod. Size","Dimensions","Direction","Fabrication","Width cm","Cut/Unit m","Net Mtrs","Wastage %","Total Mtrs", ...(readOnly ? [] : [""])].map(col => (
+                          {["Article","Code","Qty","Part","Prod. Size","Dimensions","Direction","Fabrication",`Width ${widthLabel}`,"Cut/Unit m","Net Mtrs","Wastage %","Total Mtrs", ...(readOnly ? [] : [""])].map(col => (
                             <th key={col} className={thCls}>{col}</th>
                           ))}
                         </tr>
@@ -951,7 +963,7 @@ export default function FabricWorking() {
                                     <td className={`${tdCls} text-center font-mono`}>{dims||"—"}</td>
                                     <td className={`${tdCls} text-center`}>{comp.direction||"—"}</td>
                                     <td className={tdCls}>{comp.fabric_type}</td>
-                                    <td className={`${tdCls} text-center`}>{comp.width?`${comp.width}cm`:"—"}</td>
+                                    <td className={`${tdCls} text-center`}>{formatWidth(comp.width, unitSystem)}</td>
                                     <td className={`${tdCls} text-center`}>{(comp.consumption_per_unit||0).toFixed(4)}</td>
                                     <td className={`${tdCls} text-center`}>{net.toFixed(2)}</td>
                                     <td className={`${tdCls} text-center`}>{comp.wastage_percent??6}%</td>
@@ -988,7 +1000,7 @@ export default function FabricWorking() {
                     <thead>
                       <tr style={{ backgroundColor:"#1F6B3F", color:"white" }}>
                         <th className={thCls} colSpan={2}>● {color.toUpperCase()}</th>
-                        <th className={thCls}>Width</th>
+                        <th className={thCls}>{`Width ${widthLabel}`}</th>
                         <th className={`${thCls} text-right`}>Net Mtrs</th>
                         <th className={`${thCls} text-right`}>Total Mtrs (incl. wastage)</th>
                       </tr>
@@ -997,7 +1009,7 @@ export default function FabricWorking() {
                       {items.map((f, idx) => (
                         <tr key={idx} style={{ backgroundColor: idx%2===0?"#EBF0FA":"white" }}>
                           <td className={tdCls} colSpan={2}>{f.fabric_type}</td>
-                          <td className={`${tdCls} text-center`}>{f.width?`${f.width}cm`:"—"}</td>
+                          <td className={`${tdCls} text-center`}>{formatWidth(f.width, unitSystem)}</td>
                           <td className={`${tdCls} text-right`}>{(f.net_total||0).toFixed(2)}</td>
                           <td className={highlightTd} style={{ backgroundColor:"#FFF2CC", textAlign:"right" }}>{(f.total_with_wastage||0).toFixed(2)}</td>
                         </tr>
@@ -1032,7 +1044,7 @@ export default function FabricWorking() {
                 <thead>
                   <tr style={thStyle}>
                     <th className={thCls} colSpan={2}>FABRIC REQUIREMENT SUMMARY — {activePo?.po_number}</th>
-                    <th className={thCls}>Width</th>
+                    <th className={thCls}>{`Width ${widthLabel}`}</th>
                     <th className={`${thCls} text-right`}>Net Mtrs (100%)</th>
                     <th className={`${thCls} text-right`}>Total Mtrs (w/ wastage)</th>
                   </tr>
@@ -1041,7 +1053,7 @@ export default function FabricWorking() {
                   {fabricSummary.map((f, idx) => (
                     <tr key={idx} style={{ backgroundColor: idx%2===0?"#EBF0FA":"#fff" }}>
                       <td className={tdCls} colSpan={2}>{f.fabric_type}</td>
-                      <td className={`${tdCls} text-center`}>{f.width?`${f.width}cm`:"—"}</td>
+                      <td className={`${tdCls} text-center`}>{formatWidth(f.width, unitSystem)}</td>
                       <td className={`${tdCls} text-right`}>{(f.net_total||0).toFixed(2)}</td>
                       <td className={highlightTd} style={{ backgroundColor:"#FFF2CC", textAlign:"right" }}>{(f.total_with_wastage||0).toFixed(2)}</td>
                     </tr>

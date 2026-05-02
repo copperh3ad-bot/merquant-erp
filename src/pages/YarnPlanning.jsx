@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import StatusBadge from "@/components/shared/StatusBadge";
 import EmptyState from "@/components/shared/EmptyState";
 import StatCard from "@/components/shared/StatCard";
+import { deriveYarnFields } from "@/lib/yarnInference";
 
 // Formula: Total Meters × GSM × Width(cm) / 39.37 / 1000  → kg
 function toYarnKg(meters, gsm, width) {
@@ -124,7 +125,30 @@ export default function YarnPlanning() {
       articles.forEach(art => {
         (art.components || []).forEach(comp => {
           const key = `${comp.fabric_type}||${comp.gsm}||${comp.width}`;
-          if (!fabricMap[key]) fabricMap[key] = { fabric_type: comp.fabric_type, gsm: comp.gsm||0, width_cm: comp.width||0, total_meters: 0 };
+          if (!fabricMap[key]) {
+            // Priority chain for yarn fields:
+            //   1. Structured fields on the component (carried over from
+            //      tech-pack extraction — see extract-document/prompts.ts
+            //      "YARN FIELDS" and FabricWorking.handleRefreshFromTechPacks).
+            //      These are the source of truth when the tech pack
+            //      spelled them out.
+            //   2. Regex inference over material / fabric_type /
+            //      construction strings — fallback for older articles
+            //      whose components were created before the structured
+            //      fields shipped, or when the source doc didn't state
+            //      a count clearly.
+            const inferred = deriveYarnFields(
+              comp.material, comp.fabric_type, comp.construction
+            );
+            fabricMap[key] = {
+              fabric_type: comp.fabric_type,
+              gsm:         comp.gsm   || 0,
+              width_cm:    comp.width || 0,
+              total_meters: 0,
+              yarn_type:  comp.yarn_type  || inferred.yarn_type,
+              yarn_count: comp.yarn_count || inferred.yarn_count,
+            };
+          }
           fabricMap[key].total_meters += comp.total_required || 0;
         });
       });
@@ -133,6 +157,8 @@ export default function YarnPlanning() {
         fabric_type: f.fabric_type, gsm: f.gsm, width_cm: f.width_cm,
         total_meters: +(f.total_meters||0).toFixed(2),
         yarn_kg: toYarnKg(f.total_meters, f.gsm, f.width_cm),
+        yarn_type:  f.yarn_type  || null,
+        yarn_count: f.yarn_count || null,
         status: "Planned",
       }));
       if (rows.length) await mfg.yarn.bulkCreate(rows);

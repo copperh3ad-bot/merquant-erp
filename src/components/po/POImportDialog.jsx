@@ -130,7 +130,18 @@ Rules:
 - po_number and customer_name are REQUIRED; make a best guess if unclear
 - For dates: convert ANY format (DD/MM/YYYY, Month DD YYYY, DD-MMM-YY, etc.) to YYYY-MM-DD
 - items array may be empty [] if no line items found
-- currency defaults to USD if not specified
+
+Currency detection — read the source carefully BEFORE defaulting:
+  • "EUR", "Euro", "Euros", "€" anywhere in the price/total context  → "EUR"
+  • "USD", "US$", "USD $", "$" with US context, "Dollar(s)"           → "USD"
+  • "GBP", "£", "Pound(s)", "Sterling"                                 → "GBP"
+  • "INR", "Rs", "Rs.", "₹", "Indian Rupee"                            → "INR"
+  • "CNY", "RMB", "¥", "Yuan"                                          → "CNY"
+  • "PKR", "Pak Rs", "Pakistani Rupee"                                 → "PKR"
+  • "BDT", "Tk", "Taka"                                                → "BDT"
+  • Only fall back to "USD" when NO currency word, code, or symbol appears anywhere in the document.
+  • If a single document mixes currencies, use the one attached to the line-item prices (the totals are usually in the same currency).
+  • A bare "$" without context is ambiguous — prefer "USD" but only if the rest of the document is consistent with US trade.
 - ship_via: look for "Container Direct", "Air", "Courier", etc.
 - port_of_loading: factory/origin port (e.g. "Karachi, Pakistan")
 - port_of_destination: buyer port (e.g. "Norfolk, Virginia, USA")

@@ -33,6 +33,16 @@ Extract BOTH the PO header info AND every line item/article with all available d
 For dates use YYYY-MM-DD format.
 For each item extract: item code/SKU, description, fabric type, GSM, width, quantity, unit, unit price, delivery date, fabric construction, finish, shrinkage, CBM, pieces per carton, carton dimensions (L×W×H in cm).
 
+CURRENCY DETECTION — read the source carefully BEFORE defaulting to USD:
+  • "EUR", "Euro", "Euros", "€" anywhere in the price/total context  → "EUR"
+  • "USD", "US$", "USD $", explicit "Dollar(s)"                        → "USD"
+  • "GBP", "£", "Pound(s)", "Sterling"                                 → "GBP"
+  • "INR", "Rs", "Rs.", "₹", "Indian Rupee"                            → "INR"
+  • "CNY", "RMB", "¥", "Yuan"                                          → "CNY"
+  • "PKR", "Pak Rs", "Pakistani Rupee"                                 → "PKR"
+  • "BDT", "Tk", "Taka"                                                → "BDT"
+  Only fall back to "USD" when NO currency word, code, or symbol appears anywhere in the document. A plain "$" with no other currency marker may be USD but say so in notes if the customer or shipping country suggests otherwise.
+
 CRITICAL — SKU/ITEM CODE EXTRACTION:
 The item_code MUST be copied EXACTLY as written in the source document, character-for-character.
 - DO NOT shorten, abbreviate, or "correct" what looks like typos.

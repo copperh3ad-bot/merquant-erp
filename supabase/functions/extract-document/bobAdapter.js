@@ -26,6 +26,13 @@ export function bobToTechPackShape(bob) {
     color:          fs.color          ?? null,
     construction:   fs.construction   ?? null,
     finish:         fs.finish         ?? fs.treatment ?? null,
+    // Yarn fields are NOT extracted by the BOB deterministic parser
+    // today. The shape stays in sync with the LLM tech-pack schema so
+    // downstream consumers (FabricWorking → article components →
+    // YarnPlanning) can rely on the keys existing. When the BOB parser
+    // is taught to read yarn columns, fill these in instead of null.
+    yarn_count:     fs.yarn_count     ?? null,
+    yarn_type:      fs.yarn_type      ?? null,
   }));
 
   const skus = (bob.skus ?? []).map((s) => ({
