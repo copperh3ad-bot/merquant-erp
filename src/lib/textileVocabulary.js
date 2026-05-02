@@ -162,16 +162,28 @@ const ACCESSORY_CATEGORIES = {
 // ── Trim types (subset of accessory_consumption used as trim_specs) ─────────
 
 const TRIM_TYPES = {
-  "Zipper":            ["zipper", "zip"],
-  "Thread":            ["thread", "sewing thread"],
+  // Sewn-in trim items used on the Trims planning page. The Trims dropdown
+  // sources its options from allCanonicals("trim"), so any new trim added
+  // here surfaces there automatically.
+  "Zipper":            ["zipper", "zip", "slider"],
   "Elastic":           ["elastic"],
+  "Button":            ["button"],
+  "Dori":              ["dori"],
+  "Eyelet":            ["eyelet", "grommet"],
+  "Stitching Thread":  ["stitching thread"],
+  "Velcro":            ["velcro", "hook and loop"],
+  "Snap Button":       ["snap button", "snap", "press stud"],
+  "Hook & Eye":        ["hook & eye", "hook and eye", "hook"],
+  "Buckle":            ["buckle"],
+  "Drawstring":        ["drawstring", "draw string"],
+  "Ribbon":            ["ribbon"],
+  "Tape":              ["tape", "binding tape"],
+  "Interlining":       ["interlining"],
+  "Lace":              ["lace"],
+  "Patch":             ["patch"],
+  "Thread":            ["thread", "sewing thread", "matched thread"],
   "Binding":           ["binding"],
   "Piping":            ["piping"],
-  "Tape":              ["tape", "ribbon"],
-  "Velcro":            ["velcro"],
-  "Snap":              ["snap"],
-  "Hook":              ["hook"],
-  "Eyelet":            ["eyelet", "grommet"],
 };
 
 // ── Sizes (mattress / sheet-set / pillow) ───────────────────────────────────
@@ -268,14 +280,14 @@ const LABEL_TYPES = {
   "GOTS Label":         ["gots", "gots label", "organic label"],
   "Barcode Label":      ["barcode label", "barcode", "upc label", "ean label"],
   "Hang Tag":           ["hang tag", "hangtag", "hanging tag", "swing tag", "swing ticket", "ticket"],
-  "Country of Origin":  ["country of origin", "made in", "origin label", "coo"],
+  "Country of Origin Label": ["country of origin label", "country of origin", "made in", "origin label", "coo"],
   "Composition Label":  ["composition", "composition label", "fiber content", "fibre content", "content label"],
   "Wash Label":         ["wash label", "wash instruction", "washing label"],
   "Price Ticket":       ["price ticket", "price tag", "msrp", "retail price"],
   "Compliance Label":   ["compliance label", "compliance", "ce mark", "iso 9001"],
   "Retailer Label":     ["retailer label", "store label", "private label"],
   "Eco Label":          ["eco label", "eco", "oeko-tex", "fsc", "fair trade", "oekotex"],
-  "Care Label 3-Lang":  ["care label in 3 languages 1x3", "3 language care label", "tri-lingual care", "1x3"],
+  "Care label in 3 Languages 1X3": ["care label in 3 languages 1x3", "care label 3-lang", "3 language care label", "tri-lingual care", "1x3"],
   "Custom Label":       ["custom label", "custom"],
 };
 
@@ -293,7 +305,7 @@ const STICKER_TYPES = {
   "UPC Sticker":         ["upc sticker", "upc"],
   "Barcode Sticker":     ["barcode sticker", "barcode"],
   "Size Sticker":        ["size sticker"],
-  "Packaging Info":      ["packaging info sticker", "packaging info"],
+  "Packaging Info Sticker": ["packaging info sticker", "packaging info"],
   "Retailer Sticker":    ["retailer sticker"],
   "Warning Sticker":     ["warning sticker", "warning label", "caution sticker"],
   "QR Code Sticker":     ["qr code sticker", "qr code", "qr"],
@@ -308,7 +320,7 @@ const ZIPPER_TYPES = {
   "Metal Zipper":         ["metal zipper", "metal"],
   "Invisible Zipper":     ["invisible zipper", "invisible"],
   "Plastic Molded Zipper":["plastic molded zipper", "plastic molded", "molded plastic"],
-  "Custom Zipper":        ["custom zipper", "custom"],
+  "Custom":               ["custom", "custom zipper"],
 };
 
 // ── Stiffener sub-types ─────────────────────────────────────────────────────
@@ -357,6 +369,7 @@ const TRIM_DETAIL_TYPES = {
 // ── Combined registry ──────────────────────────────────────────────────────
 
 const REGISTRY = {
+  // Top-level categories
   part:                 PART_NAMES,
   fabric_type:          FABRIC_TYPES,
   fibre:                FIBRE_TYPES,
@@ -366,6 +379,19 @@ const REGISTRY = {
   direction:            DIRECTIONS,
   treatment:            TREATMENTS,
   colour:               COLOURS,
+
+  // Sub-type registries — used by the per-tab dropdowns on Packaging
+  // Planning. Each one narrows a top-level accessory category into the
+  // common variants the user chooses between (e.g. for "Polybag" the
+  // sub-types are PVC / PP / PE / LDPE / OPP).
+  label_type:           LABEL_TYPES,
+  polybag_type:         POLYBAG_TYPES,
+  sticker_type:         STICKER_TYPES,
+  zipper_type:          ZIPPER_TYPES,
+  stiffener_type:       STIFFENER_TYPES,
+  insert_card_type:     INSERT_CARD_TYPES,
+  carton_type:          CARTON_TYPES,
+  trim_detail_type:     TRIM_DETAIL_TYPES,
 };
 
 // Build reverse-lookup maps once at module load: lower(alias) → canonical
