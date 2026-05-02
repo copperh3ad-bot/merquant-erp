@@ -14,7 +14,15 @@
  * The taxonomy mirrors PackagingPlanning.jsx tab categories plus a few
  * extras the spreadsheet category column conflates ("Accessory Bag" vs
  * "Polybag", "Hang Tag" vs "Label").
+ *
+ * NOTE on CANONICAL_TYPES vs textileVocabulary: this file's CANONICAL_TYPES
+ * is the per-tab routing taxonomy used by PackagingPlanning. It's coarser
+ * than (and partly overlaps with) vocab's accessory category list. Kept
+ * local intentionally — adding a tab to PackagingPlanning is the gate for
+ * adding a CANONICAL_TYPES entry, not adding to vocab.
  */
+
+import { productFamilyOf } from "@/lib/textileVocabulary";
 
 export const CANONICAL_TYPES = [
   "Label",
@@ -257,48 +265,18 @@ export function classifyBatch(items) {
 // code so we can validate the polybag/insert/etc. description against
 // the SKU's actual product type.
 
-// More-specific patterns FIRST so they win over broader patterns.
-// Bedding-protector codes (PP/MP/SE/TE) checked before Sheet Sets etc.
-// because some shared substrings exist (e.g. CSS contains "SS").
-const PRODUCT_TYPE_PATTERNS = [
-  // Pillow Protector — codes ending in PPK/PPQ or containing PP\d
-  { type: "Pillow Protector",   test: (c) => /PP[KQ]\d*$/.test(c) || /PP\d/.test(c) },
-  // Mattress Protector — codes containing MP\d (GPMP46, GPFRIOMP33)
-  { type: "Mattress Protector", test: (c) => /MP\d/.test(c) },
-  // Sleeper Encasement — codes containing SE\d (GPSE50)
-  { type: "Sleeper Encasement", test: (c) => /SE\d/.test(c) },
-  // Total Encasement — codes containing TE\d (GPTE50)
-  { type: "Total Encasement",   test: (c) => /TE\d/.test(c) },
-
-  // ── Newly added (Apr 2026): broader bedding categories ──
-  // Sheet Set — SLPCSS (Sleep Cool Stretch Sheet Set), JFCSS (Jersey
-  // Frio Cool Sheet Set), or *SS-* / *-SS in the code.
-  { type: "Sheet Set",          test: (c) => /(?:CSS|JFCSS|^SLP|SHTSET|SHEET)/.test(c) || /(?:^|[^A-Z])SS[-_]/.test(c) },
-  // Pillow Case — PC followed by digit, or explicit PILLOWCASE keyword
-  { type: "Pillow Case",        test: (c) => /PC\d|PILLOWCASE|PILLCASE|PCASE/.test(c) },
-  // Comforter
-  { type: "Comforter",          test: (c) => /COMF|CMFTR|COMFORTER/.test(c) },
-  // Duvet Cover — DC followed by digit, or explicit DUVET keyword
-  { type: "Duvet Cover",        test: (c) => /DC\d|DUVET|DUV\d/.test(c) },
-  // Mattress Topper — TOP*, TPR
-  { type: "Mattress Topper",    test: (c) => /TOPPER|TPR\d|MATTOP|MTOP/.test(c) },
-  // Bed Skirt — BSK*, SKRT*, BEDSKIRT
-  { type: "Bed Skirt",          test: (c) => /BEDSKIRT|BSK\d|SKRT\d|BSKT/.test(c) },
-  // Throw / Blanket — THRW*, BLNK*
-  { type: "Throw",              test: (c) => /THROW|THRW|BLANKET|BLNKT/.test(c) },
-];
-
 /**
  * Infer the product family from a SKU/article code. Returns null when no
  * known pattern matches (the system falls back to neutral classification).
+ *
+ * 2026-05-02 — delegates to textileVocabulary.productFamilyOf, which owns
+ * the canonical PRODUCT_FAMILY_PATTERNS list (used by classifyTerm,
+ * descriptionResolver, articleTypes, ...). This used to be a parallel
+ * copy here that drifted whenever a new family was added in one place
+ * but not the other.
  */
 export function detectProductTypeFromCode(articleCode) {
-  if (!articleCode) return null;
-  const code = String(articleCode).toUpperCase();
-  for (const p of PRODUCT_TYPE_PATTERNS) {
-    if (p.test(code)) return p.type;
-  }
-  return null;
+  return productFamilyOf(articleCode);
 }
 
 // Per-product-type rules for detecting mis-paired component rows.
