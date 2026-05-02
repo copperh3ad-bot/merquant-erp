@@ -596,15 +596,17 @@ export function resolveDescription({
     }
   }
 
-  // ── Tier-2 fallback — measurements / articleSizes / EAN ──────────────
+  // ── Tier-2 fallback — measurements-only / articleSizes-only / EAN-only ──
   // Even when no spec element matches the tab, three signals can produce
   // a useful row:
   //   1. extracted_measurements.this_sku (per-SKU dim from BOB tech pack)
-  //   2. articleSizes (per-SKU dim from master Articles sheet, PR #25)
+  //   2. articleSizes (per-SKU dim from the master-data Articles sheet —
+  //      used when no tech pack has been uploaded for the article)
   //   3. UPC/EAN entry for showEAN tabs (Sticker, Insert Card) — emits a
   //      row carrying just the EAN when no other source has data.
   // (3) is critical for the Sticker tab, which has no size source anywhere
   // else and would otherwise return null even when the UPC table has its EAN.
+  // Source priority for size: tech-pack measurement > master Articles sheet.
   let fallbackSize = null;
   if (ctx.measurements?.this_sku) {
     const sku = ctx.measurements.this_sku;
