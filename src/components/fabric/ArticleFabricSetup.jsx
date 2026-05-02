@@ -2,8 +2,18 @@ import React, { useState } from "react";
 import { callClaude } from "@/lib/aiProxy";
 import { Button } from "@/components/ui/button";
 import { Upload, Pencil, Loader2, CheckCircle2 } from "lucide-react";
+import { allCanonicals } from "@/lib/textileVocabulary";
 
-const COMPONENT_TYPES = ["Front", "Skirt", "Bottom", "Piping", "Binding", "Filling", "Lamination", "Top Fabric", "Window (Outside)", "Window (Inside)", "Fabric Bag", "Fabric Swatch", "Quilting", "Pillow Compression"];
+// Component-type dropdown options. Sourced from textileVocabulary so new
+// canonical parts appear here automatically. Extras are dialog-context
+// specific (Window variants, Fabric Swatch sample) and aren't in the
+// central vocabulary because they're not first-class part categories.
+const COMPONENT_TYPES = [
+  ...allCanonicals("part"),
+  "Window (Outside)",
+  "Window (Inside)",
+  "Fabric Swatch",
+];
 
 /**
  * Shown when an article has no fabric components yet.

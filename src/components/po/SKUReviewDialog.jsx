@@ -12,8 +12,17 @@ import {
 import { cn } from "@/lib/utils";
 import { mfg, skuQueue } from "@/api/supabaseClient";
 import { applyTemplateToArticle } from "@/lib/skuMatcher";
+import { allCanonicals } from "@/lib/textileVocabulary";
 
-const COMPONENT_TYPES = ["Front","Skirt","Bottom","Flat Sheet","Fitted Sheet","Pillow Case","Piping","Binding","Filling","Lamination","Top Fabric","Window (Outside)","Window (Inside)","Fabric Bag","Quilting","Other"];
+// Sourced from textileVocabulary; new canonical parts appear here
+// automatically. Dialog-specific extras: Window (Outside)/(Inside)
+// parens variants + "Other" free-form sentinel.
+const COMPONENT_TYPES = [
+  ...allCanonicals("part"),
+  "Window (Outside)",
+  "Window (Inside)",
+  "Other",
+];
 const emptyComp = () => ({ component_type:"Front", product_size:"", direction:"", fabric_type:"", gsm:0, width:0, consumption_per_unit:0, wastage_percent:6, total_required:0 });
 
 function CompRow({ comp, idx, qty, onChange, onRemove }) {

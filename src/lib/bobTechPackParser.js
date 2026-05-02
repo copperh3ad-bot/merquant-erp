@@ -16,7 +16,28 @@
 //   - parseZipperInfo() now also scans the Size & Workmanship sheet (not only
 //     the Info sheet) for zipper-related rows.
 
+import { canonical, isInCategory, _internals } from "@/lib/textileVocabulary";
+
 function cellStr(v) { return v == null ? "" : String(v).trim(); }
+
+// Build a single regex that matches any colour alias in the central vocab
+// (white|ivory|grey|gray|misty blue|cloud gray|...). Used to detect when a
+// fabric_type string mentions a colour. Returns the canonical name, never
+// the alias — so "WHITE" / "off-white" both yield "White".
+const COLOUR_ALIAS_REGEX = (() => {
+  const idx = _internals.REVERSE_INDEX.colour;
+  if (!idx || idx.size === 0) return null;
+  const aliases = Array.from(idx.keys()).sort((a, b) => b.length - a.length);
+  const escaped = aliases.map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\b(${escaped.join("|")})\\b`, "i");
+})();
+
+function detectColourInText(text) {
+  if (!text || !COLOUR_ALIAS_REGEX) return null;
+  const m = String(text).match(COLOUR_ALIAS_REGEX);
+  if (!m) return null;
+  return canonical("colour", m[1]) ?? null;
+}
 
 function readSheet(XLSX, wb, name) {
   const ws = wb.Sheets[name];
@@ -80,12 +101,14 @@ function parseInfoSheet(rows) {
 // where column C ("Item Code") actually holds component names like "Flat Sheet"
 // instead of real SKU codes. When we see this, we synthesize the SKU code from
 // header.product_sku + a size suffix and group the component rows under it.
-const COMPONENT_TYPE_TOKENS = new Set([
-  "flat sheet", "fitted sheet", "pillow case", "pillowcase", "sham",
-  "top fabric", "lining", "binding", "skirt", "front", "bottom",
-  "piping", "filling", "lamination", "fabric bag", "quilting",
-  "pillow compression", "platform", "evalon membrane", "sleeper flap",
-]);
+// Membership test for "is this string a known part name?". Delegated to
+// textileVocabulary.isInCategory("part", ...) — the central source of
+// truth that this file used to mirror as a hardcoded Set. The local
+// version was prone to drift when new parts were added (e.g. "Outer",
+// "Inner" got missed, leading to BOB rows mis-classified as SKU codes).
+function isComponentTypeToken(token) {
+  return isInCategory("part", token);
+}
 
 // Compact size tokens used for synthesized item codes.
 const SIZE_CODE_MAP = {
@@ -173,7 +196,7 @@ function parseSizeSheet(rows, headerProductSku = "") {
   // Detect layout: if a majority of item_code values are component-type tokens,
   // treat this as a sheet-set layout and synthesize real SKU codes.
   const componentLikeCount = rawRows.filter(r =>
-    COMPONENT_TYPE_TOKENS.has((r.item_code || "").toLowerCase().trim())
+    isComponentTypeToken((r.item_code || "").trim())
   ).length;
   const isSheetSetLayout = componentLikeCount >= Math.ceil(rawRows.length * 0.6);
 
@@ -448,7 +471,11 @@ function toFabricSpecs(fabrications, trims) {
       width_cm: null,
       consumption_per_unit: null,
       wastage_percent: null,
-      color: /white/i.test(f.fabric_type || "") ? "White" : null,
+      // Detect a colour mention inside the fabric_type string by walking
+      // every colour canonical via the central vocab. Catches "white",
+      // "ivory", "grey", etc. — the old hardcoded /white/i missed every
+      // other colour.
+      color: detectColourInText(f.fabric_type),
       notes: f.location || null,
     });
   }

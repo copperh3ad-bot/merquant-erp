@@ -2,8 +2,17 @@ import React, { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2, Save } from "lucide-react";
+import { allCanonicals } from "@/lib/textileVocabulary";
 
-const COMPONENT_TYPES = ["Flat Sheet","Fitted Sheet","Pillow Case","Front","Skirt","Bottom","Piping","Binding","Filling","Lamination","Top Fabric","Window (Outside)","Window (Inside)","Fabric Bag","Quilting","Pillow Compression","Other"];
+// Sourced from textileVocabulary; new canonical parts appear here
+// automatically. Dialog-specific extras: Window (Outside)/(Inside)
+// parens variants + "Other" free-form sentinel.
+const COMPONENT_TYPES = [
+  ...allCanonicals("part"),
+  "Window (Outside)",
+  "Window (Inside)",
+  "Other",
+];
 
 const emptyComp = () => ({ component_type:"Front", product_size:"", direction:"", fabric_type:"", gsm:0, width:0, consumption_per_unit:0, wastage_percent:6, total_required:0 });
 
