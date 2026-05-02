@@ -30,8 +30,8 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;      // 10 MB
 const DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000;   // 6 hours
-const ANTHROPIC_TIMEOUT_MS = 120_000;         // 120s per attempt (master_data with many sections can take 60-90s on Haiku)
-const ANTHROPIC_MAX_TOKENS = 16_000;
+const ANTHROPIC_TIMEOUT_MS = 240_000;         // 240s per attempt — large master_data XLSX with 8 sections can take 2-3 minutes on Haiku
+const ANTHROPIC_MAX_TOKENS = 64_000;          // Haiku 4.5 native limit. master_data with 8 sections × ~250 rows needs ~60k. Smaller files only bill actual usage.
 const SOURCES_BUCKET = "ai-extraction-sources";
 const ALLOWED_KINDS = new Set<ExtractionKind>(["tech_pack", "master_data"]);
 const CONFIDENCE_FALLBACK_THRESHOLD = 0.7;    // Phase E2 P1=B
@@ -172,7 +172,8 @@ type AttemptResult =
   | { kind: "ok"; raw: unknown; extracted: unknown; usage: AnthropicUsage; model: string }
   | { kind: "timeout"; model: string }
   | { kind: "http_error"; status: number; body: unknown; model: string }
-  | { kind: "no_tool_use"; raw: unknown; model: string };
+  | { kind: "no_tool_use"; raw: unknown; model: string }
+  | { kind: "truncated"; raw: unknown; model: string; usage: AnthropicUsage };
 
 type AnthropicUsage = {
   input_tokens?: number;
@@ -212,6 +213,13 @@ async function callAnthropicOnce(
     if (!resp.ok) return { kind: "http_error", status: resp.status, body: data, model };
 
     const usage: AnthropicUsage = data?.usage ?? {};
+    // Claude hit max_tokens before finishing the tool call. The output is
+    // truncated mid-string/mid-array and the parsed JSON cannot be trusted —
+    // trailing sections (e.g. carton, price_list, suppliers) come back empty
+    // and silently apply as missing data. Surface this as a distinct kind.
+    if (data?.stop_reason === "max_tokens") {
+      return { kind: "truncated", raw: data, model, usage };
+    }
     const block = (data?.content ?? []).find((c: { type?: string }) => c.type === "tool_use");
     if (!block) return { kind: "no_tool_use", raw: data, model };
     return { kind: "ok", raw: data, extracted: block.input, usage, model };
@@ -251,6 +259,13 @@ async function callAnthropicChain(
       }
       console.log(`[extract-document] confidence ${conf} below ${CONFIDENCE_FALLBACK_THRESHOLD}; escalating ${result.model} -> ${models[i + 1]}`);
       continue;
+    }
+    if (result.kind === "truncated") {
+      // The model billed for the full max_tokens output, so account the cost
+      // before bailing. Don't escalate to the next model — a larger model
+      // would also truncate at the same cap. The user must split the file.
+      totalCost += computeCostUsd(result.model, result.usage);
+      return { kind: "exhausted", attempts, total_cost_usd: totalCost };
     }
     if (result.kind === "http_error" || result.kind === "no_tool_use" || result.kind === "timeout") {
       // Non-recoverable per-attempt failure: don't escalate (likely the whole
@@ -467,6 +482,30 @@ Deno.serve(async (req) => {
         cost_usd: chain.total_cost_usd,
       });
       return err("EXTRACTION_LLM_TIMEOUT", "The AI took too long to respond. Please try again in a minute.", `fetch aborted at ${ANTHROPIC_TIMEOUT_MS}ms`, 504);
+    }
+    if (lastFailure.kind === "truncated") {
+      // Distinct from a generic LLM error: the call billed for the full
+      // max_tokens output but cut off mid-tool-call. Trailing sections of
+      // the JSON are missing and unsafe to apply (they'd silently look
+      // empty rather than incomplete). Persist with EXTRACTION_LLM_TRUNCATED
+      // so the user gets a clear "split the file" message rather than a
+      // misleading partial-success state.
+      await supabase.from("ai_extractions").insert({
+        ...baseRow, model: lastModel, validation_status: "skipped",
+        review_status: "rejected" as const,
+        rejected_at: new Date().toISOString(),
+        rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
+        raw_llm_response: (lastFailure as { raw?: Record<string, unknown> }).raw,
+        error_code: "EXTRACTION_LLM_TRUNCATED",
+        error_message: `Claude hit max_tokens (${ANTHROPIC_MAX_TOKENS}); output truncated and unsafe to apply`,
+        cost_usd: chain.total_cost_usd,
+      });
+      return err(
+        "EXTRACTION_LLM_TRUNCATED",
+        "This file is too big to extract in one shot — please split it into smaller files (e.g. one section per file) and try again.",
+        `stop_reason=max_tokens at cap ${ANTHROPIC_MAX_TOKENS}`,
+        413,
+      );
     }
     if (lastFailure.kind === "http_error") {
       await supabase.from("ai_extractions").insert({
