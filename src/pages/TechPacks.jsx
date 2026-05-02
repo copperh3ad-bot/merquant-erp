@@ -26,7 +26,7 @@ import { callClaude } from "@/lib/aiProxy";
 import POSelector from "@/components/shared/POSelector";
 import { runFullAudit, applyFix, AUDIT_STEPS } from "@/lib/techPackAudit";
 import { parseBobTechPack } from "@/lib/bobTechPackParser";
-import { classifyArticle, componentApplies } from "@/lib/articleTypes";
+import { classifyArticle, componentApplies, applies as appliesToProductType } from "@/lib/articleTypes";
 import { computeBarcodeUpdates } from "@/lib/barcodeOcrMerge";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { classifyComponent } from "@/lib/componentClassifier";
@@ -964,27 +964,39 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
                 // the BOB-parser-supplied accessory_type (often verbatim from
                 // the spreadsheet's free-form category column) gets corrected
                 // when needed (e.g. small "Polybag" → "Accessory Bag").
-                extracted_accessory_specs: (bob.accessories || []).map(a => {
-                  const r = classifyComponent({
-                    raw_category: a.accessory_type,
-                    material: a.material || a.description,
-                    description: a.description,
-                    placement: a.placement,
-                  });
-                  const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : a.accessory_type;
-                  return {
-                    accessory_type:    finalType,
-                    description:       a.description,
-                    material:          a.material,
-                    color:             a.color || null,
-                    size_spec:         a.size_spec || a.size || null,
-                    placement:         a.placement,
-                    quantity_per_unit: a.quantity_per_unit ?? null,
-                    unit:              a.unit || null,
-                    supplier:          a.supplier || null,
-                    source_label:      a.source_label,
-                  };
-                }),
+                //
+                // Per-SKU applicability filter (2026-05-02): BOB tech packs
+                // emit accessories at the WHOLE-tech-pack level (parsed from
+                // a single Size & Workmanship sheet), so without this filter
+                // every SKU in the pack would inherit every accessory —
+                // putting fitted-sheet elastic on Pillow Case SKUs, etc.
+                // appliesToProductType() checks both the components and
+                // accessories lists for tolerance to historical taxonomy
+                // muddles (Elastic appears in BED_SHEET_SET.accessories now,
+                // not components — see articleTypes.js).
+                extracted_accessory_specs: (bob.accessories || [])
+                  .map(a => {
+                    const r = classifyComponent({
+                      raw_category: a.accessory_type,
+                      material: a.material || a.description,
+                      description: a.description,
+                      placement: a.placement,
+                    });
+                    const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : a.accessory_type;
+                    return {
+                      accessory_type:    finalType,
+                      description:       a.description,
+                      material:          a.material,
+                      color:             a.color || null,
+                      size_spec:         a.size_spec || a.size || null,
+                      placement:         a.placement,
+                      quantity_per_unit: a.quantity_per_unit ?? null,
+                      unit:              a.unit || null,
+                      supplier:          a.supplier || null,
+                      source_label:      a.source_label,
+                    };
+                  })
+                  .filter(a => appliesToProductType(productType, a.accessory_type)),
                 // extracted_trim_specs now sources from BOTH bob.trims
                 // (when the AI extracted a dedicated trims section under
                 // prompt v2) AND bob.packaging (legacy fallback — the
@@ -992,6 +1004,11 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
                 // were routed here). Both are classified through
                 // componentClassifier so the per-tab routing in
                 // PackagingPlanning + Trims keeps working.
+                // Same per-SKU applicability filter as accessories above.
+                // bob.trims (AI prompt v2) and bob.packaging (legacy
+                // routing) are both whole-tech-pack lists; without the
+                // filter, packing-list zippers from a sheet-set tech pack
+                // would land on Pillow Case SKUs etc.
                 extracted_trim_specs: [
                   ...(bob.trims || []).map(t => {
                     const r = classifyComponent({
@@ -1034,7 +1051,7 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
                       source: "packaging",
                     };
                   }),
-                ],
+                ].filter(t => appliesToProductType(productType, t.trim_type)),
                 extracted_measurements: {
                   sizes: (bob.skus || []).map(s => s.size).filter(Boolean),
                   size_chart: Object.fromEntries(
