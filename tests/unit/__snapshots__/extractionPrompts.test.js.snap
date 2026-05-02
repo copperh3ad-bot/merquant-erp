@@ -418,7 +418,27 @@ A tech pack typically has:
 - a header sheet with brand, product type, product number, and product name
 - one or more rows describing fabric components (shell, lining, fill, etc.) with GSM, construction, finish
 - a SKU table where each row is one finished article (size + colour + dimensions)
-- optional sheets for labels, accessories, packaging, and zipper specs
+- optional sheets for labels, accessories, trims, packaging, and zipper specs
+
+═══════════════════════════════════════════════════════════════════════
+TRIMS vs ACCESSORIES vs PACKAGING — read carefully
+═══════════════════════════════════════════════════════════════════════
+These three buckets are NOT interchangeable. Route each item correctly:
+
+• "trims"       → SEWN-IN functional components: zipper, elastic, drawstring,
+                  sewing thread, velcro, snap, button, eyelet, ribbon, binding tape.
+                  These are consumed BY THE STITCHER during garment construction.
+• "accessories" → ATTACHED non-fabric items: care label, brand label, size label,
+                  hang tag, law tag, sticker, barcode, insert card, stiffener.
+                  These are FINISHING items added after construction.
+• "packaging"   → THE BOX/BAG holding the finished product: polybag, PVC bag,
+                  carton, kraft bag, master carton.
+• "labels"      → A sub-set of accessories that carry text/info (care, brand, size,
+                  hang tag, etc). Repeat them in BOTH "labels" AND "accessories"
+                  is fine — downstream code dedupes.
+
+For each item, populate every field you can read from the source. NEVER
+leave color or size_spec null when the source clearly shows them.
 
 Produce one tool call to "extract_tech_pack". The "skus" array is required and must
 contain at least one row. If the source genuinely has no SKU rows (e.g. the file is
@@ -465,6 +485,12 @@ exports[`getPromptForKind (drift detection) > tech_pack tool schema matches snap
                 "null",
               ],
             },
+            "color": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
             "description": {
               "type": [
                 "string",
@@ -483,7 +509,31 @@ exports[`getPromptForKind (drift detection) > tech_pack tool schema matches snap
                 "null",
               ],
             },
+            "quantity_per_unit": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "size_spec": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
             "source_label": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "supplier": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "unit": {
               "type": [
                 "string",
                 "null",
@@ -588,19 +638,37 @@ exports[`getPromptForKind (drift detection) > tech_pack tool schema matches snap
                 "null",
               ],
             },
+            "quantity_per_unit": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
             "section": {
               "type": [
                 "string",
                 "null",
               ],
             },
-            "size": {
+            "size_spec": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "supplier": {
               "type": [
                 "string",
                 "null",
               ],
             },
             "type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "unit": {
               "type": [
                 "string",
                 "null",
@@ -620,7 +688,37 @@ exports[`getPromptForKind (drift detection) > tech_pack tool schema matches snap
                 "null",
               ],
             },
+            "color": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
             "label": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "quantity_per_unit": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "size_spec": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "supplier": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "unit": {
               "type": [
                 "string",
                 "null",
@@ -713,6 +811,68 @@ exports[`getPromptForKind (drift detection) > tech_pack tool schema matches snap
           "required": [
             "item_code",
           ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "trims": {
+        "items": {
+          "properties": {
+            "color": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "description": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "placement": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "quantity_per_unit": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+            "size_spec": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "supplier": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "trim_type": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "unit": {
+              "type": [
+                "string",
+                "null",
+              ],
+            },
+            "wastage_percent": {
+              "type": [
+                "number",
+                "null",
+              ],
+            },
+          },
           "type": "object",
         },
         "type": "array",

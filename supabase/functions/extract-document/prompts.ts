@@ -10,7 +10,7 @@
 export type ExtractionKind = "tech_pack" | "master_data";
 
 export const PROMPT_VERSION_BY_KIND: Record<ExtractionKind, string> = {
-  tech_pack: "tech_pack.v1",
+  tech_pack: "tech_pack.v2",   // v2 (2026-05-02): added trims[]; added color/size_spec/quantity_per_unit/unit/supplier to accessories; renamed labels.size → size_spec for downstream consistency
   master_data: "master_data.v3",  // v3 (2026-05-01): column-header-authoritative + forbidden component_type values + multi-format support
 };
 
@@ -47,7 +47,27 @@ A tech pack typically has:
 - a header sheet with brand, product type, product number, and product name
 - one or more rows describing fabric components (shell, lining, fill, etc.) with GSM, construction, finish
 - a SKU table where each row is one finished article (size + colour + dimensions)
-- optional sheets for labels, accessories, packaging, and zipper specs
+- optional sheets for labels, accessories, trims, packaging, and zipper specs
+
+═══════════════════════════════════════════════════════════════════════
+TRIMS vs ACCESSORIES vs PACKAGING — read carefully
+═══════════════════════════════════════════════════════════════════════
+These three buckets are NOT interchangeable. Route each item correctly:
+
+• "trims"       → SEWN-IN functional components: zipper, elastic, drawstring,
+                  sewing thread, velcro, snap, button, eyelet, ribbon, binding tape.
+                  These are consumed BY THE STITCHER during garment construction.
+• "accessories" → ATTACHED non-fabric items: care label, brand label, size label,
+                  hang tag, law tag, sticker, barcode, insert card, stiffener.
+                  These are FINISHING items added after construction.
+• "packaging"   → THE BOX/BAG holding the finished product: polybag, PVC bag,
+                  carton, kraft bag, master carton.
+• "labels"      → A sub-set of accessories that carry text/info (care, brand, size,
+                  hang tag, etc). Repeat them in BOTH "labels" AND "accessories"
+                  is fine — downstream code dedupes.
+
+For each item, populate every field you can read from the source. NEVER
+leave color or size_spec null when the source clearly shows them.
 
 Produce one tool call to "extract_tech_pack". The "skus" array is required and must
 contain at least one row. If the source genuinely has no SKU rows (e.g. the file is
@@ -204,12 +224,15 @@ const TECH_PACK_TOOL = {
         items: {
           type: "object",
           properties: {
-            section:   { type: ["string", "null"] },
-            type:      { type: ["string", "null"] },
-            material:  { type: ["string", "null"] },
-            size:      { type: ["string", "null"] },
-            color:     { type: ["string", "null"] },
-            placement: { type: ["string", "null"] },
+            section:           { type: ["string", "null"] },
+            type:              { type: ["string", "null"] },
+            material:          { type: ["string", "null"] },
+            size_spec:         { type: ["string", "null"] },   // RENAMED from "size" — matches downstream JSONB shape
+            color:             { type: ["string", "null"] },
+            placement:         { type: ["string", "null"] },
+            quantity_per_unit: { type: ["number", "null"] },   // pieces per finished article (1 if not specified)
+            unit:              { type: ["string", "null"] },   // "Pcs", "Meters", "Sets", "%"
+            supplier:          { type: ["string", "null"] },
           },
         },
       },
@@ -218,11 +241,33 @@ const TECH_PACK_TOOL = {
         items: {
           type: "object",
           properties: {
-            accessory_type: { type: ["string", "null"] },
-            description:    { type: ["string", "null"] },
-            material:       { type: ["string", "null"] },
-            placement:      { type: ["string", "null"] },
-            source_label:   { type: ["string", "null"] },
+            accessory_type:    { type: ["string", "null"] },
+            description:       { type: ["string", "null"] },
+            material:          { type: ["string", "null"] },
+            color:             { type: ["string", "null"] },   // NEW
+            size_spec:         { type: ["string", "null"] },   // NEW
+            placement:         { type: ["string", "null"] },
+            quantity_per_unit: { type: ["number", "null"] },   // NEW: pieces per finished article
+            unit:              { type: ["string", "null"] },   // NEW: "Pcs" / "Meters" / "Sets"
+            supplier:          { type: ["string", "null"] },   // NEW: nominated supplier if listed
+            source_label:      { type: ["string", "null"] },
+          },
+        },
+      },
+      trims: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            trim_type:         { type: ["string", "null"] },   // "Zipper", "Elastic", "Thread", "Drawstring", etc.
+            description:       { type: ["string", "null"] },
+            color:             { type: ["string", "null"] },
+            size_spec:         { type: ["string", "null"] },   // "5mm", "30cm", "300m spool", etc.
+            placement:         { type: ["string", "null"] },
+            quantity_per_unit: { type: ["number", "null"] },   // pieces / meters per finished article
+            unit:              { type: ["string", "null"] },   // "Pcs" / "Meters" / "Sets" / "%"
+            wastage_percent:   { type: ["number", "null"] },
+            supplier:          { type: ["string", "null"] },
           },
         },
       },
@@ -231,10 +276,15 @@ const TECH_PACK_TOOL = {
         items: {
           type: "object",
           properties: {
-            variant:  { type: ["string", "null"] },
-            category: { type: ["string", "null"] },
-            label:    { type: ["string", "null"] },
-            value:    { type: ["string", "null"] },
+            variant:           { type: ["string", "null"] },
+            category:          { type: ["string", "null"] },
+            label:             { type: ["string", "null"] },
+            value:             { type: ["string", "null"] },
+            color:             { type: ["string", "null"] },   // NEW
+            size_spec:         { type: ["string", "null"] },   // NEW
+            quantity_per_unit: { type: ["number", "null"] },   // NEW
+            unit:              { type: ["string", "null"] },   // NEW
+            supplier:          { type: ["string", "null"] },   // NEW
           },
         },
       },
