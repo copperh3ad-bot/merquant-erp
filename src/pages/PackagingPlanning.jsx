@@ -423,6 +423,11 @@ export default function PackagingPlanning() {
             poId: activePo.id,
             techPacks,
           });
+          // articleSizes — pass the article row directly. The resolver picks
+          // out the relevant per-tab field (carton_size_cm, stiffener_size,
+          // pvc_bag_dimensions, insert_dimensions, zipper_length_cm) based
+          // on cfg.category. Populated from master-data Articles sheet via
+          // migration 0005_articles_size_fields.
           const seeded = resolveDescription({
             articleCode: art.article_code,
             tabCategory: cfg.category,
@@ -430,6 +435,7 @@ export default function PackagingPlanning() {
             masterSpecs: masterAccessorySpecs,
             techPack,
             techPackLabelSpecs: techPack?.extracted_label_specs ?? null,
+            articleSizes: art,
           });
           init[tab][art.id] = seeded ?? [defaultRow(cfg)];
         }

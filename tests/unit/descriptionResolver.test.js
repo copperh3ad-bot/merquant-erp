@@ -698,6 +698,206 @@ describe("resolveDescription — Item Type smart-default for non-Label tabs", ()
   });
 });
 
+// ── Article-level size fallback (master Articles sheet) ───────────────────
+// Migration 0005_articles_size_fields adds carton_size_cm / stiffener_size /
+// pvc_bag_dimensions / insert_dimensions / zipper_length_cm to the articles
+// table. These tests verify the resolver picks them up at three different
+// points in the fallback chain.
+
+const ARTICLE_SIZES_FULL = {
+  article_code: "GPSE50",
+  carton_size_cm:     "60*30*45",
+  stiffener_size:     "26X27X6cm",
+  pvc_bag_dimensions: "29X29X8cm",
+  insert_dimensions:  "26.50X54cm",
+  zipper_length_cm:   "480cm",
+};
+
+describe("resolveDescription — article-level size fallback (master Articles sheet)", () => {
+  // ── Tier 1 path: consumption_library row exists but size_spec is empty ──
+  it("fills size from articles.carton_size_cm when consumption_library row has empty size_spec (Carton)", () => {
+    const masterRow = {
+      item_code: "GPSE50",
+      component_type: "Carton",
+      material: "Brown 5-ply B-flute corrugated",
+      size_spec: "",                  // empty → article fallback should kick in
+      wastage_percent: 0.02,
+    };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Carton",
+      cfg: CFG_CARTON,
+      masterSpecs: [masterRow],
+      techPack: null,
+      articleSizes: ARTICLE_SIZES_FULL,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].description).toBe("Brown 5-ply B-flute corrugated");
+    expect(result[0].size).toBe("60*30*45");
+  });
+
+  it("fills size from articles.stiffener_size when consumption_library row has empty size_spec (Stiffener)", () => {
+    const masterRow = {
+      item_code: "GPSE50",
+      component_type: "Stiffener",
+      material: "White cardboard 1-ply",
+      size_spec: "",
+      wastage_percent: 0.03,
+    };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Stiffener",
+      cfg: CFG_STIFFENER,
+      masterSpecs: [masterRow],
+      techPack: null,
+      articleSizes: ARTICLE_SIZES_FULL,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("26X27X6cm");
+  });
+
+  it("respects consumption_library size_spec when both are present (article fallback only kicks in when size_spec empty)", () => {
+    const masterRow = {
+      item_code: "GPSE50",
+      component_type: "Carton",
+      material: "Brown corrugated",
+      size_spec: "58*28.5*43",        // explicit, more specific than articles
+      wastage_percent: 0.02,
+    };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Carton",
+      cfg: CFG_CARTON,
+      masterSpecs: [masterRow],
+      techPack: null,
+      articleSizes: ARTICLE_SIZES_FULL, // would offer "60*30*45" but ignored
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("58*28.5*43");
+  });
+
+  // ── No tech pack, no master row at all: article-only seed row ──────────
+  it("emits a size-only seed row when consumption_library and tech pack are both empty (Polybag)", () => {
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Polybag",
+      cfg: CFG_POLYBAG,
+      masterSpecs: [],
+      techPack: null,
+      articleSizes: ARTICLE_SIZES_FULL,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("29X29X8cm");
+    expect(result[0].description).toBe("");
+  });
+
+  it("returns null when no tier yields anything AND articleSizes is missing the relevant field", () => {
+    const partial = { article_code: "GPSE50", carton_size_cm: "60*30*45" }; // only Carton filled
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Stiffener", // requesting Stiffener; partial has no stiffener_size
+      cfg: CFG_STIFFENER,
+      masterSpecs: [],
+      techPack: null,
+      articleSizes: partial,
+    });
+    expect(result).toBeNull();
+  });
+
+  // ── Tech-pack present but no spec or measurement match: article fallback wins ──
+  it("falls back to articleSizes when tech pack has no matching spec/measurement (Insert Card)", () => {
+    const tp = {
+      id: "tp-x",
+      article_code: "GPSE50",
+      extracted_accessory_specs: [],
+      extracted_trim_specs:      [],
+      extracted_label_specs:     [],
+      extracted_measurements:    {},  // empty — no this_sku.insert_dimensions
+      extracted_data:            {},
+    };
+    const cfg = { category: "Insert Card", typeOptions: ["UPC", "Custom"], qualityLabel: "Quality / Description", defaultWastage: 5 };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Insert Card",
+      cfg,
+      masterSpecs: [],
+      techPack: tp,
+      articleSizes: ARTICLE_SIZES_FULL,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("26.50X54cm");
+  });
+
+  // ── Tech-pack measurements take priority over article fallback ──────────
+  it("prefers tech-pack measurements over articleSizes when both are present", () => {
+    const tp = {
+      id: "tp-y",
+      article_code: "GPSE50",
+      extracted_accessory_specs: [],
+      extracted_trim_specs:      [],
+      extracted_label_specs:     [],
+      extracted_measurements:    { this_sku: { stiffener_size: "27X27.5X6.5cm" } },
+      extracted_data:            {},
+    };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Stiffener",
+      cfg: CFG_STIFFENER,
+      masterSpecs: [],
+      techPack: tp,
+      articleSizes: ARTICLE_SIZES_FULL, // would offer "26X27X6cm" but ignored
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("27X27.5X6.5cm");
+  });
+
+  // ── Tabs without an article-level size column: no surprise rows ─────────
+  it("does NOT emit an article-only seed row for Label tab (no size column on articles maps to Label)", () => {
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Label",
+      cfg: CFG_LABEL,
+      masterSpecs: [],
+      techPack: null,
+      articleSizes: ARTICLE_SIZES_FULL,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("does NOT emit an article-only seed row for Sticker tab", () => {
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER,
+      masterSpecs: [],
+      techPack: null,
+      articleSizes: ARTICLE_SIZES_FULL,
+    });
+    expect(result).toBeNull();
+  });
+
+  // ── Backward-compat: omitting articleSizes never breaks existing callers ──
+  it("works with articleSizes=null (no regression for callers that don't pass it yet)", () => {
+    const masterRow = {
+      item_code: "GPSE50",
+      component_type: "Stiffener",
+      material: "White cardboard",
+      size_spec: "27X27.5X6.5cm",
+      wastage_percent: 0.03,
+    };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Stiffener",
+      cfg: CFG_STIFFENER,
+      masterSpecs: [masterRow],
+      techPack: null,
+      // articleSizes omitted entirely
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("27X27.5X6.5cm");
+  });
+});
+
 // ── Description-based label classification (issue: classify from description) ──
 // pickLabelType used to read only section/label_type/type. Real-world labels
 // often have generic section ("Hem", "Inside seam") with the actual intent
