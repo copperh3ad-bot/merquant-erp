@@ -24,11 +24,35 @@ function LoadingScreen() {
   );
 }
 
+function AccountStatusScreen({ title, message }) {
+  return (
+    <div className="fixed inset-0 flex items-center justify-center bg-background px-6">
+      <div className="max-w-md text-center">
+        <p className="text-2xl font-bold text-foreground mb-3">{title}</p>
+        <p className="text-muted-foreground">{message}</p>
+      </div>
+    </div>
+  );
+}
+
 function AuthGate() {
-  const { session, isLoading, canSeePage } = useAuth();
+  const { session, isLoading, canSeePage, isPending, isRejected } = useAuth();
 
   if (isLoading) return <LoadingScreen />;
   if (!session) return <LoginPage />;
+  // Block the app for accounts that aren't approved yet. These users have a
+  // valid session but their user_profiles.approval_status disqualifies them
+  // from reaching the layout or any page.
+  if (isRejected) {
+    return <AccountStatusScreen
+      title="Access declined"
+      message="Your account access was declined. Contact your administrator." />;
+  }
+  if (isPending) {
+    return <AccountStatusScreen
+      title="Awaiting approval"
+      message="Your account is awaiting approval. You will be notified once an admin reviews your request." />;
+  }
 
   const RouteGuard = ({ pageName, children }) => {
     if (!canSeePage(pageName)) {

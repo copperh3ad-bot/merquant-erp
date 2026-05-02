@@ -129,23 +129,30 @@ export function AuthProvider({ children }) {
     if (session?.user?.id) fetchProfile(session.user.id);
   };
 
-  const isLoading      = session === undefined;
-  const user           = session?.user ?? null;
-  const role           = profile?.role ?? "Viewer";
-  const team           = profile?.team ?? null;
-  const isOwner        = role === "Owner";
-  const isManager      = role === "Manager"      || isOwner;
-  const isMerchandiser = role === "Merchandiser"  || isManager;
-  const isAdmin        = isOwner;
-  const isPending      = profile?.approval_status === "pending";
-  const isRejected     = profile?.approval_status === "rejected";
-  const can            = (permission) => canCheck(role, permission);
-  const canSeePage     = (pageName) => canSeePageCheck(role, pageName);
-  const canSeeField    = (groupKey) => canSeeFieldCheck(role, groupKey);
+  const isLoading        = session === undefined;
+  const user             = session?.user ?? null;
+  // Role is null until the profile is loaded — never default to "Viewer". A
+  // failed profile fetch must not silently grant the lowest tier of access;
+  // it must block all permission checks until the profile arrives.
+  const role             = profile?.role ?? null;
+  const isProfileLoaded  = profile !== null;
+  const team             = profile?.team ?? null;
+  const isOwner          = role === "Owner";
+  const isManager        = role === "Manager"      || isOwner;
+  const isMerchandiser   = role === "Merchandiser"  || isManager;
+  const isAdmin          = isOwner;
+  const isPending        = profile?.approval_status === "pending";
+  const isRejected       = profile?.approval_status === "rejected";
+  // All three permission checks return false when role is null — distinguishing
+  // "loading/missing profile" from "no access" is the consumer's job (use
+  // isProfileLoaded for that).
+  const can              = (permission) => (role ? canCheck(role, permission)         : false);
+  const canSeePage       = (pageName)   => (role ? canSeePageCheck(role, pageName)    : false);
+  const canSeeField      = (groupKey)   => (role ? canSeeFieldCheck(role, groupKey)   : false);
 
   return (
     <AuthContext.Provider value={{
-      session, user, profile, role, team,
+      session, user, profile, role, team, isProfileLoaded,
       isOwner, isManager, isMerchandiser, isAdmin, isPending, isRejected,
       isLoading, can, canSeePage, canSeeField,
       signIn, signUp, signOut, resetPassword, updateProfile, refreshProfile, fetchProfile,
