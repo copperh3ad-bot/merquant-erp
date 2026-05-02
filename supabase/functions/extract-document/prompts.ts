@@ -6,12 +6,26 @@
 // material edit to a system prompt or tool schema.
 //
 // Schemas mirror spec 2026-04-25-ai-extraction §5.4 and §5.5.
+//
+// 2026-05-02 — vocabulary lists embedded in the system prompts (the
+// allowed component_type values, the forbidden fabric-descriptor words)
+// are now sourced from the codegen'd vocab.generated.ts so they stay in
+// lock-step with src/lib/textileVocabulary.js. Re-run
+// `node scripts/generate-vocab-edge.mjs` after any vocab edit and
+// re-deploy the edge functions.
+
+import {
+  PART_CANONICALS,
+  ACCESSORY_CANONICALS,
+  FIBRE_CANONICALS,
+  FABRIC_TYPE_CANONICALS,
+} from "./_vocab.generated.ts";
 
 export type ExtractionKind = "tech_pack" | "master_data";
 
 export const PROMPT_VERSION_BY_KIND: Record<ExtractionKind, string> = {
   tech_pack: "tech_pack.v2",   // v2 (2026-05-02): added trims[]; added color/size_spec/quantity_per_unit/unit/supplier to accessories; renamed labels.size → size_spec for downstream consistency
-  master_data: "master_data.v3",  // v3 (2026-05-01): column-header-authoritative + forbidden component_type values + multi-format support
+  master_data: "master_data.v4",  // v4 (2026-05-02): canonical part / accessory / fibre / fabric_type lists now codegen'd from src/lib/textileVocabulary so prompt instructions stay in sync with the rest of the system
 };
 
 // Phase E2: every kind starts on Haiku and escalates to Sonnet on low
@@ -123,30 +137,24 @@ COLUMN MAPPING RULES (read carefully)
    the following words/patterns must NEVER appear there. If you find
    a fabric description that looks like one of these, you have made
    a mistake — the value belongs in fabric_type, not component_type.
-     • "Jersey Knit", "Sateen", "Percale", "Flannel", "Microfiber"
+     • Fabric constructions: ${FABRIC_TYPE_CANONICALS.join(", ")}
+     • Fibre / material names: ${FIBRE_CANONICALS.join(", ")}
      • Material percentages: "85%", "100%"
-     • Material names: "Cotton", "Modal", "Polyester", "Spandex",
-       "Nylon", "Silk", "Linen", "Bamboo", "Tencel", "Lyocell"
      • GSM values: "170 GSM", "300 GSM"
      • Yarn counts: "40s", "20D", "30/1"
      • Thread counts: "300 TC", "400 TC"
 
 4. component_type MUST be one of these (or a customer-specific variant
    of a part name — short noun phrase describing a physical garment part):
-     "Flat Sheet", "Fitted Sheet", "Pillow Case", "Sham", "Fabric Bag",
-     "Top Fabric", "Bottom", "Skirt", "Front", "Back", "Binding",
-     "Piping", "Filling", "Platform", "Sleeper Flap", "Lamination",
-     "Quilting", "Outer", "Inner", "Pillow Case (1pc)", "Pillow Case (2pc)"
+     ${PART_CANONICALS.map((p) => `"${p}"`).join(", ")}
 
 5. A single SKU often has multiple fabric_consumption rows — one per
    part. They typically share the same fabric_type but have different
    component_type values. Preserve that 1:N relationship. Don't
    collapse rows that have different component_type values.
 
-6. accessory_consumption.category should be one of: "Care Label",
-   "Hang Tag", "Polybag", "PVC Bag", "Stiffener", "Insert Card",
-   "Sticker", "Zipper", "Thread", "Elastic", "Tape", "Binding",
-   "Packaging", "Size Label", "Law Tag", "Barcode Sticker".
+6. accessory_consumption.category should be one of:
+     ${ACCESSORY_CANONICALS.map((a) => `"${a}"`).join(", ")}.
 
 ═══════════════════════════════════════════════════════════════════════
 
