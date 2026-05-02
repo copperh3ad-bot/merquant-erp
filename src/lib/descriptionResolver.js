@@ -66,35 +66,97 @@ function matchesCategory(elemCat, tab) {
   return false;
 }
 
-// Map a free-form label_type/section value to one of cfg.typeOptions so the
+// Synonym map for the Label tab's typeOption dropdown. Each key is one of
+// the cfg.typeOptions values; the value is a list of keywords that, when
+// found in the element's section / label_type / type / description /
+// material text, count as a match. Lets pickLabelType classify a label
+// from its description even when section/label_type are generic ("Hem",
+// "Inside seam") and the type intent only appears in the description.
+const LABEL_TYPE_SYNONYMS = {
+  "Brand Label":               ["brand", "logo", "main label"],
+  "Care Label":                ["care", "wash", "laundry", "care instruction", "law tag", "wash care"],
+  "Size Label":                ["size", "size tag"],
+  "Direction Label":           ["direction", "head end", "foot end", "this side up", "top-bottom"],
+  "Hang Tag":                  ["hang tag", "hangtag", "swing tag", "ticket"],
+  "Country of Origin Label":   ["country of origin", "made in", "origin label"],
+  "Composition Label":         ["composition", "fiber content", "fibre content", "material content", "% cotton", "% polyester"],
+  "Wash Label":                ["wash label", "washing", "wash instruction"],
+  "Price Ticket":              ["price ticket", "price tag", "msrp", "retail price"],
+  "Compliance Label":          ["compliance", "ce mark", "iso 9001"],
+  "Retailer Label":            ["retailer", "store label", "private label"],
+  "Eco Label":                 ["eco-friendly", "oeko-tex", "oeko tex", "fsc", "fair trade"],
+  "GOTS Label":                ["gots"],
+  "Barcode Label":             ["barcode", "upc", "ean"],
+  "Custom Label":              ["custom"],
+  "Care label in 3 Languages 1X3": ["3 language", "tri-lingual", "trilingual", "1x3"],
+};
+
+// Map a free-form label specification to one of cfg.typeOptions so the
 // row's "Type" dropdown defaults to the right entry instead of always
 // showing the first option (typically "Brand Label").
+//
+// Two layers of matching, in priority order:
+//   1. Direct: typeOption literal appearance in section/label_type/type/
+//      description/material — e.g. description "Brand label, woven" gets
+//      "Brand Label" because the typeOption literal is a substring.
+//   2. Synonym: LABEL_TYPE_SYNONYMS keyword appearance in any of the
+//      same fields — e.g. description "Wash care, machine wash cold"
+//      maps to "Care Label" via the "wash" / "care" synonyms.
+//
+// Direct matches always beat synonym matches (more specific). Among
+// matches of the same tier, the longest matched string wins.
 function pickLabelType(elem, cfg) {
-  const candidates = [elem?.section, elem?.label_type, elem?.type]
-    .filter(Boolean)
-    .map((s) => String(s).toLowerCase());
-  if (candidates.length === 0 || !Array.isArray(cfg?.typeOptions)) return null;
+  if (!Array.isArray(cfg?.typeOptions) || cfg.typeOptions.length === 0) return null;
 
-  // Try each typeOption against each candidate. "Care label" / "Care Label"
-  // matches "Law tag/Care label". Take the longest match for specificity.
-  let best = null;
-  let bestLen = 0;
+  // Combine all label-bearing free-text fields into one searchable haystack.
+  // Description and material are the new additions — they often carry the
+  // intent ("3M non woven material...care label") even when section/
+  // label_type are generic.
+  const haystack = [
+    elem?.section,
+    elem?.label_type,
+    elem?.type,
+    elem?.description,
+    elem?.material,
+  ]
+    .filter(Boolean)
+    .map((s) => String(s).toLowerCase())
+    .join(" | ");
+  if (!haystack) return null;
+
+  // Tier 1: direct typeOption literal match (longest wins).
+  let bestDirect = null;
+  let bestDirectLen = 0;
   for (const opt of cfg.typeOptions) {
     const oLower = opt.toLowerCase();
-    for (const c of candidates) {
-      if (c.includes(oLower) || oLower.includes(c)) {
-        if (oLower.length > bestLen) {
-          best = opt;
-          bestLen = oLower.length;
-        }
+    if (haystack.includes(oLower) && oLower.length > bestDirectLen) {
+      bestDirect = opt;
+      bestDirectLen = oLower.length;
+    }
+  }
+  if (bestDirect) return bestDirect;
+
+  // Tier 2: synonym keyword match (longest synonym wins).
+  let bestSyn = null;
+  let bestSynLen = 0;
+  for (const opt of cfg.typeOptions) {
+    const synonyms = LABEL_TYPE_SYNONYMS[opt];
+    if (!Array.isArray(synonyms)) continue;
+    for (const syn of synonyms) {
+      const sLower = syn.toLowerCase();
+      if (haystack.includes(sLower) && sLower.length > bestSynLen) {
+        bestSyn = opt;
+        bestSynLen = sLower.length;
       }
     }
   }
-  // Fallback: if cfg has "Custom Label" / "Custom" option, use it
-  if (!best && cfg.typeOptions.some((o) => /custom/i.test(o))) {
-    best = cfg.typeOptions.find((o) => /custom/i.test(o));
+  if (bestSyn) return bestSyn;
+
+  // Final fallback: a "Custom" option if cfg has one.
+  if (cfg.typeOptions.some((o) => /custom/i.test(o))) {
+    return cfg.typeOptions.find((o) => /custom/i.test(o));
   }
-  return best;
+  return null;
 }
 
 // Smart-default for the Item Type dropdown on non-Label tabs. Scans the
@@ -138,6 +200,21 @@ function pickTypeFromDescription(elem, cfg) {
     }
   }
   return best;
+}
+
+// Find the UPC/EAN entry matching a given article_code. Returns "" when no
+// match exists. Used by the Sticker / Insert Card tabs (cfg.showEAN === true)
+// to fill pc_ean_code regardless of whether a tech-pack spec element matched
+// the tab category — the EAN can surface even when no Sticker / Insert Card
+// trim/accessory entry exists in the tech pack.
+function lookupUpcEan(upc, articleCode) {
+  if (!Array.isArray(upc) || upc.length === 0 || !articleCode) return "";
+  const code = String(articleCode).trim().toUpperCase();
+  const match = upc.find((u) =>
+    (u.our_sku && String(u.our_sku).trim().toUpperCase() === code) ||
+    (u.bob_sku && String(u.bob_sku).trim().toUpperCase() === code)
+  );
+  return match ? (match.bob_sku || match.our_sku || "") : "";
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────
@@ -247,15 +324,8 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
   }
 
   // pc_ean_code: for tabs with showEAN=true (Sticker, Insert Card), look up
-  // the per-size UPC entry by matching on item_code or size.
-  let pcEan = "";
-  if (cfg.showEAN && Array.isArray(upc) && upc.length > 0) {
-    const match = upc.find((u) =>
-      (u.our_sku && articleCode && String(u.our_sku).trim().toUpperCase() === String(articleCode).trim().toUpperCase()) ||
-      (u.bob_sku && articleCode && String(u.bob_sku).trim().toUpperCase() === String(articleCode).trim().toUpperCase())
-    );
-    if (match) pcEan = match.bob_sku || match.our_sku || "";
-  }
+  // the per-size UPC entry by matching on article_code.
+  const pcEan = cfg.showEAN ? lookupUpcEan(upc, articleCode) : "";
 
   if (cfg.splitDescSize) {
     return { ...base, type: typeText, quality: "", description: descText, size: sizeText, pc_ean_code: pcEan };
@@ -440,12 +510,17 @@ export function resolveDescription({
     }
   }
 
-  // ── Tier-2 fallback — measurements-only ──────────────────────────────
-  // Even when no spec element matches the tab, certain tabs have data in
-  // extracted_measurements.this_sku that's worth surfacing on its own
-  // (e.g. Carton tab when the trim_specs JSONB has nothing labeled "Carton").
-  // articleSizes is checked second so master-data dimensions also surface
-  // when the tech pack has no measurements at all.
+  // ── Tier-2 fallback — measurements-only / articleSizes-only / EAN-only ──
+  // Even when no spec element matches the tab, three signals can produce
+  // a useful row:
+  //   1. extracted_measurements.this_sku (per-SKU dim from BOB tech pack)
+  //   2. articleSizes (per-SKU dim from the master-data Articles sheet —
+  //      used when no tech pack has been uploaded for the article)
+  //   3. UPC/EAN entry for showEAN tabs (Sticker, Insert Card) — emits a
+  //      row carrying just the EAN when no other source has data.
+  // (3) is critical for the Sticker tab, which has no size source anywhere
+  // else and would otherwise return null even when the UPC table has its EAN.
+  // Source priority for size: tech-pack measurement > master Articles sheet.
   let fallbackSize = null;
   if (ctx.measurements?.this_sku) {
     const sku = ctx.measurements.this_sku;
@@ -459,17 +534,18 @@ export function resolveDescription({
     const articleOnly = articleSizeForTab(cfg, articleSizes);
     if (articleOnly) fallbackSize = articleOnly;
   }
+  const fallbackEan = cfg.showEAN ? lookupUpcEan(ctx.upc, articleCode) : "";
 
-  if (fallbackSize) {
+  if (fallbackSize || fallbackEan) {
     const base = {
       type: cfg.typeOptions[0],
       wastage_percent: cfg.defaultWastage,
       multiplier: 1,
-      pc_ean_code: "",
+      pc_ean_code: fallbackEan,
       carton_ean_code: "",
       existing_id: null,
     };
-    return [{ ...base, quality: "", description: "", size: fallbackSize }];
+    return [{ ...base, quality: "", description: "", size: fallbackSize || "" }];
   }
 
   return null;

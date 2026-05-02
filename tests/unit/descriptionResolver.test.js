@@ -897,3 +897,343 @@ describe("resolveDescription — article-level size fallback (master Articles sh
     expect(result[0].size).toBe("27X27.5X6.5cm");
   });
 });
+
+// ── Description-based label classification (issue: classify from description) ──
+// pickLabelType used to read only section/label_type/type. Real-world labels
+// often have generic section ("Hem", "Inside seam") with the actual intent
+// only in the description ("Wash care, machine wash cold"). These tests
+// verify the helper now reads description + material and falls back to a
+// synonym map when the typeOption literal isn't present.
+
+const CFG_LABEL_FULL = {
+  category: "Label",
+  typeOptions: [
+    "Brand Label", "Care Label", "Size Label", "Direction Label", "GOTS Label",
+    "Barcode Label", "Hang Tag", "Country of Origin Label", "Composition Label",
+    "Wash Label", "Price Ticket", "Compliance Label", "Retailer Label", "Eco Label",
+    "Custom Label",
+  ],
+  qualityLabel: "Quality / Description",
+  defaultWastage: 5,
+};
+
+describe("resolveDescription — description-based label classification", () => {
+  // ── Direct typeOption literal in description ────────────────────────────
+  it("classifies as Brand Label when description literally says 'brand label'", () => {
+    const tp = {
+      id: "tp-d1",
+      article_code: "X1",
+      extracted_label_specs: [
+        { section: "Hem", label_type: "Sewn-in", description: "Brand label, woven satin, navy on white" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X1",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Brand Label");
+  });
+
+  it("classifies as Hang Tag from description 'swing tag with brand logo'", () => {
+    const tp = {
+      id: "tp-d2",
+      article_code: "X2",
+      extracted_label_specs: [
+        { section: "Outside", description: "Swing tag with brand logo, printed on 300gsm card" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X2",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Hang Tag");
+  });
+
+  // ── Synonym fallback ────────────────────────────────────────────────────
+  it("classifies as Care Label from synonym 'wash care' when typeOption literal isn't present", () => {
+    const tp = {
+      id: "tp-d3",
+      article_code: "X3",
+      extracted_label_specs: [
+        { section: "Inside seam", description: "Wash care: machine wash cold, tumble dry low, do not bleach" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X3",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Care Label");
+  });
+
+  it("classifies as Country of Origin Label from synonym 'made in'", () => {
+    const tp = {
+      id: "tp-d4",
+      article_code: "X4",
+      extracted_label_specs: [
+        { section: "Inside hem", description: "Made in Pakistan, polyester 100%, woven" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X4",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Country of Origin Label");
+  });
+
+  it("classifies as Composition Label from 'fiber content 100% cotton'", () => {
+    const tp = {
+      id: "tp-d5",
+      article_code: "X5",
+      extracted_label_specs: [
+        { section: "Hem", description: "Fiber content: 100% cotton, machine washable" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X5",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    // "Composition Label" via synonym "fiber content"
+    expect(result[0].type).toBe("Composition Label");
+  });
+
+  it("classifies as GOTS Label when description mentions GOTS certification", () => {
+    const tp = {
+      id: "tp-d6",
+      article_code: "X6",
+      extracted_label_specs: [
+        { section: "Inside", description: "GOTS certified organic cotton blend" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X6",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("GOTS Label");
+  });
+
+  // ── Direct beats synonym (priority test) ────────────────────────────────
+  it("prefers direct typeOption match over synonym when both apply", () => {
+    // section says "Care Label" (direct) AND description says "wash" (synonym)
+    // — should pick direct.
+    const tp = {
+      id: "tp-d7",
+      article_code: "X7",
+      extracted_label_specs: [
+        { section: "Care Label", description: "Wash instructions, machine washable" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X7",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Care Label");
+  });
+
+  // ── Real-world BOB shape: Law tag/Care label section ────────────────────
+  it("real-world BOB regression still works: 'Law tag/Care label' section → Care Label", () => {
+    const tp = {
+      id: "tp-d8",
+      article_code: "GPSE50",
+      extracted_label_specs: [
+        {
+          section: "Law tag/Care label",
+          label_type: "Non woven label with coating",
+          description: "3M non woven material with white ground / black color font",
+        },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "GPSE50",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    // "Care Label" via direct match in section
+    expect(result[0].type).toBe("Care Label");
+  });
+
+  // ── Generic section + uninformative description ─────────────────────────
+  it("falls back to Custom Label when description carries no recognisable signal", () => {
+    const tp = {
+      id: "tp-d9",
+      article_code: "X9",
+      extracted_label_specs: [
+        { section: "Hem", description: "Generic label per spec sheet, refer artwork" },
+      ],
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [],
+    };
+    const result = resolveDescription({
+      articleCode: "X9",
+      tabCategory: "Label",
+      cfg: CFG_LABEL_FULL,
+      masterSpecs: [],
+      techPack: tp,
+      techPackLabelSpecs: tp.extracted_label_specs,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].type).toBe("Custom Label");
+  });
+});
+
+// ── EAN flow on showEAN tabs without a matching spec element ──────────────
+// Bug uncovered during the integration simulation: the Sticker tab
+// (cfg.showEAN=true, no size source on the article OR in measurements)
+// returned null even when the tech pack's UPC table carried the EAN.
+// Insert Card had a similar gap: the size-only fallback emitted a row
+// without populating pc_ean_code, hiding the EAN in the UI.
+
+describe("resolveDescription — EAN flow on showEAN tabs", () => {
+  const CFG_STICKER_EAN = {
+    category: "Sticker",
+    typeOptions: ["UPC Sticker", "Custom Sticker"],
+    qualityLabel: "Size / Description",
+    defaultWastage: 5,
+    showEAN: true,
+  };
+  const CFG_INSERT_EAN = {
+    category: "Insert Card",
+    typeOptions: ["Art Card", "Custom"],
+    qualityLabel: "Quality / Size",
+    defaultWastage: 5,
+    showEAN: true,
+  };
+
+  const tpWithUpcOnly = {
+    id: "tp-ean-1",
+    article_code: "SIM-Q",
+    extracted_accessory_specs: [],   // no Sticker/Insert Card spec elements
+    extracted_trim_specs: [],
+    extracted_label_specs: [],
+    extracted_measurements: {},      // no this_sku.* dims
+    extracted_data: {
+      source: "BOB Tech Pack",
+      upc: [{ size: "QUEEN", our_sku: "SIM-Q", bob_sku: "9876543210001" }],
+    },
+  };
+
+  it("Sticker tab emits an EAN-only row when no spec element matches and no size source exists", () => {
+    const result = resolveDescription({
+      articleCode: "SIM-Q",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER_EAN,
+      masterSpecs: [],
+      techPack: tpWithUpcOnly,
+    });
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+    expect(result[0].pc_ean_code).toBe("9876543210001");
+    expect(result[0].size).toBe("");
+  });
+
+  it("Insert Card tab populates pc_ean_code on the measurement-fallback size row", () => {
+    const tp = {
+      ...tpWithUpcOnly,
+      extracted_measurements: { this_sku: { insert_dimensions: "27.00X57.10cm" } },
+    };
+    const result = resolveDescription({
+      articleCode: "SIM-Q",
+      tabCategory: "Insert Card",
+      cfg: CFG_INSERT_EAN,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("27.00X57.10cm");
+    expect(result[0].pc_ean_code).toBe("9876543210001");
+  });
+
+  it("non-showEAN tabs (Polybag) emit measurement-fallback row WITHOUT pc_ean_code", () => {
+    const tp = {
+      ...tpWithUpcOnly,
+      extracted_measurements: { this_sku: { pvc_bag_dimensions: "28X28X9.5cm" } },
+    };
+    const result = resolveDescription({
+      articleCode: "SIM-Q",
+      tabCategory: "Polybag",
+      cfg: { category: "Polybag", typeOptions: ["PVC"], splitDescSize: true, defaultWastage: 3 },
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(result).not.toBeNull();
+    expect(result[0].size).toBe("28X28X9.5cm");
+    expect(result[0].pc_ean_code).toBe("");  // not a showEAN tab
+  });
+
+  it("Sticker tab returns null when neither size source NOR matching UPC exists", () => {
+    const tpNoUpc = { ...tpWithUpcOnly, extracted_data: { source: "BOB", upc: [] } };
+    const result = resolveDescription({
+      articleCode: "SIM-Q",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER_EAN,
+      masterSpecs: [],
+      techPack: tpNoUpc,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("UPC entry where article_code doesn't match → no EAN, no row", () => {
+    const result = resolveDescription({
+      articleCode: "DIFFERENT-CODE",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER_EAN,
+      masterSpecs: [],
+      techPack: tpWithUpcOnly,
+    });
+    expect(result).toBeNull();
+  });
+});
