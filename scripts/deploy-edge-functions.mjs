@@ -26,7 +26,7 @@ const VERIFY_JWT = {
   "backup-hourly":          false,  // gated by BACKUP_SECRET
   "gmail-oauth":            false,  // OAuth callback, no JWT yet
   "gmail-crawl":            false,  // triggered by gmail-oauth
-  "notify-pricing-pending": false,  // currently public (audit Finding 6)
+  "notify-pricing-pending": true,   // verifies caller in-handler (audit Finding 6 closed)
   "user-approval":          false,  // signup flow, public
 };
 

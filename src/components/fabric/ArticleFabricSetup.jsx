@@ -64,17 +64,10 @@ Component types: ${COMPONENT_TYPES.join(", ")}`;
           { type: "text", text: basePrompt }
         ]}];
       } else if (isXLSX) {
-        if (!window.XLSX) {
-          await new Promise((res, rej) => {
-            const s = document.createElement("script");
-            s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-            s.onload = res; s.onerror = rej;
-            document.head.appendChild(s);
-          });
-        }
+        const XLSX = await import("xlsx");
         const buf = await file.arrayBuffer();
-        const wb = window.XLSX.read(buf, { type: "array" });
-        const fileText = window.XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+        const wb = XLSX.read(buf, { type: "array" });
+        const fileText = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
         messages = [{ role: "user", content: `${basePrompt}\n\nFile content:\n${fileText.substring(0, 8000)}` }];
       } else {
         // CSV / TXT / plain text

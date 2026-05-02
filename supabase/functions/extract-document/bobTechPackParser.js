@@ -3,7 +3,7 @@
 // packaging, accessories, zipper, and a size_chart derived from the SKU table.
 //
 // DENO COPY — mirror at src/lib/bobTechPackParser.js (canonical, used by browser).
-// The browser version uses window.XLSX bootstrapped from a CDN; this Deno copy
+// The browser version imports xlsx from npm (Vite-bundled); this Deno copy
 // imports SheetJS via esm.sh and accepts a Uint8Array instead of a File.
 
 import * as XLSX from "https://esm.sh/xlsx@0.18.5";

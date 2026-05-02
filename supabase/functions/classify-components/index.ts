@@ -7,6 +7,10 @@
 //
 // Cost (Sonnet 4.6 with prompt caching): ~$0.005 per batch of 30 items.
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const SUPABASE_URL      = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
 const VISION_MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 4000;
@@ -79,8 +83,23 @@ Deno.serve(async (req) => {
   if (!ANTHROPIC_API_KEY)
     return err("AI_UNAVAILABLE", "AI features are temporarily unavailable.", "ANTHROPIC_API_KEY missing", 200);
 
+  // Auth gate. verify_jwt is also set at the platform level, but we
+  // verify the JWT in-handler so a real user object is required. A bare
+  // header presence check (the previous behaviour) accepted any string,
+  // letting an unauthenticated caller burn the Anthropic budget.
   const auth = req.headers.get("Authorization");
   if (!auth) return err("UNAUTHORISED", "You need to be signed in.", "missing Authorization header", 401);
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return err("AUTH_BACKEND_MISCONFIGURED", "Auth backend not configured.", "SUPABASE_URL or SUPABASE_ANON_KEY missing", 500);
+  }
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: auth } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData?.user) {
+    return err("UNAUTHORISED", "Invalid or expired session. Please sign in again.", userErr?.message ?? "no user", 401);
+  }
 
   let body: { items?: InputItem[] };
   try {

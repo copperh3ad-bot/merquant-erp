@@ -133,20 +133,12 @@ ${JSON_SCHEMA}`;
     ]}];
 
   } else if (isXLSX) {
-    // Load SheetJS and convert to CSV text
-    if (!window.XLSX) {
-      await new Promise((res, rej) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
-        s.onload = res; s.onerror = rej;
-        document.head.appendChild(s);
-      });
-    }
+    const XLSX = await import('xlsx');
     const buf = await file.arrayBuffer();
-    const wb  = window.XLSX.read(buf, { type:'array' });
+    const wb  = XLSX.read(buf, { type:'array' });
     // Convert all sheets to CSV text
     const csvParts = wb.SheetNames.map(n =>
-      `=== Sheet: ${n} ===\n` + window.XLSX.utils.sheet_to_csv(wb.Sheets[n])
+      `=== Sheet: ${n} ===\n` + XLSX.utils.sheet_to_csv(wb.Sheets[n])
     );
     const text = csvParts.join('\n\n').substring(0, 20000);
     messages = [{ role:'user', content: `${textPrompt}\n\nFile content (${fileName}):\n${text}` }];
@@ -778,9 +770,18 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
   const addFiles = (fileList) => {
     const incoming = Array.from(fileList || []);
     if (!incoming.length) return;
+    const oversized = incoming.filter(f => f.size > 10 * 1024 * 1024);
+    if (oversized.length) {
+      alert(
+        `Skipped ${oversized.length} file${oversized.length > 1 ? "s" : ""} larger than 10 MB:\n` +
+        oversized.map(f => `• ${f.name} (${(f.size / (1024 * 1024)).toFixed(1)} MB)`).join("\n")
+      );
+    }
+    const accepted = incoming.filter(f => f.size <= 10 * 1024 * 1024);
+    if (!accepted.length) return;
     setFiles(prev => {
       const keys = new Set(prev.map(f => `${f.name}-${f.size}`));
-      return [...prev, ...incoming.filter(f => !keys.has(`${f.name}-${f.size}`))];
+      return [...prev, ...accepted.filter(f => !keys.has(`${f.name}-${f.size}`))];
     });
   };
 
