@@ -1,11 +1,31 @@
 // supabase/functions/gmail-crawl/index.ts v2 - reduced memory footprint
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+// Origin allowlist for CORS — tightened from `*` per hardening audit
+// Finding 17. Env var `ALLOWED_ORIGINS` (comma-separated) extends the
+// defaults for branch deploys / staging.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://merquanterp.netlify.app",
+  "https://merquant-mas.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+const ALLOWED_ORIGINS = new Set(
+  (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .concat(DEFAULT_ALLOWED_ORIGINS),
+);
+function corsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
@@ -13,10 +33,6 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-function j(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
-}
 
 async function getUserIdFromAuth(req: Request): Promise<string | null> {
   const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
@@ -93,6 +109,12 @@ function walkParts(payload: any, collector: { body: string; htmlBody: string; at
 }
 
 Deno.serve(async (req) => {
+  // Per-request CORS headers (allowlist-checked against the Origin
+  // header). Helper functions defined below close over `CORS`.
+  const CORS = corsHeaders(req);
+  const j = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
+
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
 
   try {

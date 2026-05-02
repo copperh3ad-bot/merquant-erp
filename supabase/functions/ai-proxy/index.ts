@@ -15,25 +15,45 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+// Origin allowlist. Env var `ALLOWED_ORIGINS` (comma-separated) overrides
+// the defaults — convenient for branch deploys / staging domains. The
+// default list covers the production Netlify domain plus local dev ports.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://merquanterp.netlify.app",
+  "https://merquant-mas.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+const ALLOWED_ORIGINS = new Set(
+  (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .concat(DEFAULT_ALLOWED_ORIGINS),
+);
+function corsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
 const SUPABASE_URL      = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
-function jsonResponse(body: unknown, status = 200) {
+function jsonResponse(req: Request, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+    headers: { ...corsHeaders(req), "Content-Type": "application/json" },
   });
 }
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: CORS_HEADERS });
+    return new Response("ok", { headers: corsHeaders(req) });
   }
 
   try {
@@ -43,13 +63,14 @@ Deno.serve(async (req) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return jsonResponse(
+        req,
         { error: { message: "Missing Authorization header. Sign in and try again." } },
         401,
       );
     }
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
       console.error("ai-proxy: SUPABASE_URL or SUPABASE_ANON_KEY missing");
-      return jsonResponse({ error: { message: "Auth backend not configured" } }, 500);
+      return jsonResponse(req, { error: { message: "Auth backend not configured" } }, 500);
     }
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
@@ -58,6 +79,7 @@ Deno.serve(async (req) => {
     const { data: userData, error: userErr } = await supabase.auth.getUser();
     if (userErr || !userData?.user) {
       return jsonResponse(
+        req,
         { error: { message: "Invalid or expired session. Please sign in again." } },
         401,
       );
@@ -67,6 +89,7 @@ Deno.serve(async (req) => {
     const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
     if (!apiKey) {
       return jsonResponse(
+        req,
         { error: { message: "ANTHROPIC_API_KEY not configured" } },
         500,
       );
@@ -92,7 +115,7 @@ Deno.serve(async (req) => {
     );
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return jsonResponse({ error: { message: "messages array required" } }, 400);
+      return jsonResponse(req, { error: { message: "messages array required" } }, 400);
     }
 
     const payload: Record<string, unknown> = { model, max_tokens: maxTokens, messages };
@@ -115,14 +138,14 @@ Deno.serve(async (req) => {
       console.error(
         "Anthropic error " + resp.status + ": " + JSON.stringify(data).substring(0, 200),
       );
-      return jsonResponse(data, resp.status);
+      return jsonResponse(req, data, resp.status);
     }
 
-    return jsonResponse(data);
+    return jsonResponse(req, data);
 
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
     console.error("ai-proxy error: " + msg);
-    return jsonResponse({ error: { message: msg } }, 500);
+    return jsonResponse(req, { error: { message: msg } }, 500);
   }
 });
