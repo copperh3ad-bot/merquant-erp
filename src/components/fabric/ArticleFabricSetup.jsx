@@ -2,8 +2,18 @@ import React, { useState } from "react";
 import { callClaude } from "@/lib/aiProxy";
 import { Button } from "@/components/ui/button";
 import { Upload, Pencil, Loader2, CheckCircle2 } from "lucide-react";
+import { allCanonicals } from "@/lib/textileVocabulary";
 
-const COMPONENT_TYPES = ["Front", "Skirt", "Bottom", "Piping", "Binding", "Filling", "Lamination", "Top Fabric", "Window (Outside)", "Window (Inside)", "Fabric Bag", "Fabric Swatch", "Quilting", "Pillow Compression"];
+// Component-type dropdown options. Sourced from textileVocabulary so new
+// canonical parts appear here automatically. Extras are dialog-context
+// specific (Window variants, Fabric Swatch sample) and aren't in the
+// central vocabulary because they're not first-class part categories.
+const COMPONENT_TYPES = [
+  ...allCanonicals("part"),
+  "Window (Outside)",
+  "Window (Inside)",
+  "Fabric Swatch",
+];
 
 /**
  * Shown when an article has no fabric components yet.
@@ -54,17 +64,10 @@ Component types: ${COMPONENT_TYPES.join(", ")}`;
           { type: "text", text: basePrompt }
         ]}];
       } else if (isXLSX) {
-        if (!window.XLSX) {
-          await new Promise((res, rej) => {
-            const s = document.createElement("script");
-            s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-            s.onload = res; s.onerror = rej;
-            document.head.appendChild(s);
-          });
-        }
+        const XLSX = await import("xlsx");
         const buf = await file.arrayBuffer();
-        const wb = window.XLSX.read(buf, { type: "array" });
-        const fileText = window.XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+        const wb = XLSX.read(buf, { type: "array" });
+        const fileText = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
         messages = [{ role: "user", content: `${basePrompt}\n\nFile content:\n${fileText.substring(0, 8000)}` }];
       } else {
         // CSV / TXT / plain text

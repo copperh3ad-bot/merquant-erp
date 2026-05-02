@@ -16,6 +16,10 @@ import { cn } from "@/lib/utils";
 import DashboardCharts from "@/components/dashboard/DashboardCharts";
 import RecentPOTable from "@/components/dashboard/RecentPOTable";
 import RedactedValue from "@/components/shared/RedactedValue";
+import {
+  articleHasFabricBag,
+  resolveFabricBagDimension,
+} from "@/lib/fabricBagDimensionCheck";
 
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM") : "—"; } catch { return "—"; } };
 const fmtFull = (d) => { try { return d ? format(new Date(d), "dd MMM yyyy") : "—"; } catch { return "—"; } };
@@ -94,6 +98,52 @@ export default function Dashboard() {
   });
   const { data: dailyCap = [] } = useQuery({ queryKey: ["dailyCapacityDash"], queryFn: () => production.dailyCapacity.list(7) });
   const { data: lines = [] } = useQuery({ queryKey: ["prodLinesDash"], queryFn: () => production.lines.list() });
+
+  // Articles with a Fabric Bag component (for dimension-missing nag widget).
+  // Tech packs almost never include the polybag size, so we surface the
+  // ones still blank and link the user to Articles to fill them in.
+  const { data: fabricBagArticles = [] } = useQuery({
+    queryKey: ["fabricBagArticlesDash"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("articles")
+        .select("id, article_code, article_name, product_dimensions, components, po_id, po_number");
+      if (error) throw error;
+      // Filter to articles that have a Fabric Bag component. Cheaper here
+      // than a JSONB-path filter in SQL because articles is a small table.
+      return (data || []).filter(articleHasFabricBag);
+    },
+  });
+  const { data: techPackPartDims = new Map() } = useQuery({
+    queryKey: ["techPackPartDimsDash", fabricBagArticles.map(a => a.article_code).sort().join(",")],
+    enabled: fabricBagArticles.length > 0,
+    queryFn: async () => {
+      const codes = [...new Set(fabricBagArticles.map(a => a.article_code))];
+      const { data } = await supabase
+        .from("tech_packs")
+        .select("article_code, extracted_measurements")
+        .in("article_code", codes);
+      // Build Map<article_code, partDims object> where partDims is the
+      // first non-null part_dimensions found across the SKU's tech-pack
+      // entries. We only care about whether "fabric bag" is keyed.
+      const out = new Map();
+      for (const tp of data || []) {
+        const chart = tp?.extracted_measurements?.size_chart;
+        if (!chart) continue;
+        for (const row of Object.values(chart)) {
+          const itemCode = row?.item_code;
+          const parts = row?.part_dimensions;
+          if (!itemCode || !parts) continue;
+          if (!out.has(itemCode)) out.set(itemCode, parts);
+        }
+      }
+      return out;
+    },
+  });
+  const articlesNeedingFabricBagDim = fabricBagArticles.filter(a => {
+    const partDims = techPackPartDims.get?.(a.article_code) || null;
+    return !resolveFabricBagDimension(a, partDims);
+  });
 
   const now = new Date();
 
@@ -279,6 +329,50 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
+      {/* Fabric Bag dimension nag — stays visible until every Fabric Bag
+          SKU has a dimension entered (tech packs almost never include the
+          polybag size). One row per SKU; click to open Articles to edit. */}
+      {articlesNeedingFabricBagDim.length > 0 && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-xl px-4 py-3.5">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="flex items-start gap-2 min-w-0">
+              <AlertTriangle className="h-5 w-5 text-amber-700 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-amber-900">
+                  {articlesNeedingFabricBagDim.length} SKU{articlesNeedingFabricBagDim.length !== 1 ? "s" : ""} need Fabric Bag dimensions
+                </p>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  Fabric bag (polybag) sizes are usually missing from tech packs. Open each SKU below and fill in the dimension on the Fabric Bag row in the edit dialog. This nag stays until every Fabric Bag has a dimension.
+                </p>
+              </div>
+            </div>
+            <Link
+              to={createPageUrl("Articles")}
+              className="shrink-0 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+            >
+              Open Articles <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+          <div className="mt-2.5 flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+            {articlesNeedingFabricBagDim.slice(0, 30).map(a => (
+              <Link
+                key={a.id}
+                to={createPageUrl("Articles")}
+                className="inline-flex items-center gap-1 bg-white border border-amber-300 hover:border-amber-500 hover:bg-amber-100 text-amber-900 text-[11px] font-mono font-semibold px-2 py-0.5 rounded"
+                title={`${a.article_name || ""} (${a.po_number || "no PO"})`}
+              >
+                {a.article_code}
+              </Link>
+            ))}
+            {articlesNeedingFabricBagDim.length > 30 && (
+              <span className="text-[11px] text-amber-800 self-center">
+                +{articlesNeedingFabricBagDim.length - 30} more
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Roll-up widgets — replaces old alert grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">

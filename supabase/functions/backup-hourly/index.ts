@@ -4,16 +4,35 @@
 // Keeps last 7 days (168 backups per table max)
 //
 // Trigger externally via: cron-job.org or GitHub Actions or Supabase scheduled jobs
-// POST https://ecjqdyruwqlesfthgphv.supabase.co/functions/v1/backup-hourly
+// POST https://jcbxmpgjirxqszodotmx.supabase.co/functions/v1/backup-hourly
 //   Headers: Authorization: Bearer <BACKUP_SECRET>
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+// Origin allowlist for CORS — tightened from `*` per hardening audit
+// Finding 17. Env var `ALLOWED_ORIGINS` extends the defaults.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://merquanterp.netlify.app",
+  "https://merquant-mas.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+const ALLOWED_ORIGINS = new Set(
+  (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .concat(DEFAULT_ALLOWED_ORIGINS),
+);
+function corsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -37,10 +56,6 @@ const TABLES_TO_BACKUP = [
 ];
 
 const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-function j(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
-}
 
 async function backupTable(tableName: string, prefix: string): Promise<{ ok: boolean; rows: number; path?: string; error?: string }> {
   try {
@@ -102,13 +117,24 @@ async function purgeOldBackups(daysToKeep = 7): Promise<number> {
 }
 
 Deno.serve(async (req) => {
+  // Per-request CORS headers (allowlist-checked against the Origin
+  // header). Helper functions defined below close over `CORS`.
+  const CORS = corsHeaders(req);
+  const j = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
+
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
-  
+
   try {
-    // Simple secret check
+    // Simple secret check. Fail closed when the secret is unset — without
+    // this guard, an empty BACKUP_SECRET turned the gate off entirely and
+    // any anonymous caller could trigger a full DB dump (cost / DoS).
+    if (!BACKUP_SECRET) {
+      return j({ error: "not_configured" }, 503);
+    }
     const auth = req.headers.get("Authorization") || "";
     const providedSecret = auth.replace(/^Bearer\s+/i, "");
-    if (BACKUP_SECRET && providedSecret !== BACKUP_SECRET) {
+    if (providedSecret !== BACKUP_SECRET) {
       return j({ error: "unauthorized" }, 401);
     }
     

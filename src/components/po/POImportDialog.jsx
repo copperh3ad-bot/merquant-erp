@@ -45,19 +45,11 @@ async function readFileAsText(file) {
 }
 
 async function readXLSX(file) {
-  // Dynamically load SheetJS from CDN
-  if (!window.XLSX) {
-    await new Promise((res, rej) => {
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-      s.onload = res; s.onerror = rej;
-      document.head.appendChild(s);
-    });
-  }
+  const XLSX = await import("xlsx");
   const buf = await file.arrayBuffer();
-  const wb = window.XLSX.read(buf, { type: "array" });
+  const wb = XLSX.read(buf, { type: "array" });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  return window.XLSX.utils.sheet_to_csv(ws);
+  return XLSX.utils.sheet_to_csv(ws);
 }
 
 async function extractTextFromPDF(file) {
@@ -321,7 +313,16 @@ export default function POImportDialog({ open, onOpenChange, onImport }) {
             <input ref={inputRef} type="file"
               accept=".pdf,.xlsx,.xls,.csv,.txt,.jpg,.jpeg,.png,.webp"
               className="hidden"
-              onChange={e => { const f = e.target.files[0]; if (f) setFile(f); e.target.value = ""; }} />
+              onChange={e => {
+                const f = e.target.files[0];
+                e.target.value = "";
+                if (!f) return;
+                if (f.size > 10 * 1024 * 1024) {
+                  alert(`${f.name} is ${(f.size / (1024 * 1024)).toFixed(1)} MB. Max 10 MB.`);
+                  return;
+                }
+                setFile(f);
+              }} />
 
             {file ? (
               <div className="flex items-center justify-center gap-3">

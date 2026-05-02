@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { db, techPacks, discrepancies, mfg, supabase } from "@/api/supabaseClient";
@@ -27,6 +27,9 @@ import POSelector from "@/components/shared/POSelector";
 import { runFullAudit, applyFix, AUDIT_STEPS } from "@/lib/techPackAudit";
 import { parseBobTechPack } from "@/lib/bobTechPackParser";
 import { classifyArticle, componentApplies } from "@/lib/articleTypes";
+import { computeBarcodeUpdates } from "@/lib/barcodeOcrMerge";
+import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
+import { classifyComponent } from "@/lib/componentClassifier";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import SelectionCheckbox from "@/components/shared/SelectionCheckbox";
 import BulkActionsBar from "@/components/techpack/BulkActionsBar";
@@ -130,20 +133,12 @@ ${JSON_SCHEMA}`;
     ]}];
 
   } else if (isXLSX) {
-    // Load SheetJS and convert to CSV text
-    if (!window.XLSX) {
-      await new Promise((res, rej) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
-        s.onload = res; s.onerror = rej;
-        document.head.appendChild(s);
-      });
-    }
+    const XLSX = await import('xlsx');
     const buf = await file.arrayBuffer();
-    const wb  = window.XLSX.read(buf, { type:'array' });
+    const wb  = XLSX.read(buf, { type:'array' });
     // Convert all sheets to CSV text
     const csvParts = wb.SheetNames.map(n =>
-      `=== Sheet: ${n} ===\n` + window.XLSX.utils.sheet_to_csv(wb.Sheets[n])
+      `=== Sheet: ${n} ===\n` + XLSX.utils.sheet_to_csv(wb.Sheets[n])
     );
     const text = csvParts.join('\n\n').substring(0, 20000);
     messages = [{ role:'user', content: `${textPrompt}\n\nFile content (${fileName}):\n${text}` }];
@@ -748,11 +743,17 @@ function TechPackDetail({ tp, onClose }) {
 }
 
 // ── Upload & Extract Dialog ────────────────────────────────────────────────
-function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
+function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
   const { profile } = useAuth();
   const qc = useQueryClient();
   const [files, setFiles] = useState([]);
-  const [poId, setPoId] = useState("");
+  const [poId, setPoId] = useState(defaultPoId || "");
+  // When the dialog is opened from a per-row "Re-upload" button, defaultPoId
+  // arrives pre-filled. Sync it whenever it changes so the user doesn't have
+  // to re-pick the PO.
+  useEffect(() => {
+    if (defaultPoId) setPoId(defaultPoId);
+  }, [defaultPoId]);
   const [articleCode, setArticleCode] = useState("");
   const [articleName, setArticleName] = useState("");
   const [notes, setNotes] = useState("");
@@ -769,9 +770,18 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
   const addFiles = (fileList) => {
     const incoming = Array.from(fileList || []);
     if (!incoming.length) return;
+    const oversized = incoming.filter(f => f.size > 10 * 1024 * 1024);
+    if (oversized.length) {
+      alert(
+        `Skipped ${oversized.length} file${oversized.length > 1 ? "s" : ""} larger than 10 MB:\n` +
+        oversized.map(f => `• ${f.name} (${(f.size / (1024 * 1024)).toFixed(1)} MB)`).join("\n")
+      );
+    }
+    const accepted = incoming.filter(f => f.size <= 10 * 1024 * 1024);
+    if (!accepted.length) return;
     setFiles(prev => {
       const keys = new Set(prev.map(f => `${f.name}-${f.size}`));
-      return [...prev, ...incoming.filter(f => !keys.has(`${f.name}-${f.size}`))];
+      return [...prev, ...accepted.filter(f => !keys.has(`${f.name}-${f.size}`))];
     });
   };
 
@@ -795,6 +805,31 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
           if (bob?.skus?.length) {
             updateProg(idx, { status: "extracting", message: `BOB file · ${bob.skus.length} SKUs…` });
 
+            // ── Persist the original XLSX to storage ──
+            // Without this, file_url is a blob: URL that dies when the browser
+            // tab closes — meaning we can't re-OCR the embedded barcode images
+            // later. Upload to ai-extraction-sources/tech-packs/<batch>/<name>
+            // so the Re-extract barcodes button can fetch the bytes back.
+            // Failure here is non-blocking — tech_packs rows are still created
+            // with the legacy blob URL so the user's upload doesn't break.
+            const uploadBatchId = (typeof crypto !== "undefined" && crypto.randomUUID)
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            let storagePath = null;
+            try {
+              const path = `tech-packs/${uploadBatchId}/${file.name}`;
+              const { error: upErr } = await supabase.storage
+                .from("ai-extraction-sources")
+                .upload(path, file, {
+                  contentType: file.type || "application/octet-stream",
+                  upsert: false,
+                });
+              if (!upErr) storagePath = path;
+              else console.warn("[tech-pack storage upload] failed (non-blocking):", upErr.message);
+            } catch (storeErr) {
+              console.warn("[tech-pack storage upload] threw (non-blocking):", storeErr?.message || storeErr);
+            }
+
             // Pull per-SKU consumption from consumption_library if already imported
             const skuCodes = bob.skus.map(s => s.item_code).filter(Boolean);
             let consBySku = {};
@@ -808,9 +843,49 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
               }
             }
 
+            // ── Duplicate-upload guard ──
+            // Skip SKUs already in DB for this same file. Compare against the
+            // articles in this BOB upload. We match BOTH on file_name AND on
+            // article_code (case-insensitive) because filenames sometimes
+            // differ only in whitespace ("BOB - X.xlsx" vs "BOB_-_X.xlsx" —
+            // a real bug seen in production where two uploads of the same
+            // physical file slipped past the earlier exact-match guard).
+            const existingPairs = new Set();
+            try {
+              const skuCodesUpper = bob.skus
+                .map(s => String(s.item_code || "").toUpperCase())
+                .filter(Boolean);
+              if (skuCodesUpper.length > 0) {
+                const { data: existingTps } = await supabase
+                  .from("tech_packs")
+                  .select("article_code, file_name")
+                  .in("article_code", skuCodesUpper);
+                // Filename normalization: collapse non-alphanumeric runs to "_"
+                const normFn = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+                const myFn = normFn(file.name);
+                for (const t of (existingTps || [])) {
+                  if (t.article_code && normFn(t.file_name) === myFn) {
+                    existingPairs.add(String(t.article_code).toUpperCase());
+                  }
+                }
+              }
+              if (existingPairs.size > 0) {
+                console.info(`[TechPacks] file '${file.name}' already has ${existingPairs.size} tech_pack row(s) for the same SKU(s). Skipping duplicate creates — use the ⟳ Barcodes button on existing rows to re-extract.`);
+              }
+            } catch (dupErr) {
+              console.warn("[TechPacks duplicate-guard] check failed (non-blocking):", dupErr?.message || dupErr);
+            }
+
             // Create one tech_packs row per SKU
             const createdTps = [];
+            const skippedDuplicates = [];
             for (const sku of bob.skus) {
+              // Skip SKUs whose (file_name, article_code) row already exists.
+              const skuCodeUpper = String(sku.item_code || "").toUpperCase();
+              if (skuCodeUpper && existingPairs.has(skuCodeUpper)) {
+                skippedDuplicates.push(sku.item_code);
+                continue;
+              }
               // Classify this SKU (pillow protector vs mattress protector vs encasement etc.)
               const productType = classifyArticle({
                 article_code: sku.item_code,
@@ -848,7 +923,11 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                   ? `${bob.header.product_name || bob.header.product_type || "Set"} — ${sku.size}`.trim()
                   : `${bob.header.product_type || ""} — ${sku.size}`.trim() || sku.item_code,
                 file_name:        file.name,
-                file_url:         blobUrl,
+                // storage:// scheme → "ai-extraction-sources/<path>", read by
+                // the Re-extract barcodes action. blob: fallback only fires
+                // when the storage upload above failed; will be skipped by
+                // re-extract logic.
+                file_url:         storagePath ? `storage://ai-extraction-sources/${storagePath}` : blobUrl,
                 file_type:        fileType,
                 file_size_kb:     Math.round(file.size / 1024),
                 extraction_status: "extracted",
@@ -858,31 +937,104 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                 // Session 11 - wire through labels, packaging, accessories,
                 // measurements, and construction that the parser already
                 // extracts but the old fast path threw away.
+                // 2026-05-02 — field-name canonicalised to match what
+                // bom_explode_po SQL reads (size_spec, color,
+                // quantity_per_unit, unit, supplier) so trim_items /
+                // accessory_items don't end up with empty cells. Old
+                // names (size, colours, dimensions) are dropped — the
+                // SQL is patched in migration 0012 to fall back across
+                // them so legacy rows still resolve.
                 extracted_label_specs: (bob.labels || []).map(l => ({
-                  label_type: l.type,
-                  description: l.material,
-                  dimensions: l.size,
-                  placement: l.placement,
-                  colours: l.color,
-                  section: l.section,
+                  label_type:        l.type,
+                  description:       l.material,
+                  size_spec:         l.size_spec || l.size || l.dimensions || null,
+                  color:             l.color || null,
+                  placement:         l.placement,
+                  section:           l.section,
+                  quantity_per_unit: l.quantity_per_unit ?? null,
+                  unit:              l.unit || null,
+                  supplier:          l.supplier || null,
+                  // Aliases retained ONE more cycle so descriptionResolver +
+                  // techPackAudit don't lose data on freshly-extracted rows
+                  // while their reads are tightened — drop after S13.
+                  dimensions:        l.size_spec || l.size || l.dimensions || null,
+                  colours:           l.color || null,
                 })),
-                extracted_accessory_specs: (bob.accessories || []).map(a => ({
-                  accessory_type: a.accessory_type,
-                  description: a.description,
-                  material: a.material,
-                  placement: a.placement,
-                  source_label: a.source_label,
-                })),
-                // Packaging items live in extracted_trim_specs because the
-                // existing audit UI reads trim_type from that column. Terminology
-                // to be revisited when the Accessories page is rebuilt.
-                extracted_trim_specs: (bob.packaging || []).map(p => ({
-                  trim_type: p.category,
-                  description: p.value,
-                  size_spec: null,
-                  variant: p.variant,
-                  source_label: p.label,
-                })),
+                // Re-classify each accessory through componentClassifier so
+                // the BOB-parser-supplied accessory_type (often verbatim from
+                // the spreadsheet's free-form category column) gets corrected
+                // when needed (e.g. small "Polybag" → "Accessory Bag").
+                extracted_accessory_specs: (bob.accessories || []).map(a => {
+                  const r = classifyComponent({
+                    raw_category: a.accessory_type,
+                    material: a.material || a.description,
+                    description: a.description,
+                    placement: a.placement,
+                  });
+                  const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : a.accessory_type;
+                  return {
+                    accessory_type:    finalType,
+                    description:       a.description,
+                    material:          a.material,
+                    color:             a.color || null,
+                    size_spec:         a.size_spec || a.size || null,
+                    placement:         a.placement,
+                    quantity_per_unit: a.quantity_per_unit ?? null,
+                    unit:              a.unit || null,
+                    supplier:          a.supplier || null,
+                    source_label:      a.source_label,
+                  };
+                }),
+                // extracted_trim_specs now sources from BOTH bob.trims
+                // (when the AI extracted a dedicated trims section under
+                // prompt v2) AND bob.packaging (legacy fallback — the
+                // pre-v2 schema had no trims bucket so packaging rows
+                // were routed here). Both are classified through
+                // componentClassifier so the per-tab routing in
+                // PackagingPlanning + Trims keeps working.
+                extracted_trim_specs: [
+                  ...(bob.trims || []).map(t => {
+                    const r = classifyComponent({
+                      raw_category: t.trim_type,
+                      material: t.description,
+                      description: t.description,
+                      placement: t.placement,
+                    });
+                    const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : t.trim_type;
+                    return {
+                      trim_type:         finalType,
+                      description:       t.description,
+                      color:             t.color || null,
+                      size_spec:         t.size_spec || null,
+                      placement:         t.placement || null,
+                      quantity_per_unit: t.quantity_per_unit ?? null,
+                      unit:              t.unit || null,
+                      wastage_percent:   t.wastage_percent ?? null,
+                      supplier:          t.supplier || null,
+                      source: "trims",
+                    };
+                  }),
+                  ...(bob.packaging || []).map(p => {
+                    const r = classifyComponent({
+                      raw_category: p.category,
+                      material: p.value,
+                      description: p.value,
+                    });
+                    const finalType = (r.component_type && r.confidence >= 0.85) ? r.component_type : p.category;
+                    return {
+                      trim_type:         finalType,
+                      description:       p.value,
+                      color:             p.color || null,
+                      size_spec:         p.size_spec || null,
+                      quantity_per_unit: p.quantity_per_unit ?? null,
+                      unit:              p.unit || null,
+                      supplier:          p.supplier || null,
+                      variant:           p.variant,
+                      source_label:      p.label,
+                      source: "packaging",
+                    };
+                  }),
+                ],
                 extracted_measurements: {
                   sizes: (bob.skus || []).map(s => s.size).filter(Boolean),
                   size_chart: Object.fromEntries(
@@ -941,6 +1093,114 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess }) {
                 notes: notes || `Auto-extracted from BOB tech pack (${bob.header.product_no}). ${productType.label}. ${skuFabricSpecs.length} fabric component(s) apply to this SKU.`,
               });
               createdTps.push(tp);
+            }
+
+            if (skippedDuplicates.length > 0) {
+              console.info(`[TechPacks] skipped ${skippedDuplicates.length} duplicate SKU(s) already on file '${file.name}': ${skippedDuplicates.join(", ")}`);
+            }
+
+            // ── Article dimension sync ──
+            // The BOB tech pack carries rich per-SKU dimensions in each
+            // tp.extracted_measurements.this_sku that the articles table
+            // doesn't get from PO upload alone. Backfill them onto matching
+            // articles rows so the Articles UI, Packaging Planning's
+            // article-fallback, and any downstream consumer see populated
+            // dimensions without requiring the user to re-enter them via
+            // the master Articles sheet. Only fills columns that are
+            // currently NULL — never clobbers user edits or master-data values.
+            try {
+              for (const tp of createdTps) {
+                if (!tp.article_code) continue;
+                const sku = tp.extracted_measurements?.this_sku;
+                if (!sku) continue;
+
+                // Look up the article row by article_code (typically created
+                // by a prior PO upload). If no article exists, skip — the
+                // article will be created by future PO upload, at which
+                // point this sync wouldn't run anyway.
+                //
+                // IMPORTANT: do NOT write articles.product_dimensions here.
+                // That field is FabricWorking's manual-override slot (Layer 1
+                // of its 3-tier resolver). FabricWorking already reads
+                // tech_packs.extracted_measurements.size_chart for per-part
+                // sheet-set dimensions (byItemPart / byCodeSizePart). If we
+                // populate articles.product_dimensions with the whole-SKU
+                // value here, Layer 1 wins and clobbers the per-component
+                // resolution (Flat Sheet vs Fitted Sheet vs Pillow Case).
+                // ilike() instead of eq() so case-mismatched article_codes
+                // ("GPFRIOPPk" tech pack vs "GPFRIOPPK" article) still match.
+                // Without this, articles whose source XLSX used mixed case in
+                // the SKU column don't get their dimensions backfilled.
+                const { data: existingArt } = await supabase
+                  .from("articles")
+                  .select("id, pvc_bag_dimensions, stiffener_size, insert_dimensions, zipper_length_cm, carton_size_cm")
+                  .ilike("article_code", tp.article_code)
+                  .maybeSingle();
+                if (!existingArt) continue;
+
+                const onlyIfBlank = (currentVal, newVal) =>
+                  (currentVal == null || String(currentVal).trim() === "") && newVal ? newVal : null;
+
+                // sku.zipper_length → articles.zipper_length_cm (column rename).
+                // Each value is normalized to a canonical form so cross-source
+                // audits (W×L vs L×W from different sources) compare cleanly.
+                const patch = {
+                  pvc_bag_dimensions: onlyIfBlank(existingArt.pvc_bag_dimensions, normalizeDim2D(sku.pvc_bag_dimensions)),
+                  stiffener_size:     onlyIfBlank(existingArt.stiffener_size,     normalizeDim2D(sku.stiffener_size)),
+                  insert_dimensions:  onlyIfBlank(existingArt.insert_dimensions,  normalizeDim2D(sku.insert_dimensions)),
+                  zipper_length_cm:   onlyIfBlank(existingArt.zipper_length_cm,   normalizeDim3D(sku.zipper_length)),
+                  carton_size_cm:     onlyIfBlank(existingArt.carton_size_cm,     normalizeDim3D(sku.carton_size_cm)),
+                };
+                const filtered = Object.fromEntries(
+                  Object.entries(patch).filter(([_, v]) => v != null)
+                );
+                if (Object.keys(filtered).length > 0) {
+                  await supabase.from("articles").update(filtered).eq("id", existingArt.id);
+                }
+              }
+            } catch (artSyncErr) {
+              // Non-blocking: tech_packs rows are saved, this is just a
+              // convenience backfill. Log and move on.
+              console.warn("[article dim sync] failed (non-blocking):", artSyncErr?.message || artSyncErr);
+            }
+
+            // ── Barcode OCR enrichment ──
+            // BOB tech packs render the UPC table as a barcode IMAGE, not as
+            // text cells, so the BOB parser can't read the digits. Send the
+            // raw file to the extract-barcodes edge function which uses
+            // Claude vision to OCR each embedded barcode + its size label,
+            // then write the matched (size, EAN) onto each tech_packs row's
+            // extracted_data.upc array. Synchronous so the user gets a
+            // progress message; any failure here is non-blocking — the
+            // tech_packs rows are already saved, just without UPC data.
+            try {
+              updateProg(idx, { status: "extracting", message: "Reading barcode images…" });
+
+              const arrayBuf = await file.arrayBuffer();
+              const fileBytes = new Uint8Array(arrayBuf);
+              const CHUNK = 0x8000;
+              let binary = "";
+              for (let i = 0; i < fileBytes.length; i += CHUNK) {
+                binary += String.fromCharCode.apply(null, Array.from(fileBytes.subarray(i, i + CHUNK)));
+              }
+              const fileBase64 = btoa(binary);
+
+              const { data: ocrData, error: ocrErr } = await supabase.functions.invoke(
+                "extract-barcodes",
+                { body: { file_base64: fileBase64, file_name: file.name } }
+              );
+
+              if (!ocrErr && ocrData?.ok && Array.isArray(ocrData.results) && ocrData.results.length > 0) {
+                const updates = computeBarcodeUpdates(ocrData.results, createdTps);
+                for (const u of updates) {
+                  await supabase.from("tech_packs").update({ extracted_data: u.extracted_data }).eq("id", u.id);
+                  // Mutate the in-memory copy too so downstream cross-check uses fresh data
+                  const tp = createdTps.find((t) => t.id === u.id);
+                  if (tp) tp.extracted_data = u.extracted_data;
+                }
+              }
+            } catch (ocrErr) {
+              console.warn("[barcode OCR] failed (non-blocking):", ocrErr?.message || ocrErr);
             }
 
             // Run cross-check on the first SKU's tech pack as a representative sample
@@ -1195,10 +1455,17 @@ function FileProgressRow({ p }) {
 export default function TechPacks() {
   const [searchParams] = useSearchParams();
   const [showUpload, setShowUpload] = useState(false);
+  // Pre-fills the upload dialog's PO when triggered from a per-row Re-upload
+  // button on a legacy `blob:` tech pack. After upload completes, any blob:
+  // row whose SKU now has a storage:// sibling is auto-deleted.
+  const [reuploadDefaultPoId, setReuploadDefaultPoId] = useState("");
   const [viewing, setViewing] = useState(null);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterPoId, setFilterPoId] = useState(searchParams.get("po_id") || "__all");
+  // Track which tech-pack rows are currently re-extracting barcodes so the
+  // button can show a spinner and we can disable double-clicks.
+  const [reextractingByUrl, setReextractingByUrl] = useState({}); // { [storageUrl]: true }
   const qc = useQueryClient();
 
   const { data: pos = [] } = useQuery({ queryKey:["purchaseOrders"], queryFn:()=>db.purchaseOrders.list("-created_at") });
@@ -1220,6 +1487,121 @@ export default function TechPacks() {
     discrepancies: tps.filter(t=>t.crosscheck_status==="discrepancies").length,
     pending: tps.filter(t=>["pending","processing"].includes(t.extraction_status)).length,
   }),[tps]);
+
+  // ── Re-extract barcodes from a previously-uploaded XLSX ────────────────
+  // Re-runs extract-barcodes against the original file we persisted to the
+  // ai-extraction-sources bucket on upload. Updates extracted_data.upc on
+  // every sibling tech_packs row that shares the same file_url (i.e. came
+  // from the same multi-SKU upload). Surfaces a single toast at the end
+  // showing how many rows got new EAN data.
+  const handleReextractBarcodes = async (tp) => {
+    const fileUrl = tp.file_url || "";
+    if (!fileUrl.startsWith("storage://")) {
+      alert("This tech pack was uploaded before barcode persistence was enabled. Please re-upload it to read embedded barcodes.");
+      return;
+    }
+    if (reextractingByUrl[fileUrl]) return;
+    setReextractingByUrl((prev) => ({ ...prev, [fileUrl]: true }));
+    try {
+      // file_url shape: storage://<bucket>/<path>
+      const withoutScheme = fileUrl.slice("storage://".length); // "<bucket>/<path>"
+      const slash = withoutScheme.indexOf("/");
+      const bucket = withoutScheme.slice(0, slash);
+      const objectPath = withoutScheme.slice(slash + 1);
+
+      // Download file bytes from storage
+      const { data: blob, error: dlErr } = await supabase.storage.from(bucket).download(objectPath);
+      if (dlErr || !blob) throw new Error(dlErr?.message || "Could not download tech-pack file from storage");
+
+      // Encode to base64 for the edge function (chunked to avoid stack overflow on large files)
+      const arrayBuf = await blob.arrayBuffer();
+      const fileBytes = new Uint8Array(arrayBuf);
+      const CHUNK = 0x8000;
+      let binary = "";
+      for (let i = 0; i < fileBytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(null, Array.from(fileBytes.subarray(i, i + CHUNK)));
+      }
+      const fileBase64 = btoa(binary);
+
+      const fileName = objectPath.split("/").pop() || tp.file_name || "tech-pack.xlsx";
+      const { data: ocrData, error: ocrErr } = await supabase.functions.invoke(
+        "extract-barcodes",
+        { body: { file_base64: fileBase64, file_name: fileName } }
+      );
+      if (ocrErr) throw new Error(ocrErr.message || "extract-barcodes call failed");
+      if (!ocrData?.ok || !Array.isArray(ocrData.results) || ocrData.results.length === 0) {
+        alert("No barcode images were found in this tech pack.");
+        return;
+      }
+
+      // Find all sibling rows from the same upload — same file_url means
+      // same XLSX, which means the OCR results apply to all of them.
+      const siblings = (tps || []).filter((row) => row.file_url === fileUrl);
+      const updates = computeBarcodeUpdates(ocrData.results, siblings);
+      let updatedCount = 0;
+      for (const u of updates) {
+        const { error: updErr } = await supabase
+          .from("tech_packs")
+          .update({ extracted_data: u.extracted_data })
+          .eq("id", u.id);
+        if (!updErr) updatedCount += 1;
+      }
+
+      qc.invalidateQueries({ queryKey: ["techPacks"] });
+      alert(
+        updatedCount > 0
+          ? `Re-extracted ${ocrData.results.length} barcode image(s); updated EAN on ${updatedCount} tech-pack row(s).`
+          : `Read ${ocrData.results.length} barcode image(s), but none matched any SKU sizes on these tech packs. (Manual entry still possible.)`
+      );
+    } catch (err) {
+      console.error("[re-extract barcodes]", err);
+      alert(`Could not re-extract barcodes: ${err?.message || err}`);
+    } finally {
+      setReextractingByUrl((prev) => {
+        const n = { ...prev };
+        delete n[fileUrl];
+        return n;
+      });
+    }
+  };
+
+  // ── Cleanup: delete legacy `blob:` rows that have been superseded ──
+  // After a successful upload, find any tech_pack rows with file_url like
+  // `blob:` whose article_code now also has a sibling row with file_url
+  // like `storage://`. The blob: rows are stale (the file isn't reachable
+  // and OCR can't run on them), so we delete them so the UI shows the new
+  // storage-persisted row instead. Triggered by UploadDialog's onSuccess.
+  const handlePostUploadCleanup = async () => {
+    try {
+      const { data: allTps } = await supabase
+        .from("tech_packs")
+        .select("id, article_code, file_url");
+      if (!Array.isArray(allTps)) return;
+      // SKUs that have at least one storage:// row
+      const skusWithStorage = new Set(
+        allTps
+          .filter((t) => (t.file_url || "").startsWith("storage://"))
+          .map((t) => String(t.article_code || "").toUpperCase())
+      );
+      // SKUs to clean: blob: rows whose SKU now has a storage:// sibling
+      const stale = allTps.filter(
+        (t) =>
+          (t.file_url || "").startsWith("blob:") &&
+          skusWithStorage.has(String(t.article_code || "").toUpperCase())
+      );
+      if (stale.length === 0) return;
+      const ids = stale.map((t) => t.id);
+      const { error } = await supabase.from("tech_packs").delete().in("id", ids);
+      if (!error) {
+        console.info(`[TechPacks cleanup] removed ${stale.length} legacy blob: row(s) superseded by storage:// uploads`);
+        qc.invalidateQueries({ queryKey: ["techPacks"] });
+      } else {
+        console.warn("[TechPacks cleanup] delete failed:", error.message);
+      }
+    } catch (e) {
+      console.warn("[TechPacks cleanup] threw (non-blocking):", e?.message || e);
+    }
+  };
 
   if (isLoading) return <div className="space-y-3">{[1,2,3].map(i=><Skeleton key={i} className="h-20 rounded-xl"/>)}</div>;
 
@@ -1308,6 +1690,38 @@ export default function TechPacks() {
                   )}
                 </div>
                 <div className="flex gap-1.5 shrink-0">
+                  {/* Re-read barcodes from the persisted XLSX. Only shown
+                      when we have a storage:// file_url (i.e. uploaded
+                      after barcode persistence shipped). */}
+                  {tp.extraction_status==="extracted" && (tp.file_url||"").startsWith("storage://") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs gap-1 h-7"
+                      title="Re-read barcode images from this tech pack"
+                      disabled={!!reextractingByUrl[tp.file_url]}
+                      onClick={() => handleReextractBarcodes(tp)}
+                    >
+                      <RefreshCw className={cn("h-3.5 w-3.5", reextractingByUrl[tp.file_url] && "animate-spin")} />
+                      Barcodes
+                    </Button>
+                  )}
+                  {/* Re-upload button on legacy blob: rows so the user can
+                      replace this stale tech-pack with a storage-persisted
+                      copy (which will get OCR'd, populate EANs, and replace
+                      the blob: row automatically via post-upload cleanup). */}
+                  {tp.extraction_status==="extracted" && (tp.file_url||"").startsWith("blob:") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs gap-1 h-7 border-amber-300 text-amber-700 hover:bg-amber-50"
+                      title="This tech-pack file is no longer reachable (legacy upload). Re-upload the source XLSX to enable barcode extraction."
+                      onClick={() => { setReuploadDefaultPoId(tp.po_id || ""); setShowUpload(true); }}
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      Re-upload
+                    </Button>
+                  )}
                   {tp.extraction_status==="extracted"&&<Button size="sm" variant="outline" className="text-xs gap-1 h-7" onClick={()=>setViewing(tp)}><Eye className="h-3.5 w-3.5"/>View</Button>}
                   <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={async()=>{if(!confirm("Delete?"))return;await techPacks.delete(tp.id);qc.invalidateQueries({queryKey:["techPacks"]});}}><Trash2 className="h-3.5 w-3.5 text-muted-foreground"/></Button>
                 </div>
@@ -1317,7 +1731,23 @@ export default function TechPacks() {
         </div>
       )}
 
-      {showUpload&&<UploadDialog open={showUpload} onOpenChange={setShowUpload} pos={pos} onSuccess={()=>setShowUpload(false)}/>}
+      {showUpload && (
+        <UploadDialog
+          open={showUpload}
+          onOpenChange={(v) => {
+            setShowUpload(v);
+            if (!v) setReuploadDefaultPoId("");
+          }}
+          pos={pos}
+          defaultPoId={reuploadDefaultPoId}
+          onSuccess={() => {
+            setShowUpload(false);
+            setReuploadDefaultPoId("");
+            // Sweep stale blob: rows that the new upload superseded.
+            handlePostUploadCleanup();
+          }}
+        />
+      )}
       {viewing&&<TechPackDetail tp={viewing} onClose={()=>setViewing(null)}/>}
 
       <BulkActionsBar selection={selection} allItems={filtered} />

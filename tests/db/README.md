@@ -9,7 +9,7 @@ create test rows in production tables.
 ## How to use them today (manual smoke test)
 
 1. Pick one of the `.sql` files.
-2. Open **Supabase Dashboard → SQL Editor** for project `ecjqdyruwqlesfthgphv`.
+2. Open **Supabase Dashboard → SQL Editor** for project `jcbxmpgjirxqszodotmx`.
 3. Paste the file contents and run it section by section. Each `RAISE NOTICE`
    reports an expected vs. actual outcome; failures show the divergence.
 4. The cleanup block at the bottom of each file removes the test rows it

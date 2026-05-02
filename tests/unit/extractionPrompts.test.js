@@ -41,7 +41,7 @@ describe('getPromptForKind (structural sanity)', () => {
     expect(tool.input_schema.required).toContain('skus');
     expect(typeof systemPrompt).toBe('string');
     expect(systemPrompt.length).toBeGreaterThan(100);
-    expect(version).toBe('tech_pack.v1');
+    expect(version).toBe('tech_pack.v2');
     expect(Array.isArray(models)).toBe(true);
     expect(models.length).toBeGreaterThanOrEqual(1);
   });
@@ -53,7 +53,7 @@ describe('getPromptForKind (structural sanity)', () => {
     expect(tool.input_schema.type).toBe('object');
     // master_data sections are all optional — no required at the top level
     expect(systemPrompt.length).toBeGreaterThan(100);
-    expect(version).toBe('master_data.v1');
+    expect(version).toBe('master_data.v4');
     expect(models.length).toBeGreaterThanOrEqual(1);
   });
 

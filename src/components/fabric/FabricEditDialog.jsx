@@ -2,8 +2,17 @@ import React, { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2, Save } from "lucide-react";
+import { allCanonicals } from "@/lib/textileVocabulary";
 
-const COMPONENT_TYPES = ["Flat Sheet","Fitted Sheet","Pillow Case","Front","Skirt","Bottom","Piping","Binding","Filling","Lamination","Top Fabric","Window (Outside)","Window (Inside)","Fabric Bag","Quilting","Pillow Compression","Other"];
+// Sourced from textileVocabulary; new canonical parts appear here
+// automatically. Dialog-specific extras: Window (Outside)/(Inside)
+// parens variants + "Other" free-form sentinel.
+const COMPONENT_TYPES = [
+  ...allCanonicals("part"),
+  "Window (Outside)",
+  "Window (Inside)",
+  "Other",
+];
 
 const emptyComp = () => ({ component_type:"Front", product_size:"", direction:"", fabric_type:"", gsm:0, width:0, consumption_per_unit:0, wastage_percent:6, total_required:0 });
 
@@ -71,7 +80,7 @@ export default function FabricEditDialog({ open, onOpenChange, article, onSave, 
           <table className="w-full text-xs border-collapse">
             <thead>
               <tr className="bg-slate-100">
-                {["Part","Prod. Size","Direction","Fabric Type","GSM","Width (cm)","Cut/Unit (m)","Wastage %","Total Req. (m)",""].map(h => (
+                {["Part","Prod. Size","Dimensions","Direction","Fabric Type","GSM","Width (cm)","Cut/Unit (m)","Wastage %","Total Req. (m)",""].map(h => (
                   <th key={h} className="border px-2 py-1.5 text-left whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -88,6 +97,15 @@ export default function FabricEditDialog({ open, onOpenChange, article, onSave, 
                       </select>
                     </td>
                     <td className="border px-1.5 py-1"><input className={inp} placeholder="e.g. 70x96" value={comp.product_size || ""} onChange={e => updateComp(idx, "product_size", e.target.value)} /></td>
+                    <td className={`border px-1.5 py-1 ${(comp.component_type === "Fabric Bag" && !comp.dimensions) ? "bg-amber-50" : ""}`}>
+                      <input
+                        className={inp}
+                        placeholder={comp.component_type === "Fabric Bag" ? 'e.g. 12"x16"' : "(from tech pack)"}
+                        title={comp.component_type === "Fabric Bag" && !comp.dimensions ? "Fabric Bag dimensions are usually missing from tech packs — please fill in the polybag size for this SKU." : "Per-component dimension override. Leave blank to use the value from the tech pack."}
+                        value={comp.dimensions || ""}
+                        onChange={e => updateComp(idx, "dimensions", e.target.value)}
+                      />
+                    </td>
                     <td className="border px-1.5 py-1"><input className={inp} placeholder="WXL" value={comp.direction || ""} onChange={e => updateComp(idx, "direction", e.target.value)} /></td>
                     <td className="border px-1.5 py-1"><input className={inp} value={comp.fabric_type || ""} onChange={e => updateComp(idx, "fabric_type", e.target.value)} /></td>
                     <td className="border px-1.5 py-1"><input type="number" className={inp} value={comp.gsm || ""} onChange={e => updateComp(idx, "gsm", Number(e.target.value))} /></td>

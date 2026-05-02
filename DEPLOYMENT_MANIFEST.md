@@ -21,14 +21,24 @@
 
 | Resource | Value |
 |---|---|
-| Supabase Project ID | ecjqdyruwqlesfthgphv |
-| Supabase URL | https://ecjqdyruwqlesfthgphv.supabase.co |
+| Supabase Project ID | jcbxmpgjirxqszodotmx |
+| Supabase URL | https://jcbxmpgjirxqszodotmx.supabase.co |
 | Netlify Site ID | 5f7b7802-0082-4db3-ac07-242aa888187d |
 | Netlify Site | merquant2.netlify.app |
 | GitHub Repo | copperh3ad-bot/Merquant-AI |
 
 ## Supabase Secrets Required
-- `ANTHROPIC_API_KEY` — set in Supabase Edge Functions → Secrets
+
+Full inventory + rotation procedures: see [`docs/security/SUPABASE_SECRETS.md`](docs/security/SUPABASE_SECRETS.md).
+
+Quick list (set in Supabase Dashboard → Edge Functions → Secrets):
+- `ANTHROPIC_API_KEY` — Claude API access
+- `BACKUP_SECRET` — gates the hourly DB backup function (fail closed if unset)
+- `RESEND_API_KEY` — owner-notification emails
+- `OWNER_EMAIL`, `EMAIL_FROM`, `APP_URL` — email templating
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — Gmail OAuth integration
+- `GMAIL_TOKEN_KEY` — pgcrypto passphrase for encrypted Gmail refresh tokens (Finding 10 closure, 2026-05-02)
+- `ALLOWED_ORIGINS` — optional CORS allowlist extension for branch deploys (Finding 17 closure, 2026-05-02)
 
 ---
 
@@ -128,7 +138,7 @@
 
 | Function | Version | Purpose |
 |---|---|---|
-| ai-proxy | v18 | Proxies Anthropic API calls. Uses Deno.serve() (no imports). Normalises model names. |
+| ai-proxy | v31 | Proxies Anthropic API calls. Uses Deno.serve(). Normalises model names. **JWT-verified (2026-05-01 hardening)** — every request must carry a valid Supabase user session. |
 
 ---
 
@@ -206,11 +216,11 @@
 
 ---
 
-## AI Assistant (Edge Function v18)
+## AI Assistant (Edge Function v31)
 
-- Endpoint: `https://ecjqdyruwqlesfthgphv.supabase.co/functions/v1/ai-proxy`
+- Endpoint: `https://jcbxmpgjirxqszodotmx.supabase.co/functions/v1/ai-proxy`
 - Model: `claude-sonnet-4-5` (normalises any claude-*-4-* variant)
-- Auth: `verify_jwt: false` (frontend uses Supabase anon key)
+- Auth: `verify_jwt: true` — JWT verified at platform level, plus an in-handler `supabase.auth.getUser()` check. Unauthenticated callers get HTTP 401 before any Anthropic API call is made (2026-05-01 hardening).
 - Handles: SQL queries (exec_sql RPC), React component generation, data answers
 - exec_sql RPC: SELECT-only, returns JSONB array
 
@@ -243,7 +253,7 @@ src/
 
 supabase/
   functions/
-    ai-proxy/index.ts       ← Edge function v18 (Deno.serve)
+    ai-proxy/index.ts       ← Edge function v31 (Deno.serve, verify_jwt: true)
 ```
 
 ---

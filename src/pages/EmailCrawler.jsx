@@ -197,6 +197,7 @@ async function extractFromEmail({ subject, body, attachments }) {
       system: EXTRACT_ALL_POS_SYSTEM,
       max_tokens: 6000,
       messages: [{ role: "user", content: contentBlocks }],
+      cacheSystem: true,
     });
     const raw = d.content?.filter(b => b.type === "text").map(b => b.text).join("") || "{}";
     const clean = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();

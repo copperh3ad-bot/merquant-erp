@@ -51,17 +51,30 @@ const COST_RATES: Record<string, { in: number; out: number; cacheRead: number; c
   "claude-haiku-4-5-20251001":  { in: 1.00, out:  5.00, cacheRead: 0.10, cacheWrite: 1.25 },
 };
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
-const j = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
-
-const err = (code: string, user_message: string, dev_detail: unknown, status: number) =>
-  j({ ok: false, code, user_message, dev_detail }, status);
+// Origin allowlist for CORS — tightened from `*` per hardening audit
+// Finding 17. Env var `ALLOWED_ORIGINS` extends the defaults.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://merquanterp.netlify.app",
+  "https://merquant-mas.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+const ALLOWED_ORIGINS = new Set(
+  (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .concat(DEFAULT_ALLOWED_ORIGINS),
+);
+function corsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
 // -------- helpers --------
 
@@ -251,6 +264,14 @@ async function callAnthropicChain(
 // -------- handler --------
 
 Deno.serve(async (req) => {
+  // Per-request CORS headers (allowlist-checked against the Origin
+  // header). Helper functions defined below close over `CORS`.
+  const CORS = corsHeaders(req);
+  const j = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
+  const err = (code: string, user_message: string, dev_detail: unknown, status: number) =>
+    j({ ok: false, code, user_message, dev_detail }, status);
+
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return err("METHOD_NOT_ALLOWED", "Only POST is supported.", `received ${req.method}`, 405);
 
@@ -420,6 +441,9 @@ Deno.serve(async (req) => {
         ...baseRow,
         model: models[0],
         validation_status: "skipped",
+        review_status: "rejected" as const,                     // auto-reject on hard failure so dedup unblocks
+        rejected_at: new Date().toISOString(),
+        rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
         error_code: "EXTRACTION_PARSE_FAILED",
         error_message: msg,
       });
@@ -436,6 +460,9 @@ Deno.serve(async (req) => {
     if (lastFailure.kind === "timeout") {
       await supabase.from("ai_extractions").insert({
         ...baseRow, model: lastModel, validation_status: "skipped",
+        review_status: "rejected" as const,
+        rejected_at: new Date().toISOString(),
+        rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
         error_code: "EXTRACTION_LLM_TIMEOUT", error_message: `aborted at ${ANTHROPIC_TIMEOUT_MS}ms`,
         cost_usd: chain.total_cost_usd,
       });
@@ -444,6 +471,9 @@ Deno.serve(async (req) => {
     if (lastFailure.kind === "http_error") {
       await supabase.from("ai_extractions").insert({
         ...baseRow, model: lastModel, validation_status: "skipped",
+        review_status: "rejected" as const,
+        rejected_at: new Date().toISOString(),
+        rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
         raw_llm_response: lastFailure.body as Record<string, unknown>,
         error_code: "EXTRACTION_LLM_ERROR", error_message: `Anthropic ${lastFailure.status}`,
         cost_usd: chain.total_cost_usd,
@@ -454,6 +484,9 @@ Deno.serve(async (req) => {
     // no_tool_use
     await supabase.from("ai_extractions").insert({
       ...baseRow, model: lastModel, validation_status: "skipped",
+        review_status: "rejected" as const,
+        rejected_at: new Date().toISOString(),
+        rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
       raw_llm_response: (lastFailure as { raw?: Record<string, unknown> }).raw,
       error_code: "EXTRACTION_LLM_INVALID_JSON", error_message: "tool_use block missing",
       cost_usd: chain.total_cost_usd,

@@ -3,7 +3,7 @@
 // packaging, accessories, zipper, and a size_chart derived from the SKU table.
 //
 // DENO COPY — mirror at src/lib/bobTechPackParser.js (canonical, used by browser).
-// The browser version uses window.XLSX bootstrapped from a CDN; this Deno copy
+// The browser version imports xlsx from npm (Vite-bundled); this Deno copy
 // imports SheetJS via esm.sh and accepts a Uint8Array instead of a File.
 
 import * as XLSX from "https://esm.sh/xlsx@0.18.5";
@@ -86,12 +86,51 @@ function parseInfoSheet(rows) {
 // where column C ("Item Code") actually holds component names like "Flat Sheet"
 // instead of real SKU codes. When we see this, we synthesize the SKU code from
 // header.product_sku + a size suffix and group the component rows under it.
-const COMPONENT_TYPE_TOKENS = new Set([
-  "flat sheet", "fitted sheet", "pillow case", "pillowcase", "sham",
-  "top fabric", "lining", "binding", "skirt", "front", "bottom",
-  "piping", "filling", "lamination", "fabric bag", "quilting",
-  "pillow compression", "platform", "evalon membrane", "sleeper flap",
-]);
+// Membership test for "is this string a known part name?". Delegated to
+// the codegen'd vocab snapshot — kept in sync with src/lib/textileVocabulary
+// via scripts/generate-vocab-edge.mjs.
+import {
+  isInCategory,
+  COLOUR_CANONICALS,
+  COLOUR_ALIASES,
+} from "./_vocab.generated.ts";
+function isComponentTypeToken(token) {
+  return isInCategory("part", token);
+}
+
+// Build a single regex over every colour alias so detectColourInText can
+// resolve "WHITE" / "off-white" / "grey" / "Misty Blue" to canonicals.
+// Old hardcoded /white/i missed every other colour.
+const COLOUR_ALIAS_REGEX = (() => {
+  const all = [
+    ...COLOUR_CANONICALS.map((c) => c.toLowerCase()),
+    ...COLOUR_ALIASES,
+  ].sort((a, b) => b.length - a.length);
+  if (all.length === 0) return null;
+  const escaped = all.map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\b(${escaped.join("|")})\\b`, "i");
+})();
+
+const COLOUR_LOOKUP = (() => {
+  const map = new Map();
+  for (const canon of COLOUR_CANONICALS) {
+    map.set(canon.toLowerCase(), canon);
+  }
+  return map;
+})();
+
+function detectColourInText(text) {
+  if (!text || !COLOUR_ALIAS_REGEX) return null;
+  const m = String(text).match(COLOUR_ALIAS_REGEX);
+  if (!m) return null;
+  const matched = m[1].toLowerCase();
+  // Direct canonical match? Otherwise the regex caught an alias — we
+  // can't reverse-look-up the canonical without the full REVERSE_INDEX
+  // (not exported), so default to the matched alias title-cased. The
+  // common cases (white/black/grey) all hit the canonical map.
+  if (COLOUR_LOOKUP.has(matched)) return COLOUR_LOOKUP.get(matched);
+  return matched.replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 // Compact size tokens used for synthesized item codes.
 const SIZE_CODE_MAP = {
@@ -179,7 +218,7 @@ function parseSizeSheet(rows, headerProductSku = "") {
   // Detect layout: if a majority of item_code values are component-type tokens,
   // treat this as a sheet-set layout and synthesize real SKU codes.
   const componentLikeCount = rawRows.filter(r =>
-    COMPONENT_TYPE_TOKENS.has((r.item_code || "").toLowerCase().trim())
+    isComponentTypeToken((r.item_code || "").trim())
   ).length;
   const isSheetSetLayout = componentLikeCount >= Math.ceil(rawRows.length * 0.6);
 
@@ -454,7 +493,9 @@ function toFabricSpecs(fabrications, trims) {
       width_cm: null,
       consumption_per_unit: null,
       wastage_percent: null,
-      color: /white/i.test(f.fabric_type || "") ? "White" : null,
+      // Replaced naive /white/i with full-vocabulary detection. Now picks
+      // up Ivory, Grey, Black, Misty Blue, Cloud Gray, etc.
+      color: detectColourInText(f.fabric_type),
       notes: f.location || null,
     });
   }

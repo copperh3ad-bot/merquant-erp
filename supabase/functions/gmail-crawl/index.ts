@@ -1,11 +1,31 @@
 // supabase/functions/gmail-crawl/index.ts v2 - reduced memory footprint
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+// Origin allowlist for CORS — tightened from `*` per hardening audit
+// Finding 17. Env var `ALLOWED_ORIGINS` (comma-separated) extends the
+// defaults for branch deploys / staging.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://merquanterp.netlify.app",
+  "https://merquant-mas.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+const ALLOWED_ORIGINS = new Set(
+  (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .concat(DEFAULT_ALLOWED_ORIGINS),
+);
+function corsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") ?? "";
+  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID")!;
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET")!;
@@ -13,10 +33,6 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-function j(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
-}
 
 async function getUserIdFromAuth(req: Request): Promise<string | null> {
   const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
@@ -34,8 +50,21 @@ async function ensureAccessToken(userId: string): Promise<{ access_token: string
     return { access_token: rec.access_token, email: rec.email };
   }
 
+  // Resolve plaintext refresh_token: prefer the encrypted column,
+  // fall back to legacy plaintext during the encryption rollout.
+  const tokenKey = Deno.env.get("GMAIL_TOKEN_KEY") || "";
+  let refreshPlaintext: string | null = null;
+  if (rec.refresh_token_encrypted && tokenKey) {
+    const { data: dec } = await supabaseAdmin.rpc("decrypt_gmail_token", {
+      ciphertext: rec.refresh_token_encrypted, passphrase: tokenKey,
+    });
+    refreshPlaintext = dec ?? null;
+  }
+  if (!refreshPlaintext) refreshPlaintext = rec.refresh_token ?? null;
+  if (!refreshPlaintext) return { error: "no_refresh_token_stored" };
+
   const params = new URLSearchParams({
-    refresh_token: rec.refresh_token,
+    refresh_token: refreshPlaintext,
     client_id: GOOGLE_CLIENT_ID,
     client_secret: GOOGLE_CLIENT_SECRET,
     grant_type: "refresh_token",
@@ -49,8 +78,16 @@ async function ensureAccessToken(userId: string): Promise<{ access_token: string
   if (!resp.ok) return { error: "refresh_failed" };
 
   const exp = new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString();
+  let access_token_encrypted: string | null = null;
+  if (tokenKey) {
+    const { data: enc } = await supabaseAdmin.rpc("encrypt_gmail_token", {
+      plaintext: data.access_token, passphrase: tokenKey,
+    });
+    access_token_encrypted = enc ?? null;
+  }
   await supabaseAdmin.from("gmail_oauth").update({
     access_token: data.access_token,
+    access_token_encrypted,
     token_expires_at: exp,
     updated_at: new Date().toISOString(),
   }).eq("user_id", userId);
@@ -93,6 +130,12 @@ function walkParts(payload: any, collector: { body: string; htmlBody: string; at
 }
 
 Deno.serve(async (req) => {
+  // Per-request CORS headers (allowlist-checked against the Origin
+  // header). Helper functions defined below close over `CORS`.
+  const CORS = corsHeaders(req);
+  const j = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
+
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
 
   try {

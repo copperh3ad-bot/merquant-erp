@@ -6,19 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Upload, Loader2, CheckCircle, AlertCircle, FileSpreadsheet, Download } from "lucide-react";
 
-// Load SheetJS from CDN for xlsx/xls reading
-async function loadSheetJS() {
-  if (window.XLSX) return window.XLSX;
-  await new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-    s.onload = res;
-    s.onerror = rej;
-    document.head.appendChild(s);
-  });
-  return window.XLSX;
-}
-
 // Convert any supported file type to CSV text for Claude
 async function fileToCSV(file) {
   const ext = file.name.split(".").pop().toLowerCase();
@@ -30,7 +17,7 @@ async function fileToCSV(file) {
 
   // XLSX / XLS / XLSM — use SheetJS
   if (["xlsx", "xls", "xlsm"].includes(ext)) {
-    const XLSX = await loadSheetJS();
+    const XLSX = await import("xlsx");
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: "array" });
     // Use first sheet
@@ -289,7 +276,16 @@ ${csvText.substring(0, 15000)}`
                   type="file"
                   accept=".csv,.txt,.xlsx,.xls,.xlsm"
                   className="hidden"
-                  onChange={e => { setFile(e.target.files[0]); e.target.value = ""; }}
+                  onChange={e => {
+                    const f = e.target.files[0];
+                    e.target.value = "";
+                    if (!f) return;
+                    if (f.size > 10 * 1024 * 1024) {
+                      alert(`${f.name} is ${(f.size / (1024 * 1024)).toFixed(1)} MB. Max 10 MB.`);
+                      return;
+                    }
+                    setFile(f);
+                  }}
                 />
               </div>
             )}

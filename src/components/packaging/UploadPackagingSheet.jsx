@@ -15,7 +15,16 @@ export default function UploadPackagingSheet({ onSuccess }) {
 
   const reset = () => { setFile(null); setStatus("idle"); setMessage(""); setResults(null); if (inputRef.current) inputRef.current.value = ""; };
 
-  const handleFile = (e) => { const f = e.target.files[0]; if (f) { setFile(f); } e.target.value = ""; };
+  const handleFile = (e) => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    if (f.size > 10 * 1024 * 1024) {
+      alert(`${f.name} is ${(f.size / (1024 * 1024)).toFixed(1)} MB. Max 10 MB.`);
+      return;
+    }
+    setFile(f);
+  };
 
   const handleProcess = async () => {
     if (!file) return;
@@ -24,17 +33,10 @@ export default function UploadPackagingSheet({ onSuccess }) {
     let text = "";
     if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
       try {
-        if (!window.XLSX) {
-          await new Promise((res, rej) => {
-            const s = document.createElement("script");
-            s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-            s.onload = res; s.onerror = rej;
-            document.head.appendChild(s);
-          });
-        }
+        const XLSX = await import("xlsx");
         const buf = await file.arrayBuffer();
-        const wb = window.XLSX.read(buf, { type: "array" });
-        text = window.XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+        const wb = XLSX.read(buf, { type: "array" });
+        text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
       } catch (e) {
         setStatus("error"); setMessage("Could not read Excel file: " + e.message); return;
       }

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveDescription,
   findTechPackForArticle,
+  extractSkuRelevantPortion,
 } from "../../src/lib/descriptionResolver.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
@@ -1235,5 +1236,69 @@ describe("resolveDescription — EAN flow on showEAN tabs", () => {
       techPack: tpWithUpcOnly,
     });
     expect(result).toBeNull();
+  });
+});
+
+// ── extractSkuRelevantPortion (combined-product description filter) ──
+
+describe("extractSkuRelevantPortion", () => {
+  // The exact bug: combined description has BOTH the mattress sticker size
+  // AND the pillow sticker size in one line. For an MP SKU, we want only
+  // the mattress portion; for a PP SKU, only the pillow portion.
+  it("filters out pillow segment when SKU is a Mattress Protector", () => {
+    const desc = "White ground with black fonts / 76mmx23mm (mattress protector) / 64mmX23mm(Pillow Protector)";
+    const out = extractSkuRelevantPortion(desc, "GPMP38");
+    expect(out).toContain("76mmx23mm");
+    expect(out).toContain("White ground");
+    expect(out).not.toContain("64mmX23mm");
+    expect(out).not.toContain("Pillow Protector");
+  });
+
+  it("filters out mattress segment when SKU is a Pillow Protector", () => {
+    const desc = "White ground with black fonts / 76mmx23mm (mattress protector) / 64mmX23mm(Pillow Protector)";
+    const out = extractSkuRelevantPortion(desc, "GPPPQ");
+    expect(out).toContain("64mmX23mm");
+    expect(out).toContain("White ground");
+    expect(out).not.toContain("76mmx23mm");
+    expect(out).not.toContain("mattress protector");
+  });
+
+  it("keeps untagged 'header' segments (no product type mentioned)", () => {
+    const desc = "White ground with black fonts / 76mmx23mm (mattress protector)";
+    const out = extractSkuRelevantPortion(desc, "GPMP38");
+    expect(out).toContain("White ground with black fonts");
+  });
+
+  it("returns description unchanged when SKU code can't be parsed", () => {
+    const desc = "76mmx23mm (mattress protector) / 64mmX23mm (Pillow Protector)";
+    const out = extractSkuRelevantPortion(desc, "MFRM-XYZ");
+    expect(out).toBe(desc);
+  });
+
+  it("returns description unchanged when there's only one segment", () => {
+    const desc = "76mmx23mm (mattress protector)";
+    const out = extractSkuRelevantPortion(desc, "GPMP38");
+    expect(out).toBe(desc);
+  });
+
+  it("does not blank out the description when ALL segments mention other products", () => {
+    // Safety: if every segment mentions a different product, returning ""
+    // would be worse than showing the wrong text. Keep as-is.
+    const desc = "76mmx23mm (mattress protector) / 64mmX23mm (Pillow Protector)";
+    const out = extractSkuRelevantPortion(desc, "GPSE50"); // Sleeper Encasement
+    expect(out).toBe(desc); // no segments to keep, so unchanged
+  });
+
+  it("handles null/empty input gracefully", () => {
+    expect(extractSkuRelevantPortion(null, "GPMP38")).toBeNull();
+    expect(extractSkuRelevantPortion("", "GPMP38")).toBe("");
+    expect(extractSkuRelevantPortion("anything", null)).toBe("anything");
+    expect(extractSkuRelevantPortion("anything", "")).toBe("anything");
+  });
+
+  it("works for Pillow Case vs Comforter cross-pollution", () => {
+    const desc = "Sticker spec / 50x30mm (pillow case) / 70x40mm (comforter)";
+    expect(extractSkuRelevantPortion(desc, "ABCPC1")).not.toContain("comforter");
+    expect(extractSkuRelevantPortion(desc, "ABCCOMF1")).not.toContain("pillow case");
   });
 });

@@ -18,6 +18,8 @@
  * map + matchesCategory() bridges both shapes onto the page's tab list.
  */
 
+import { productFamilyOf } from "@/lib/textileVocabulary";
+
 // ── Category alias map ────────────────────────────────────────────────────
 // Each tab's `cfg.category` (left key) maps to a list of substrings that,
 // when found in a tech-pack element's category-flavoured field
@@ -232,6 +234,68 @@ function shouldFallThrough(rows) {
 // that field. Mirrors the per-tab mapping used for tech-pack measurements
 // so that articleSizes acts as a 4th-tier size fallback after element /
 // measurements / blank.
+// When a tech-pack description combines specs for multiple product families
+// in one row (e.g. "76mmx23mm (mattress protector) / 64mmX23mm (Pillow Protector)"),
+// keep only the segments relevant to THIS SKU's product type. Drops segments
+// that explicitly tag a different product family. Untagged segments stay
+// (they're descriptive headers like "White ground with black fonts").
+//
+// Description-text keywords per product family. Used by
+// extractSkuRelevantPortion to filter combined-product descriptions like
+// "76mmx23mm (mattress protector) / 64mmX23mm (Pillow Protector)" down
+// to only the segment(s) relevant to THIS SKU's family.
+//
+// The product-family identification (regex on article_code) is delegated
+// to textileVocabulary.productFamilyOf so we don't carry a parallel copy
+// of the patterns here. The keyword arrays below are this resolver's
+// only contribution — they're filter-side, not classification-side.
+const PRODUCT_TYPE_KEYWORDS = {
+  "Pillow Protector":   ["pillow protector", "pillow protect"],
+  "Mattress Protector": ["mattress protector", "mattress protect"],
+  "Sleeper Encasement": ["sleeper encasement", "sleeper"],
+  "Total Encasement":   ["total encasement"],
+  "Sheet Set":          ["sheet set", "sheets"],
+  "Pillow Case":        ["pillow case", "pillowcase"],
+  "Comforter":          ["comforter"],
+  "Duvet Cover":        ["duvet cover", "duvet"],
+};
+
+// Thin wrapper kept for naming clarity within this module — productFamilyOf
+// reads through the central PRODUCT_FAMILY_PATTERNS so any drift in family
+// codes (new SKU prefix, renamed family) lands here automatically.
+function inferProductType(articleCode) {
+  return productFamilyOf(articleCode);
+}
+
+export function extractSkuRelevantPortion(description, articleCode) {
+  if (!description || !articleCode) return description;
+  const productType = inferProductType(articleCode);
+  if (!productType) return description;
+
+  const myKWs = PRODUCT_TYPE_KEYWORDS[productType] || [];
+  const otherKWs = Object.entries(PRODUCT_TYPE_KEYWORDS)
+    .filter(([type]) => type !== productType)
+    .flatMap(([_, kws]) => kws);
+
+  // Split the description on " / " (or "/") — common separator in tech packs
+  // when one row carries specs for multiple products.
+  const parts = description.split(/\s*\/\s*/);
+  if (parts.length < 2) return description; // nothing to filter
+
+  // Drop segments that mention a DIFFERENT product type but not OURS.
+  const filtered = parts.filter((part) => {
+    const lower = part.toLowerCase();
+    const mentionsOurs   = myKWs.some((kw) => lower.includes(kw));
+    const mentionsOther  = otherKWs.some((kw) => lower.includes(kw));
+    if (mentionsOther && !mentionsOurs) return false;
+    return true;
+  });
+
+  if (filtered.length === parts.length) return description; // no filter applied
+  if (filtered.length === 0)             return description; // safety: don't blank everything
+  return filtered.join(" / ").trim();
+}
+
 function articleSizeForTab(cfg, articleSizes) {
   if (!articleSizes || !cfg) return "";
   if (cfg.category === "Polybag")          return articleSizes.pvc_bag_dimensions || "";
@@ -290,11 +354,15 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
   };
 
   // Description: try several field names because the BOB and AI shapes differ.
-  const descText =
+  // Then filter combined-product descriptions like
+  //   "76mmx23mm (mattress protector) / 64mmX23mm (Pillow Protector)"
+  // down to only the segments relevant to THIS SKU's product family.
+  const rawDescText =
     elem.description ||
     elem.material ||
     elem.section ||
     "";
+  const descText = extractSkuRelevantPortion(rawDescText, articleCode);
 
   // Size: prefer the element's own size_spec; otherwise fall back to per-SKU
   // dimensions stored in extracted_measurements.this_sku, picked by tab.
@@ -497,11 +565,29 @@ export function resolveDescription({
   // Dedupe each group with its own key strategy, then merge. Labels need
   // section-aware keys (see labelKey comment); trims/accessories collapse
   // duplicate descriptions across naming variants (Stiffener case).
-  const merged = [
+  let merged = [
     ...dedupeBy(accessoryCandidates, trimAccessoryKey),
     ...dedupeBy(trimCandidates,      trimAccessoryKey),
     ...dedupeBy(labelCandidates,     labelKey),
   ];
+
+  // Sticker / Insert Card consolidation: BOB tech packs often parse the
+  // sticker spec into 3 rows ("Direct print on insert", "All barcode...
+  // must be stick on PVC bag", "White ground / 76mmx23mm") even though
+  // they describe ONE physical sticker. When multiple rows surface for
+  // these tabs, prefer rows that carry physical dimensions (e.g. "76mm")
+  // over instruction-only rows. Only apply when at least one spec-row
+  // exists — otherwise leave the rows alone (better instructions than
+  // nothing).
+  if ((cfg.category === "Sticker" || cfg.category === "Insert Card") && merged.length > 1) {
+    const hasPhysicalDims = (e) => {
+      const text = String(e.description || e.material || "").toLowerCase();
+      return /\d+\s*(mm|cm|in|inch|")\b/.test(text)
+          || /\d+\s*x\s*\d+/.test(text);  // matches 76mmx23mm, 4x7cm, 3X5
+    };
+    const specRows = merged.filter(hasPhysicalDims);
+    if (specRows.length > 0) merged = specRows;
+  }
 
   if (merged.length > 0) {
     const usable = merged.filter((e) => !isTechPackElementEmpty(e));

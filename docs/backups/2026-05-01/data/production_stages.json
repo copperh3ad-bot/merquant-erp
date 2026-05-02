@@ -1,0 +1,42 @@
+[
+  {
+    "id": "24d09e2c-1fea-4500-8a88-f64d23478ab1",
+    "name": "Finishing",
+    "stage_order": 3,
+    "default_line_type": "finishing",
+    "is_active": true,
+    "created_at": "2026-04-20 10:03:29.857746+00"
+  },
+  {
+    "id": "5b58d80e-2463-4401-8c33-a877a9d17643",
+    "name": "QC",
+    "stage_order": 4,
+    "default_line_type": "finishing",
+    "is_active": true,
+    "created_at": "2026-04-20 10:03:29.857746+00"
+  },
+  {
+    "id": "82daf968-bf46-466c-b763-1c714184879f",
+    "name": "Packing",
+    "stage_order": 5,
+    "default_line_type": "packing",
+    "is_active": true,
+    "created_at": "2026-04-20 10:03:29.857746+00"
+  },
+  {
+    "id": "ad223ddf-009a-48a6-bcd6-27001c8ad270",
+    "name": "Stitching",
+    "stage_order": 2,
+    "default_line_type": "stitching",
+    "is_active": true,
+    "created_at": "2026-04-20 10:03:29.857746+00"
+  },
+  {
+    "id": "e72187b9-84f1-4850-b628-261d75f8e486",
+    "name": "Cutting",
+    "stage_order": 1,
+    "default_line_type": "cutting",
+    "is_active": true,
+    "created_at": "2026-04-20 10:03:29.857746+00"
+  }
+]
