@@ -13,6 +13,15 @@ import { cn } from "@/lib/utils";
 import { mfg, skuQueue } from "@/api/supabaseClient";
 import { applyTemplateToArticle } from "@/lib/skuMatcher";
 import { allCanonicals } from "@/lib/textileVocabulary";
+import {
+  DEFAULT_UNIT_SYSTEM,
+  widthUnitLabel,
+  weightUnitLabel,
+  cmToInches,
+  inchesToCm,
+  gsmToOzSqYd,
+  ozSqYdToGsm,
+} from "@/lib/unitSystem";
 
 // Sourced from textileVocabulary; new canonical parts appear here
 // automatically. Dialog-specific extras: Window (Outside)/(Inside)
@@ -25,10 +34,26 @@ const COMPONENT_TYPES = [
 ];
 const emptyComp = () => ({ component_type:"Front", product_size:"", direction:"", fabric_type:"", gsm:0, width:0, consumption_per_unit:0, wastage_percent:6, total_required:0 });
 
-function CompRow({ comp, idx, qty, onChange, onRemove }) {
+function CompRow({ comp, idx, qty, onChange, onRemove, unitSystem }) {
   const net = (comp.consumption_per_unit || 0) * (qty || 0);
   const total = +(net * (1 + (comp.wastage_percent || 0) / 100)).toFixed(4);
   const inp = "w-full text-xs border border-gray-300 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white";
+  // Bidirectional unit conversion: storage stays in cm + GSM, the input
+  // layer reads/writes in the user's preferred unit. See FabricEditDialog
+  // for the same pattern.
+  const isImperial = unitSystem === "imperial";
+  const widthDisplay  = (cm)  => cm  == null || cm  === "" ? "" : (isImperial ? Number(cmToInches(cm)).toFixed(1)  : cm);
+  const weightDisplay = (gsm) => gsm == null || gsm === "" ? "" : (isImperial ? Number(gsmToOzSqYd(gsm)).toFixed(2) : gsm);
+  const widthFromInput  = (raw) => {
+    const n = Number(raw);
+    if (raw === "" || isNaN(n)) return 0;
+    return isImperial ? Number(inchesToCm(n).toFixed(2)) : n;
+  };
+  const weightFromInput = (raw) => {
+    const n = Number(raw);
+    if (raw === "" || isNaN(n)) return 0;
+    return isImperial ? Number(ozSqYdToGsm(n).toFixed(1)) : n;
+  };
 
   return (
     <tr className={idx % 2 === 0 ? "bg-blue-50/20" : "bg-white"}>
@@ -39,8 +64,8 @@ function CompRow({ comp, idx, qty, onChange, onRemove }) {
       </td>
       <td className="border px-1.5 py-1"><input className={inp} value={comp.product_size || ""} onChange={e => onChange(idx, "product_size", e.target.value)} placeholder="e.g. 70×96"/></td>
       <td className="border px-1.5 py-1"><input className={inp} value={comp.fabric_type || ""} onChange={e => onChange(idx, "fabric_type", e.target.value)} placeholder="Single Jersey"/></td>
-      <td className="border px-1.5 py-1 w-14"><input type="number" className={inp} value={comp.gsm || ""} onChange={e => onChange(idx, "gsm", Number(e.target.value))}/></td>
-      <td className="border px-1.5 py-1 w-14"><input type="number" className={inp} value={comp.width || ""} onChange={e => onChange(idx, "width", Number(e.target.value))}/></td>
+      <td className="border px-1.5 py-1 w-14"><input type="number" step="any" className={inp} value={weightDisplay(comp.gsm) || ""} onChange={e => onChange(idx, "gsm", weightFromInput(e.target.value))}/></td>
+      <td className="border px-1.5 py-1 w-14"><input type="number" step="any" className={inp} value={widthDisplay(comp.width) || ""} onChange={e => onChange(idx, "width", widthFromInput(e.target.value))}/></td>
       <td className="border px-1.5 py-1 w-16"><input type="number" step="any" className={inp} value={comp.consumption_per_unit ?? ""} onChange={e => onChange(idx, "consumption_per_unit", e.target.value)}/></td>
       <td className="border px-1.5 py-1 w-14"><input type="number" className={inp} value={comp.wastage_percent ?? 6} onChange={e => onChange(idx, "wastage_percent", Number(e.target.value))}/></td>
       <td className="border px-1.5 py-1 w-16 text-center font-semibold text-blue-800 bg-yellow-50 text-xs">{total.toFixed(3)}</td>
@@ -51,7 +76,7 @@ function CompRow({ comp, idx, qty, onChange, onRemove }) {
   );
 }
 
-export default function SKUReviewDialog({ open, onOpenChange, queueItem, onApprove, onSkip }) {
+export default function SKUReviewDialog({ open, onOpenChange, queueItem, onApprove, onSkip, unitSystem = DEFAULT_UNIT_SYSTEM }) {
   const [components, setComponents] = useState([]);
   const [templateSearch, setTemplateSearch] = useState("");
   const [templates, setTemplates] = useState([]);
@@ -211,7 +236,7 @@ export default function SKUReviewDialog({ open, onOpenChange, queueItem, onAppro
             <table className="w-full text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-100">
-                  {["Part","Prod. Size","Fabric Type","GSM","Width cm","Cut/Unit m","Wastage %","Total Req.",""].map(h => (
+                  {["Part","Prod. Size","Fabric Type",weightUnitLabel(unitSystem),`Width ${widthUnitLabel(unitSystem)}`,"Cut/Unit m","Wastage %","Total Req.",""].map(h => (
                     <th key={h} className="border px-2 py-1.5 text-left whitespace-nowrap font-medium">{h}</th>
                   ))}
                 </tr>
@@ -221,6 +246,7 @@ export default function SKUReviewDialog({ open, onOpenChange, queueItem, onAppro
                   <CompRow key={idx} comp={comp} idx={idx} qty={qty}
                     onChange={updateComp}
                     onRemove={i => setComponents(p => p.filter((_, x) => x !== i))}
+                    unitSystem={unitSystem}
                   />
                 ))}
               </tbody>

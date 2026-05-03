@@ -3,6 +3,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2, Save } from "lucide-react";
 import { allCanonicals } from "@/lib/textileVocabulary";
+import {
+  DEFAULT_UNIT_SYSTEM,
+  widthUnitLabel,
+  weightUnitLabel,
+  cmToInches,
+  inchesToCm,
+  gsmToOzSqYd,
+  ozSqYdToGsm,
+} from "@/lib/unitSystem";
 
 // Sourced from textileVocabulary; new canonical parts appear here
 // automatically. Dialog-specific extras: Window (Outside)/(Inside)
@@ -16,7 +25,7 @@ const COMPONENT_TYPES = [
 
 const emptyComp = () => ({ component_type:"Front", product_size:"", direction:"", fabric_type:"", gsm:0, width:0, consumption_per_unit:0, wastage_percent:6, total_required:0 });
 
-export default function FabricEditDialog({ open, onOpenChange, article, onSave, saving }) {
+export default function FabricEditDialog({ open, onOpenChange, article, onSave, saving, unitSystem = DEFAULT_UNIT_SYSTEM }) {
   const [form, setForm] = useState(null);
 
   useEffect(() => {
@@ -24,6 +33,26 @@ export default function FabricEditDialog({ open, onOpenChange, article, onSave, 
   }, [article, open]);
 
   if (!form) return null;
+
+  // Inputs accept values in the user's preferred unit; storage stays in
+  // metric SI (cm + GSM) so DB rows remain stable across toggles. Round
+  // imperial display to one decimal (width) / two decimals (weight) to
+  // match the read-only formatters in @/lib/unitSystem.
+  const isImperial = unitSystem === "imperial";
+  const widthLabel  = widthUnitLabel(unitSystem);
+  const weightLabel = weightUnitLabel(unitSystem);
+  const widthDisplay  = (cm)  => cm  == null || cm  === "" ? "" : (isImperial ? Number(cmToInches(cm)).toFixed(1)  : cm);
+  const weightDisplay = (gsm) => gsm == null || gsm === "" ? "" : (isImperial ? Number(gsmToOzSqYd(gsm)).toFixed(2) : gsm);
+  const widthFromInput  = (raw) => {
+    const n = Number(raw);
+    if (raw === "" || isNaN(n)) return 0;
+    return isImperial ? Number(inchesToCm(n).toFixed(2)) : n;
+  };
+  const weightFromInput = (raw) => {
+    const n = Number(raw);
+    if (raw === "" || isNaN(n)) return 0;
+    return isImperial ? Number(ozSqYdToGsm(n).toFixed(1)) : n;
+  };
 
   const recalc = (comps, qty) => comps.map(c => {
     const cpu = parseFloat(c.consumption_per_unit) || 0;
@@ -80,7 +109,7 @@ export default function FabricEditDialog({ open, onOpenChange, article, onSave, 
           <table className="w-full text-xs border-collapse">
             <thead>
               <tr className="bg-slate-100">
-                {["Part","Prod. Size","Dimensions","Direction","Fabric Type","GSM","Width (cm)","Cut/Unit (m)","Wastage %","Total Req. (m)",""].map(h => (
+                {["Part","Prod. Size","Dimensions","Direction","Fabric Type",weightLabel,`Width (${widthLabel})`,"Cut/Unit (m)","Wastage %","Total Req. (m)",""].map(h => (
                   <th key={h} className="border px-2 py-1.5 text-left whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -108,8 +137,8 @@ export default function FabricEditDialog({ open, onOpenChange, article, onSave, 
                     </td>
                     <td className="border px-1.5 py-1"><input className={inp} placeholder="WXL" value={comp.direction || ""} onChange={e => updateComp(idx, "direction", e.target.value)} /></td>
                     <td className="border px-1.5 py-1"><input className={inp} value={comp.fabric_type || ""} onChange={e => updateComp(idx, "fabric_type", e.target.value)} /></td>
-                    <td className="border px-1.5 py-1"><input type="number" className={inp} value={comp.gsm || ""} onChange={e => updateComp(idx, "gsm", Number(e.target.value))} /></td>
-                    <td className="border px-1.5 py-1"><input type="number" className={inp} value={comp.width || ""} onChange={e => updateComp(idx, "width", Number(e.target.value))} /></td>
+                    <td className="border px-1.5 py-1"><input type="number" step="any" className={inp} value={weightDisplay(comp.gsm) || ""} onChange={e => updateComp(idx, "gsm", weightFromInput(e.target.value))} /></td>
+                    <td className="border px-1.5 py-1"><input type="number" step="any" className={inp} value={widthDisplay(comp.width) || ""} onChange={e => updateComp(idx, "width", widthFromInput(e.target.value))} /></td>
                     <td className="border px-1.5 py-1"><input type="number" step="any" min="0" className={inp} value={comp.consumption_per_unit ?? ""} onChange={e => updateComp(idx, "consumption_per_unit", e.target.value)} /></td>
                     <td className="border px-1.5 py-1"><input type="number" className={inp} value={comp.wastage_percent ?? 6} onChange={e => updateComp(idx, "wastage_percent", Number(e.target.value))} /></td>
                     <td className="border px-1.5 py-1 text-center font-semibold text-blue-800 bg-yellow-50">{total.toFixed(4)}</td>

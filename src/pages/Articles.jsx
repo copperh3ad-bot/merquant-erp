@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import EmptyState from "@/components/shared/EmptyState";
 import FabricEditDialog from "@/components/fabric/FabricEditDialog";
 import UploadFabricSheet from "@/components/fabric/UploadFabricSheet";
+import { DEFAULT_UNIT_SYSTEM } from "@/lib/unitSystem";
 import { cn } from "@/lib/utils";
 import POSelector from "@/components/shared/POSelector";
 import { useArticleComponentUpdate } from "@/hooks/useArticleComponentUpdate";
@@ -193,7 +194,9 @@ export default function Articles() {
         </div>
       )}
 
-      {/* Edit dialog */}
+      {/* Edit dialog. Articles span POs, so we look up the unit_system on
+          the article's parent PO at dialog-render time (rather than carrying
+          a global). Falls back to metric for orphaned/legacy articles. */}
       {editingArticle && (
         <FabricEditDialog
           open={!!editingArticle}
@@ -201,6 +204,7 @@ export default function Articles() {
           article={editingArticle}
           onSave={handleSave}
           saving={updateMutation.isPending}
+          unitSystem={pos.find(p => p.id === editingArticle.po_id)?.unit_system || DEFAULT_UNIT_SYSTEM}
         />
       )}
     </div>

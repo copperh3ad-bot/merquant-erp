@@ -1111,6 +1111,7 @@ export default function FabricWorking() {
         article={editingArticle}
         onSave={data => updateMutation.mutate({ id: data.id, data, allArticles: articles })}
         saving={updateMutation.isPending}
+        unitSystem={unitSystem}
       />
     </div>
   );
