@@ -51,6 +51,11 @@ export default function FabricWorking() {
   const [editingArticle, setEditingArticle] = useState(null);
   const [readOnly, setReadOnly] = useState(false);
   const [showAddArticle, setShowAddArticle] = useState(false);
+  const [savingUnits, setSavingUnits] = useState(false);
+
+  const { data: pos = [] } = useQuery({ queryKey: ["purchaseOrders"], queryFn: () => db.purchaseOrders.list("-created_at") });
+  const activePo = useMemo(() => selectedPoId ? pos.find(p => p.id === selectedPoId) : pos[0], [pos, selectedPoId]);
+
   // Unit-system preference is per-PO (purchase_orders.unit_system column).
   // Different customers / orders use different conventions — US buyers
   // tend to read inches + oz/sq.yd, EU + APAC tend to read cm + GSM.
@@ -58,9 +63,10 @@ export default function FabricWorking() {
   // display time. See @/lib/unitSystem for the conversion math.
   // NULL on the row → fallback to DEFAULT_UNIT_SYSTEM (metric) so old
   // POs keep rendering exactly as before.
+  // NB: must be declared AFTER activePo — referencing activePo above its
+  // useMemo would TDZ-throw on every render.
   const unitSystem = activePo?.unit_system || DEFAULT_UNIT_SYSTEM;
   const widthLabel = widthUnitLabel(unitSystem);
-  const [savingUnits, setSavingUnits] = useState(false);
   const handleUnitSystemChange = async (next) => {
     if (!activePo?.id || next === unitSystem) return;
     setSavingUnits(true);
@@ -71,9 +77,6 @@ export default function FabricWorking() {
       setSavingUnits(false);
     }
   };
-
-  const { data: pos = [] } = useQuery({ queryKey: ["purchaseOrders"], queryFn: () => db.purchaseOrders.list("-created_at") });
-  const activePo = useMemo(() => selectedPoId ? pos.find(p => p.id === selectedPoId) : pos[0], [pos, selectedPoId]);
 
   const { data: articles = [], isLoading } = useQuery({
     queryKey: ["articles", activePo?.id],

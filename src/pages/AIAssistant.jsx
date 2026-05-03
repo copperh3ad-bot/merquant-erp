@@ -65,7 +65,7 @@ src/api/supabaseClient.js exports: { supabase, db, mfg, priceList, accessoryTemp
 - mfg.articles: listByPO, list, create, update, delete, bulkCreate
 - mfg.fabricTemplates: list, getByCode, upsert
 - mfg.yarn: listByPO, list, create, update, delete, bulkCreate
-- mfg.trims: listByPO, create, update, delete
+- mfg.trims: listByPO, create, update, delete (now an adapter over accessory_items WHERE category='Trim'; the standalone trim_items table is deprecated)
 - mfg.accessories: list, listByPO, create, update, delete, bulkCreate
 - mfg.jobCards: list, listByPO, create, update, delete
 - priceList: list, upsert, update, byCode
