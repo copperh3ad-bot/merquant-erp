@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import StatusBadge from "@/components/shared/StatusBadge";
 import EmptyState from "@/components/shared/EmptyState";
 import SKUReviewDialog from "@/components/po/SKUReviewDialog";
+import { DEFAULT_UNIT_SYSTEM } from "@/lib/unitSystem";
 
 const STATUS_STYLES = {
   pending:      { cls: "bg-amber-50 text-amber-700 border-amber-200",  label: "Pending Review" },
@@ -119,6 +120,18 @@ export default function SKUReviewQueue() {
     queryFn: () => skuQueue.list(),
     refetchInterval: 30000,
   });
+
+  // Unit-system lookup: each queue item belongs to a PO; the dialog's
+  // width / weight inputs honor that PO's unit_system. Loaded once and
+  // reused across review opens — the list is bounded at 500 rows in
+  // supabaseClient.purchaseOrders.list and matches what FabricWorking
+  // already loads.
+  const { data: pos = [] } = useQuery({
+    queryKey: ["purchaseOrders"],
+    queryFn: () => db.purchaseOrders.list("-created_at"),
+  });
+  const reviewingUnitSystem =
+    pos.find(p => p.id === reviewing?.po_id)?.unit_system || DEFAULT_UNIT_SYSTEM;
 
   const filtered = useMemo(() => queue.filter(item => {
     const matchStatus = filterStatus === "all" || item.status === filterStatus || (filterStatus === "pending" && item.status === "ai_suggested");
@@ -318,6 +331,7 @@ export default function SKUReviewQueue() {
           await handleSkip(item);
           setReviewingId(null);
         }}
+        unitSystem={reviewingUnitSystem}
       />
     </div>
   );
