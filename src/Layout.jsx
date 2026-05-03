@@ -41,7 +41,10 @@ const ALL_NAV = [
     { group: "Materials",       name: "RM Coverage",              icon: Warehouse,        page: "RMCoverage" },
   { group: "Materials",       name: "Consumption Library",      icon: BookOpen,         page: "ConsumptionLibrary" },
 { group: "Materials",       name: "Yarn Planning",            icon: Scissors,         page: "YarnPlanning",           permission: "BOM_UPLOAD" },
-  { group: "Materials",       name: "Trims",                    icon: Tag,              page: "Trims",                  permission: "TRIM_EDIT" },
+  // 2026-05-03 — Trims page consolidated into Accessories & Packaging
+  // (it has a "Trim" sub-tab that writes to accessory_items with
+  // category=Trim). The standalone src/pages/Trims.jsx + mfg.trims
+  // table are deprecated. This entry was: { name: "Trims", page: "Trims", permission: "TRIM_EDIT" }.
   { group: "Materials",       name: "Accessories & Packaging",  icon: Package,          page: "PackagingPlanning",      permission: "ACCESSORY_EDIT" },
   { group: "Materials",       name: "Accessory POs",            icon: FileBox,          page: "AccessoryPurchaseOrders",permission: "ACCESSORY_EDIT" },
   // ── Logistics & Finance ────────────────────────────────────────

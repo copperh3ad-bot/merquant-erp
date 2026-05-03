@@ -10,7 +10,6 @@ import AIAssistant from './pages/AIAssistant';
 import FabricWorking from './pages/FabricWorking';
 import Articles from './pages/Articles';
 import YarnPlanning from './pages/YarnPlanning';
-import Trims from './pages/Trims';
 import PackagingPlanning from './pages/PackagingPlanning';
 import AccessoryPurchaseOrders from './pages/AccessoryPurchaseOrders';
 import ProformaInvoice from './pages/ProformaInvoice';
@@ -65,7 +64,6 @@ export const PAGES = {
   "FabricWorking":            FabricWorking,
   "Articles":                 Articles,
   "YarnPlanning":             YarnPlanning,
-  "Trims":                    Trims,
   "AccessoriesPackaging":     PackagingPlanning,
   "PackagingPlanning":        PackagingPlanning,
   "AccessoryPurchaseOrders":  AccessoryPurchaseOrders,
