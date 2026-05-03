@@ -269,20 +269,58 @@ export const mfg = {
     },
     delete: async (id) => { const { error } = await supabase.from('yarn_requirements').delete().eq('id', id); if (error) throw error; },
   },
+  // 2026-05-03 — `mfg.trims` is now a thin adapter over `accessory_items
+  // WHERE category='Trim'`. The standalone Trims page was retired; trim
+  // entry happens via Accessories & Packaging's "Trim" sub-tab which writes
+  // straight to accessory_items. The deprecated `trim_items` table is no
+  // longer read or written by the app — kept in the DB for archival /
+  // rollback only and can be dropped after a confidence period.
+  //
+  // Read shape: identical to a row from accessory_items (po_id, po_number,
+  // article_code, article_name, item_description, size_spec, color,
+  // quantity_required, unit, unit_cost, total_cost, supplier, status,
+  // wastage_percent, consumption_per_unit, notes, created_at, updated_at,
+  // id, category='Trim'). The unique trim_items columns (calc_type,
+  // fabric_meters, order_quantity, trim_category) are no longer present
+  // — no current caller relies on them.
+  //
+  // Write paths (create/update/delete) force category='Trim' so a stray
+  // write can't land in a different category bucket.
   trims: {
     listByPO: async (poId) => {
-      const { data, error } = await supabase.from('trim_items').select('*').eq('po_id', poId).order('created_at');
+      const { data, error } = await supabase
+        .from('accessory_items')
+        .select('*')
+        .eq('po_id', poId)
+        .eq('category', 'Trim')
+        .order('created_at');
       if (error) throw error; return data;
     },
     create: async (payload) => {
-      const { data, error } = await supabase.from('trim_items').insert(payload).select().single();
+      const { data, error } = await supabase
+        .from('accessory_items')
+        .insert({ ...payload, category: 'Trim' })
+        .select().single();
       if (error) throw error; return data;
     },
     update: async (id, payload) => {
-      const { data, error } = await supabase.from('trim_items').update(payload).eq('id', id).select().single();
+      const { data, error } = await supabase
+        .from('accessory_items')
+        .update({ ...payload, category: 'Trim' })
+        .eq('id', id)
+        .select().single();
       if (error) throw error; return data;
     },
-    delete: async (id) => { const { error } = await supabase.from('trim_items').delete().eq('id', id); if (error) throw error; },
+    delete: async (id) => {
+      // Safety: only delete if the row is actually in the Trim bucket so a
+      // stale id can't accidentally remove a non-trim accessory.
+      const { error } = await supabase
+        .from('accessory_items')
+        .delete()
+        .eq('id', id)
+        .eq('category', 'Trim');
+      if (error) throw error;
+    },
   },
   accessories: {
     list: async () => {
