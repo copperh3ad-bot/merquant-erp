@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Save, Plus, Trash2, Upload, Download, Printer, Package, Settings } from "lucide-react";
+import { Save, Plus, Trash2, Upload, Download, Printer, Package, Settings, FileSpreadsheet } from "lucide-react";
 import UploadPackagingSheet from "@/components/packaging/UploadPackagingSheet";
 import { db, mfg, accessoryTemplates, supabase } from "@/api/supabaseClient";
 import { resolveDescription, findTechPackForArticle } from "@/lib/descriptionResolver";
@@ -532,6 +532,75 @@ export default function PackagingPlanning() {
     return counts;
   }, [existingItems, activePo?.id]);
 
+  // ── Bottom summary: aggregate ALL items for this PO across all tabs ─────
+  // Groups by (category, item_description, size_spec) so the same item
+  // ordered for multiple articles rolls up into one row showing the total
+  // requirement. This is what the procurement team needs to issue a single
+  // PO per item regardless of which garment article it belongs to.
+  const itemSummary = useMemo(() => {
+    if (!activePo) return [];
+    const map = new Map();
+    for (const it of existingItems) {
+      if (it.po_id !== activePo.id) continue;
+      if (!it.quantity_required || it.quantity_required <= 0) continue;
+      const key = [
+        it.category || "",
+        it.item_description || "",
+        it.size_spec || "",
+      ].join("||");
+      if (!map.has(key)) {
+        map.set(key, {
+          category:         it.category || "",
+          item_description: it.item_description || "",
+          size_spec:        it.size_spec || "",
+          unit:             it.unit || "Pcs",
+          total_qty:        0,
+          articles:         new Set(),
+          pc_ean_codes:     new Set(),
+          carton_ean_codes: new Set(),
+        });
+      }
+      const row = map.get(key);
+      row.total_qty += Number(it.quantity_required) || 0;
+      if (it.article_code) row.articles.add(it.article_code);
+      if (it.pc_ean_code) row.pc_ean_codes.add(it.pc_ean_code);
+      if (it.carton_ean_code) row.carton_ean_codes.add(it.carton_ean_code);
+    }
+    return Array.from(map.values())
+      .map(r => ({
+        ...r,
+        articles_count:   r.articles.size,
+        articles_list:    Array.from(r.articles).sort().join(", "),
+        pc_ean_code:      Array.from(r.pc_ean_codes).join(", "),
+        carton_ean_code:  Array.from(r.carton_ean_codes).join(", "),
+      }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.item_description.localeCompare(b.item_description));
+  }, [existingItems, activePo?.id]);
+
+  // CSV export of the bottom summary. Format is what the procurement team
+  // sends to suppliers — flat row-per-item with rolled-up totals.
+  const handleExportCSV = () => {
+    if (!activePo || itemSummary.length === 0) return;
+    const headers = ["Category", "Item / Type", "Size / Description", "Total Qty (incl wastage)", "Unit", "Articles", "Articles count", "PC EAN", "Carton EAN"];
+    const rows = itemSummary.map(r => [
+      r.category, r.item_description, r.size_spec, r.total_qty, r.unit,
+      r.articles_list, r.articles_count, r.pc_ean_code, r.carton_ean_code,
+    ]);
+    const csv = [headers, ...rows]
+      .map(row => row.map(cell => {
+        const s = String(cell ?? "");
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      }).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a = Object.assign(document.createElement("a"), {
+      href: URL.createObjectURL(blob),
+      download: `Packaging_Summary_${activePo.po_number || "PO"}.csv`,
+    });
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   const cfg = TAB_CONFIG[subTab];
   const tabTemplates = allTemplates.filter(t => t.category === cfg.category);
 
@@ -562,6 +631,16 @@ export default function PackagingPlanning() {
           </Button>
           <Button size="sm" onClick={handleSaveAll} disabled={saving || !activePo} className="gap-1.5 text-xs">
             <Save className="h-3.5 w-3.5" /> {saving ? "Saving…" : "Save All"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleExportCSV}
+            disabled={!activePo || itemSummary.length === 0}
+            className="gap-1.5 text-xs"
+            title={itemSummary.length === 0 ? "Save items first to enable export" : "Download per-item summary as CSV"}
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5" /> Export CSV
           </Button>
         </div>
       </div>
@@ -607,6 +686,56 @@ export default function PackagingPlanning() {
               cartonSize={getCartonSize(art)}
             />
           ))}
+        </div>
+      )}
+
+      {/* ── Bottom summary: per-item totals across all tabs ─────────────────
+          Aggregates every saved row for this PO across all 8 sub-tabs into
+          one item-per-row table. Same item ordered for multiple articles
+          rolls up into a single line with summed total quantity. This is
+          the procurement view — what you'd send to a supplier. */}
+      {activePo && itemSummary.length > 0 && (
+        <div className="rounded border border-gray-300 shadow-sm overflow-hidden mt-6">
+          <div className="px-3 py-2 text-xs font-bold text-white flex justify-between items-center" style={{ backgroundColor: "#1F3864" }}>
+            <span>
+              Per-Item Summary — {activePo.po_number}
+              <span className="ml-2 font-normal opacity-80">({itemSummary.length} unique item{itemSummary.length !== 1 ? "s" : ""})</span>
+            </span>
+            <span className="font-normal opacity-80 text-[10px]">All saved rows · totals incl. wastage</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr style={{ backgroundColor: "#EBF0FA" }}>
+                  <th className="border border-gray-300 px-2 py-1.5 text-left w-28">Category</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-left">Item / Type</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-left">Size / Description</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-right w-28" style={{ backgroundColor: "#FFF2CC" }}>Total Qty</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-center w-16">Unit</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-left w-40">Articles</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itemSummary.map((r, idx) => (
+                  <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? "#fff" : "#F9FAFB" }}>
+                    <td className="border border-gray-300 px-2 py-1.5 font-medium text-blue-900">{r.category}</td>
+                    <td className="border border-gray-300 px-2 py-1.5">{r.item_description || "—"}</td>
+                    <td className="border border-gray-300 px-2 py-1.5 text-muted-foreground">{r.size_spec || "—"}</td>
+                    <td className="border border-gray-300 px-2 py-1.5 text-right font-bold" style={{ backgroundColor: "#FFF2CC" }}>
+                      {r.total_qty.toLocaleString()}
+                    </td>
+                    <td className="border border-gray-300 px-2 py-1.5 text-center">{r.unit}</td>
+                    <td className="border border-gray-300 px-2 py-1.5 text-[11px] text-muted-foreground" title={r.articles_list}>
+                      {r.articles_count} article{r.articles_count !== 1 ? "s" : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-3 py-1.5 bg-gray-50 border-t border-gray-200 text-[11px] text-muted-foreground italic">
+            Save changes on each tab to update this summary. Use Export CSV (top right) to download.
+          </div>
         </div>
       )}
     </div>
