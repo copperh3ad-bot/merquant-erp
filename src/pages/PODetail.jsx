@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -196,6 +196,25 @@ export default function PODetail() {
     queryFn: () => db.poItems.listByPO(poId),
     enabled: !!poId,
   });
+
+  // S4 — Realtime: when this PO updates anywhere (status change from
+  // another user, a manager approving in another tab, etc.) invalidate
+  // the local cache so the UI reflects it without a manual refresh.
+  useEffect(() => {
+    if (!poId) return;
+    const channel = supabase
+      .channel(`po-${poId}`)
+      .on("postgres_changes", {
+        event: "UPDATE",
+        schema: "public",
+        table: "purchase_orders",
+        filter: `id=eq.${poId}`,
+      }, () => {
+        qc.invalidateQueries({ queryKey: ["po", poId] });
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [poId, qc]);
 
   const handleStatusChange = async (newStatus) => {
     await db.statusLogs.log("purchase_order", poId, po?.status, newStatus);

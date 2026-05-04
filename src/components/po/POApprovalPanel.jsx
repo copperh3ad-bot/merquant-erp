@@ -62,6 +62,15 @@ export default function POApprovalPanel({ po, compact = false }) {
   const cfg = STATUS_CONFIG[approvalStatus] || STATUS_CONFIG.not_submitted;
   const StatusIcon = cfg.icon;
 
+  // S3 — optimistic updates. Map action → next approval_status so we can
+  // flip the cached PO immediately, snap back on error, and reconcile on
+  // settle. Keeps the existing onSuccess invalidation flow intact.
+  const ACTION_TO_STATUS = {
+    submit:   "pending",
+    approve:  "approved",
+    reject:   "rejected",
+    changes:  "changes_requested",
+  };
   const mutation = useMutation({
     mutationFn: async ({ action, notes: n }) => {
       const name = profile?.full_name || profile?.email || "Unknown";
@@ -70,13 +79,37 @@ export default function POApprovalPanel({ po, compact = false }) {
       if (action === "reject")  return db.purchaseOrders.reject(po.id, name, n);
       if (action === "changes") return db.purchaseOrders.requestChanges(po.id, name, n);
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["po", po.id] });
+    onMutate: async ({ action }) => {
+      const nextStatus = ACTION_TO_STATUS[action];
+      if (!nextStatus) return;
+      await qc.cancelQueries({ queryKey: ["po", po.id] });
+      const previous = qc.getQueryData(["po", po.id]);
+      // Patch both the per-PO cache (PODetail) and the list cache
+      // (PurchaseOrders index page) so the badge flips instantly.
+      qc.setQueryData(["po", po.id], (old) =>
+        old ? { ...old, approval_status: nextStatus } : old);
+      qc.setQueryData(["purchaseOrders"], (old) =>
+        Array.isArray(old)
+          ? old.map(p => p.id === po.id ? { ...p, approval_status: nextStatus } : p)
+          : old);
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous !== undefined) {
+        qc.setQueryData(["po", po.id], context.previous);
+      }
+      // Force a fresh read of the list to undo the optimistic patch.
       qc.invalidateQueries({ queryKey: ["purchaseOrders"] });
-      qc.invalidateQueries({ queryKey: ["pendingApprovals"] });
+    },
+    onSuccess: () => {
       setShowNotes(false);
       setNotes("");
       setActionType(null);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["po", po.id] });
+      qc.invalidateQueries({ queryKey: ["purchaseOrders"] });
+      qc.invalidateQueries({ queryKey: ["pendingApprovals"] });
     },
   });
 

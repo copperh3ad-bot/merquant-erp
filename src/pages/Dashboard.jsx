@@ -1,5 +1,5 @@
-import React from "react";
-import { useQuery } from "@tanstack/react-query";
+import React, { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import {
@@ -69,7 +69,23 @@ export default function Dashboard() {
     enabled: canApprovePOs,
     refetchInterval: 60000,
   });
+  const qc = useQueryClient();
   const { data: purchaseOrders = [], isLoading } = useQuery({ queryKey: ["purchaseOrders"], queryFn: () => db.purchaseOrders.list("-created_at") });
+
+  // S4 — Realtime: keep the dashboard PO list live. Any INSERT or UPDATE
+  // on purchase_orders refreshes the cached list. Cheap because the
+  // listener fires only when a row event happens, and the invalidate
+  // triggers React Query's standard refetch flow.
+  useEffect(() => {
+    const channel = supabase
+      .channel("dashboard-purchase-orders")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "purchase_orders" },
+        () => qc.invalidateQueries({ queryKey: ["purchaseOrders"] }))
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "purchase_orders" },
+        () => qc.invalidateQueries({ queryKey: ["purchaseOrders"] }))
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [qc]);
   const { data: shipments = [] } = useQuery({ queryKey: ["shipments"], queryFn: () => db.shipments.list() });
   const { data: allMilestones = [] } = useQuery({ queryKey: ["tnaMilestones"], queryFn: () => tna.milestones.listAll() });
   const { data: dipsList = [] } = useQuery({ queryKey: ["labDips"], queryFn: () => labDips.list() });
