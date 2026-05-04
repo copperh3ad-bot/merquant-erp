@@ -67,6 +67,8 @@ const ALL_NAV = [
   { group: "Finance",         name: "Compliance",               icon: ShieldAlert,      page: "Compliance" },
   { group: "Finance",         name: "Reports",                  icon: BarChart2,        page: "Reports",                permission: "REPORTS_VIEW" },
   // ── CRM ──────────────────────────────────────────────────────────────────
+  // Buyer Portal — visible only when role = Buyer (canSeePage gates this).
+  { group: "CRM",             name: "Buyer Portal",             icon: Briefcase,        page: "BuyerPortal" },
   { group: "CRM",             name: "RFQ & Quotations",         icon: Briefcase,        page: "CRM" },
   { group: "CRM",             name: "Buyer Contacts",           icon: Users,            page: "BuyerContacts" },
   { group: "CRM",             name: "Supplier Performance",     icon: TrendingUp,       page: "SupplierPerformance" },

@@ -47,6 +47,7 @@ import ProductionDashboard from './pages/ProductionDashboard';
 import ShopFloor from './pages/ShopFloor';
 import FabricInventory from './pages/FabricInventory';
 import JobWork from './pages/JobWork';
+import BuyerPortal from './pages/BuyerPortal';
 import CustomerOrderStatus from './pages/CustomerOrderStatus';
 import ShortageAlerts from './pages/ShortageAlerts';
 import MasterDataImport from './pages/MasterDataImport';
@@ -101,6 +102,7 @@ export const PAGES = {
   ShopFloor,
   FabricInventory,
   JobWork,
+  BuyerPortal,
   CustomerOrderStatus,
   ShortageAlerts,
   MasterDataImport,

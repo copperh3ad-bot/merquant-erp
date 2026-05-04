@@ -5,6 +5,8 @@
 // QC Inspector → QC inspections only (lab dips/samples are Owner+Manager)
 // Supplier    → role value preserved but not used in any active matrix;
 //               Supplier scoping is deferred until suppliers are invited.
+// Buyer       → external buyer; sees only their own POs/shipments/samples
+//               (RLS enforced via mig 40 — buyer_contacts.buyer_user_id link)
 
 export const ROLES = {
   OWNER:        "Owner",
@@ -12,15 +14,19 @@ export const ROLES = {
   MERCHANDISER: "Merchandiser",
   QC_INSPECTOR: "QC Inspector",
   SUPPLIER:     "Supplier",
+  BUYER:        "Buyer",
 };
 
 // Role rank — higher number = more permissions
+// Buyer slots below Supplier (15) — has its own scoped portal data
+// but less editing surface than Supplier (who can edit some shipping fields).
 export const ROLE_RANK = {
   Owner:         100,
   Manager:        80,
   Merchandiser:   60,
   "QC Inspector": 40,
   Supplier:       20,
+  Buyer:          15,
 };
 
 export function hasRole(userRole, requiredRole) {
@@ -76,6 +82,13 @@ export const PERMISSIONS = {
   // Reports
   REPORTS_VIEW:         ["Owner", "Manager"],
   REPORTS_EXPORT:       ["Owner", "Manager"],
+
+  // Buyer portal — external buyers see only their own data
+  // (RLS enforced via mig 40 — buyer_contacts.buyer_user_id link)
+  VIEW_OWN_POS:         ["Buyer"],
+  VIEW_OWN_SHIPMENTS:   ["Buyer"],
+  VIEW_OWN_SAMPLES:     ["Buyer"],
+  AI_BUYER_QUERY:       ["Buyer"],
 };
 
 export function can(userRole, permission) {
@@ -152,6 +165,15 @@ export const PAGE_VISIBILITY = {
   MasterDataImport:           ["Owner", "Manager"],
   Settings:                   ["Owner"],
   AuditDashboard:             ["Owner"],
+
+  // Buyer portal — visible only to Buyer role (and Owner via the
+  // canSeePage Owner-override below).
+  BuyerPortal:                ["Buyer"],
+
+  // F1-F4 new pages — internal staff
+  ShopFloor:                  ["Owner", "Manager", "Merchandiser"],
+  FabricInventory:            ["Owner", "Manager", "Merchandiser"],
+  JobWork:                    ["Owner", "Manager", "Merchandiser"],
 };
 
 export function canSeePage(userRole, pageName) {
@@ -242,6 +264,13 @@ export const ROLE_INFO = {
     description: "External supplier/factory. Read-only view of their linked POs.",
     capabilities: ["View their POs", "View their shipments"],
     restricted:   ["All editing", "Other suppliers' data", "Financial data"],
+  },
+  Buyer: {
+    color:       "bg-cyan-100 text-cyan-800 border-cyan-200",
+    badgeColor:  "bg-cyan-500",
+    description: "External buyer. Sees only their own POs, shipments, samples, and T&A — never any other buyer's data, never costs/margin/pricing.",
+    capabilities: ["View own POs + shipments", "Track sample approvals", "Track T&A milestones", "AI plain-English status queries"],
+    restricted:   ["All editing", "Other buyers' data", "Cost/margin/pricing", "Internal staff pages"],
   },
 };
 
