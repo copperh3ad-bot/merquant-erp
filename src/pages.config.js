@@ -46,6 +46,7 @@ import WIPTracker from './pages/WIPTracker';
 import ProductionDashboard from './pages/ProductionDashboard';
 import ShopFloor from './pages/ShopFloor';
 import FabricInventory from './pages/FabricInventory';
+import JobWork from './pages/JobWork';
 import CustomerOrderStatus from './pages/CustomerOrderStatus';
 import ShortageAlerts from './pages/ShortageAlerts';
 import MasterDataImport from './pages/MasterDataImport';
@@ -99,6 +100,7 @@ export const PAGES = {
   ProductionDashboard,
   ShopFloor,
   FabricInventory,
+  JobWork,
   CustomerOrderStatus,
   ShortageAlerts,
   MasterDataImport,

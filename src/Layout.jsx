@@ -47,6 +47,7 @@ const ALL_NAV = [
   // table are deprecated. This entry was: { name: "Trims", page: "Trims", permission: "TRIM_EDIT" }.
   { group: "Materials",       name: "Accessories & Packaging",  icon: Package,          page: "PackagingPlanning",      permission: "ACCESSORY_EDIT" },
   { group: "Materials",       name: "Fabric Inventory (AI)",    icon: Layers,           page: "FabricInventory",        permission: "FABRIC_SPEC_EDIT" },
+  { group: "Materials",       name: "Job Work (AI)",            icon: Briefcase,        page: "JobWork",                permission: "ACCESSORY_EDIT" },
   { group: "Materials",       name: "Accessory POs",            icon: FileBox,          page: "AccessoryPurchaseOrders",permission: "ACCESSORY_EDIT" },
   // ── Logistics & Finance ────────────────────────────────────────
   { group: "Logistics",       name: "Suppliers",                icon: Building2,        page: "Suppliers" },
