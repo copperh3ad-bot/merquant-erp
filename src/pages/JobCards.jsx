@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -158,10 +159,6 @@ function JobCardForm({ open, onOpenChange, onSave, initialData, pos }) {
 
 export default function JobCards() {
   const [searchParams] = useSearchParams();
-  const [jcs, setJcs] = useState([]);
-  const [pos, setPos] = useState([]);
-  const [stepsMap, setStepsMap] = useState({}); // parent_id -> [steps]
-  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
@@ -169,24 +166,32 @@ export default function JobCards() {
   const [filterStatus, setFilterStatus] = useState("All");
   const [expanded, setExpanded] = useState({}); // parent_id -> bool
 
-  const load = async () => {
-    setLoading(true);
-    const [jc, po, steps] = await Promise.all([
-      supabase.from("job_cards").select("*").order("created_at", { ascending: false }),
-      supabase.from("purchase_orders").select("id, po_number, customer_name").order("po_number"),
-      supabase.from("job_card_steps").select("*").order("step_number")
-    ]);
-    setJcs(jc.data || []);
-    setPos(po.data || []);
-    const m = {};
-    (steps.data || []).forEach(s => {
-      if (!m[s.parent_job_card_id]) m[s.parent_job_card_id] = [];
-      m[s.parent_job_card_id].push(s);
-    });
-    setStepsMap(m);
-    setLoading(false);
-  };
-  useEffect(() => { load(); }, []);
+  // S2 — React Query rollout (Phase 1). Three concurrent queries replace
+  // the previous useState/useEffect/load() trio. The `load()` reload
+  // pattern is preserved by using a single shared queryKey and
+  // qc.invalidateQueries(['jobCards']) at the original call sites.
+  const qc = useQueryClient();
+  const { data: jobCardsBundle = { jcs: [], pos: [], stepsMap: {} }, isLoading: loading } = useQuery({
+    queryKey: ["jobCards"],
+    queryFn: async () => {
+      const [jc, po, steps] = await Promise.all([
+        supabase.from("job_cards").select("*").order("created_at", { ascending: false }),
+        supabase.from("purchase_orders").select("id, po_number, customer_name").order("po_number"),
+        supabase.from("job_card_steps").select("*").order("step_number"),
+      ]);
+      const m = {};
+      (steps.data || []).forEach(s => {
+        if (!m[s.parent_job_card_id]) m[s.parent_job_card_id] = [];
+        m[s.parent_job_card_id].push(s);
+      });
+      return { jcs: jc.data || [], pos: po.data || [], stepsMap: m };
+    },
+  });
+  const jcs = jobCardsBundle.jcs;
+  const pos = jobCardsBundle.pos;
+  const stepsMap = jobCardsBundle.stepsMap;
+  // Back-compat shim — original code calls `await load()` after mutations.
+  const load = () => qc.invalidateQueries({ queryKey: ["jobCards"] });
 
   const stats = useMemo(() => ({
     total: jcs.length,
