@@ -13,20 +13,9 @@ import { DollarSign, Plus, Pencil, Save, TrendingUp, TrendingDown, RefreshCw, Ch
 import { cn } from "@/lib/utils";
 import EmptyState from "@/components/shared/EmptyState";
 import StatCard from "@/components/shared/StatCard";
-
-function calcCosting(f) {
-  const fabric = Number(f.fabric_cost)||0, trim = Number(f.trim_cost)||0, acc = Number(f.accessory_cost)||0;
-  const emb = Number(f.embellishment_cost)||0, cm = Number(f.cm_cost)||0, wash = Number(f.washing_cost)||0;
-  const subtotal = fabric+trim+acc+emb+cm+wash;
-  const overhead = +(subtotal*(Number(f.overhead_pct)||0)/100).toFixed(4);
-  const freight = Number(f.freight_cost)||0;
-  const commission = +(Number(f.buyer_price||0)*(Number(f.agent_commission_pct)||0)/100).toFixed(4);
-  const total_cogs = +(subtotal+overhead+freight+commission).toFixed(4);
-  const buyer_price = Number(f.buyer_price)||0;
-  const gross_margin = +(buyer_price - total_cogs).toFixed(4);
-  const gross_margin_pct = buyer_price > 0 ? +((gross_margin/buyer_price)*100).toFixed(2) : 0;
-  return { total_cogs, gross_margin, gross_margin_pct };
-}
+// Q3: calcCosting moved to src/lib/costing.js so it's unit-testable.
+// The function body is identical; only its location changed.
+import { calcCosting } from "@/lib/costing";
 
 function CostingRow({ sheet, onSave }) {
   const [open, setOpen] = useState(false);
