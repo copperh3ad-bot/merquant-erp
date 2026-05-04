@@ -41,8 +41,19 @@ function corsHeaders(req: Request) {
   };
 }
 
-const SUPABASE_URL      = Deno.env.get("SUPABASE_URL") ?? "";
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const SUPABASE_URL              = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+// Admin client — bypasses RLS. Used only for service-side bookkeeping
+// (rate-limit counters in ai_proxy_calls). NEVER expose this client to
+// user-influenced inputs without an allowlist on the table being touched.
+function getSupabaseAdmin() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
 
 function jsonResponse(req: Request, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
