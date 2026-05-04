@@ -129,6 +129,43 @@ Deno.serve(async (req) => {
       return jsonResponse(req, { error: { message: "messages array required" } }, 400);
     }
 
+    // ─── Rate limit (AI-RL) ──────────────────────────────────────────
+    // Per-user cap, enforced via the check_ai_proxy_rate_limit RPC
+    // which counts rows in public.ai_proxy_calls within a trailing
+    // window. Defaults: 60 calls / 5 min. The admin client bypasses
+    // RLS so we can write the audit row regardless of the caller's
+    // policies. If the admin client isn't configured (missing
+    // SERVICE_ROLE_KEY) we fail open with a warning — the auth gate
+    // above is already in place, and burning Anthropic spend on a
+    // misconfiguration is preferable to locking everyone out.
+    const admin = getSupabaseAdmin();
+    if (admin) {
+      const { data: rl, error: rlErr } = await admin.rpc("check_ai_proxy_rate_limit", {
+        p_user_id: userData.user.id,
+        p_window_seconds: 300,
+        p_max_calls: 60,
+      });
+      if (rlErr) {
+        console.error("ai-proxy: rate-limit check failed: " + rlErr.message);
+      } else if (rl && rl.allowed === false) {
+        return jsonResponse(
+          req,
+          {
+            error: {
+              type: "rate_limit",
+              message: "AI request limit reached. Try again in a few minutes.",
+              count: rl.count,
+              max: rl.max,
+              window_seconds: rl.window_seconds,
+            },
+          },
+          429,
+        );
+      }
+    } else {
+      console.warn("ai-proxy: SUPABASE_SERVICE_ROLE_KEY missing — rate limit DISABLED");
+    }
+
     const payload: Record<string, unknown> = { model, max_tokens: maxTokens, messages };
     if (system) payload.system = system;
     if (tools && Array.isArray(tools)) payload.tools = tools;
@@ -144,6 +181,23 @@ Deno.serve(async (req) => {
     });
 
     const data = await resp.json();
+
+    // Record the call in ai_proxy_calls (best-effort — never block the
+    // user-visible response on bookkeeping).
+    if (admin && resp.ok) {
+      const tokens =
+        (data?.usage?.input_tokens ?? 0) + (data?.usage?.output_tokens ?? 0);
+      admin
+        .from("ai_proxy_calls")
+        .insert({
+          user_id: userData.user.id,
+          model,
+          tokens_used: tokens || null,
+        })
+        .then(({ error }) => {
+          if (error) console.error("ai-proxy: failed to log call: " + error.message);
+        });
+    }
 
     if (!resp.ok) {
       console.error(
