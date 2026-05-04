@@ -56,6 +56,7 @@ const ALL_NAV = [
   { group: "Logistics",       name: "Capacity Planning",        icon: Factory,          page: "CapacityPlanning" },
   { group: "Logistics",       name: "WIP Tracker",              icon: Factory,          page: "WIPTracker" },
   { group: "Logistics",       name: "Production Dashboard",     icon: Factory,          page: "ProductionDashboard" },
+  { group: "Logistics",       name: "Shop Floor (AI)",          icon: Factory,          page: "ShopFloor" },
   { group: "Logistics",       name: "Packing List",             icon: Package,          page: "PackingList" },
   { group: "Logistics",       name: "Proforma Invoice",         icon: Receipt,          page: "ProformaInvoice" },
   { group: "Finance",         name: "Costing",                  icon: DollarSign,       page: "CostingSheet",           permission: "COSTING_EDIT" },
