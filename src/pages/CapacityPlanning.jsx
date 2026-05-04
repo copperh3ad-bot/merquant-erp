@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { db, production } from "@/api/supabaseClient";
+import { db, production, supabase } from "@/api/supabaseClient";
+import { callClaude } from "@/lib/aiProxy";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Factory, Plus, Pencil, Trash2, Calendar, AlertTriangle, Settings } from "lucide-react";
+import { Factory, Plus, Pencil, Trash2, Calendar, AlertTriangle, Settings, Sparkles, Loader2 } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import EmptyState from "@/components/shared/EmptyState";
 import { cn } from "@/lib/utils";
@@ -213,6 +214,10 @@ export default function CapacityPlanning() {
   const [showLines, setShowLines] = useState(false);
   const [filterLine, setFilterLine] = useState("__all");
   const [filterStatus, setFilterStatus] = useState("__all");
+  // F2 — AI allocate state
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState(false);
+  const [aiAllocation, setAiAllocation] = useState(null); // array of {line, date, po_number, style, planned_pieces, operators_required}
 
   const { data: plans = [], isLoading } = useQuery({ queryKey: ["capacityPlans"], queryFn: () => production.capacity.list() });
   const { data: lines = [] }  = useQuery({ queryKey: ["prodLines"],  queryFn: () => production.lines.list() });
@@ -257,12 +262,56 @@ export default function CapacityPlanning() {
     qc.invalidateQueries({ queryKey: ["capacityPlans"] });
   };
 
+  // F2 — AI allocate. Calls Claude with line/operator/machine inputs +
+  // pending POs, expects a JSON array of per-day per-line allocations.
+  // Persists to capacity_plans.ai_allocation as a single aggregate row;
+  // also renders inline as an editable table. Falls back to a blank
+  // editable table on AI failure (silent — manual fill remains usable).
+  const runAiAllocate = async () => {
+    setAiBusy(true); setAiError(false); setAiAllocation(null);
+    try {
+      const pendingPOs = pos.filter(p => p.status !== "Completed" && p.status !== "Cancelled")
+        .slice(0, 50)
+        .map(p => ({ po_number: p.po_number, customer: p.customer_name, qty: p.total_quantity, due: p.ex_factory_date || p.delivery_date }));
+      const lineInputs = lines.map(l => ({ name: l.name, daily_capacity: l.daily_capacity, line_type: l.line_type }));
+      const data = await callClaude({
+        system: "You are a garment factory capacity planner. Given lines, operators, machines, shift hours, and a list of POs with quantities and due dates, generate an optimal daily allocation plan. Output as JSON array only, no other text: [{line, date, po_number, style, planned_pieces, operators_required}]. Prioritise by due date. Flag any POs at risk of missing shipment date.",
+        messages: [{ role: "user", content: JSON.stringify({ lines: lineInputs, pendingPOs }) }],
+        max_tokens: 2000,
+      });
+      const text = data?.content?.[0]?.text || data?.text || "";
+      // Strip code fences if present
+      const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      if (!Array.isArray(parsed)) throw new Error("AI did not return an array");
+      setAiAllocation(parsed);
+      // Persist as a single aggregate row tagged with today's plan_date.
+      const today = new Date().toISOString().slice(0, 10);
+      await supabase.from("capacity_plans").insert({
+        plan_date: today,
+        line_name: "AI-aggregate",
+        ai_allocation: parsed,
+        status: "ai_generated",
+      });
+      qc.invalidateQueries({ queryKey: ["capacityPlans"] });
+    } catch {
+      setAiError(true);
+      setAiAllocation([]); // empty editable table fallback
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3"><Factory className="h-5 w-5 text-primary"/><h1 className="text-base font-bold">Capacity Planning</h1></div>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={() => setShowLines(true)}><Settings className="h-4 w-4 mr-1.5"/>Manage Lines</Button>
+          <Button size="sm" variant="outline" onClick={runAiAllocate} disabled={aiBusy}>
+            {aiBusy ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin"/> : <Sparkles className="h-4 w-4 mr-1.5"/>}
+            AI Allocate
+          </Button>
           <Button size="sm" onClick={() => { setEditing(null); setShowForm(true); }}><Plus className="h-4 w-4 mr-1.5"/>New Plan</Button>
         </div>
       </div>
@@ -294,6 +343,51 @@ export default function CapacityPlanning() {
           </Card>
         ))}
       </div>
+
+      {/* F2 — AI allocation panel (renders only after first AI call) */}
+      {(aiAllocation !== null || aiError) && (
+        <div className="rounded border border-gray-300 shadow-sm overflow-hidden">
+          <div className="px-3 py-2 text-xs font-bold text-white flex items-center justify-between" style={{ backgroundColor: "#1F3864" }}>
+            <span className="flex items-center gap-2"><Sparkles className="h-3.5 w-3.5" /> AI-Generated Allocation</span>
+            <span className="font-normal opacity-80">{aiAllocation?.length || 0} row{(aiAllocation?.length || 0) !== 1 ? "s" : ""}</span>
+          </div>
+          {aiError && (
+            <div className="px-3 py-2 bg-amber-50 text-amber-800 text-xs border-b border-amber-200">
+              AI allocation unavailable — fill the table manually below.
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr style={{ backgroundColor: "#EBF0FA" }}>
+                  <th className="border border-gray-300 px-2 py-1.5 text-left">Line</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-left">Date</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-left">PO</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-left">Style</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-right">Planned Pcs</th>
+                  <th className="border border-gray-300 px-2 py-1.5 text-right">Operators</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(aiAllocation || []).length === 0 ? (
+                  <tr><td colSpan={6} className="border border-gray-300 px-2 py-3 text-center text-muted-foreground italic">
+                    {aiError ? "Add allocation rows manually." : "No allocations returned."}
+                  </td></tr>
+                ) : aiAllocation.map((row, i) => (
+                  <tr key={i} style={{ backgroundColor: i % 2 === 0 ? "#fff" : "#F9FAFB" }}>
+                    <td className="border border-gray-300 px-2 py-1.5">{row.line || "—"}</td>
+                    <td className="border border-gray-300 px-2 py-1.5">{row.date || "—"}</td>
+                    <td className="border border-gray-300 px-2 py-1.5 font-medium">{row.po_number || "—"}</td>
+                    <td className="border border-gray-300 px-2 py-1.5">{row.style || "—"}</td>
+                    <td className="border border-gray-300 px-2 py-1.5 text-right font-bold">{(Number(row.planned_pieces) || 0).toLocaleString()}</td>
+                    <td className="border border-gray-300 px-2 py-1.5 text-right">{Number(row.operators_required) || 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex gap-2 flex-wrap">
