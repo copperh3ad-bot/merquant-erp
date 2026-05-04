@@ -9,8 +9,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import {
   TrendingUp, Star, AlertTriangle, CheckCircle2,
-  Truck, Shield, Package, Pencil, RefreshCw, Search
+  Truck, Shield, Package, Pencil, RefreshCw, Search, Sparkles, Loader2
 } from "lucide-react";
+import { callClaude } from "@/lib/aiProxy";
 import { format, differenceInDays } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import StatCard from "@/components/shared/StatCard";
@@ -18,6 +19,30 @@ import { cn } from "@/lib/utils";
 import { db, supabase } from "@/api/supabaseClient";
 
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM yyyy") : "—"; } catch { return "—"; } };
+
+// F7 — AI Score badge. Colour-coded by risk_category from the AI:
+// Low (green) <40, Medium (amber) 40-70, High (red) >70.
+// Brief specifies risk thresholds inverse to score (high score = low risk).
+// Renders "—" when no AI score has been generated yet.
+function AIScoreBadge({ ai }) {
+  if (!ai || typeof ai !== "object") {
+    return <span className="text-[10px] text-muted-foreground" title="No AI score yet">—</span>;
+  }
+  const score = Number(ai.score) || 0;
+  const risk = String(ai.risk_category || "").toLowerCase();
+  const cls = risk === "high" ? "bg-red-100 text-red-800 border-red-200" :
+              risk === "medium" ? "bg-amber-100 text-amber-800 border-amber-200" :
+              "bg-emerald-100 text-emerald-800 border-emerald-200";
+  const recs = Array.isArray(ai.recommendations) ? ai.recommendations.join("\n• ") : "";
+  return (
+    <span
+      className={`text-[10px] font-bold px-2 py-1 rounded border ${cls}`}
+      title={recs ? `AI recommendations:\n• ${recs}` : `AI score: ${score} (${ai.risk_category || "—"})`}
+    >
+      AI {score}/100
+    </span>
+  );
+}
 
 function ScoreBar({ score, max=100 }) {
   const pct = Math.min(100, (score/max)*100);
@@ -136,6 +161,59 @@ export default function SupplierPerformance() {
 
   const handleUpdate = async(data)=>{ await supabase.from("suppliers").update(data).eq("id",editing.id); qc.invalidateQueries({queryKey:["suppliers"]}); setEditing(null); };
 
+  // F7 — AI Score per supplier. Calls Claude with the live performance
+  // metrics; persists the result to supplier_performance.ai_score
+  // (mig 35 added the column). Falls back silently — the badge shows
+  // "—" when AI is unavailable.
+  const [aiBusyId, setAiBusyId] = useState(null);
+  const { data: perfRows = [] } = useQuery({
+    queryKey: ["supplierPerformance"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("supplier_performance").select("supplier_id, ai_score").limit(1000);
+      if (error) return [];
+      return data || [];
+    },
+  });
+  const aiScoreFor = (supplierId) =>
+    perfRows.find(r => r.supplier_id === supplierId)?.ai_score || null;
+
+  const runAiScore = async (s) => {
+    setAiBusyId(s.id);
+    try {
+      const m = s.metrics;
+      const data = await callClaude({
+        system: "You are a supplier evaluation specialist. Given a supplier's performance history (on-time delivery rate, quality rejection rate, price variance, communication score), generate a score out of 100, a risk category (Low/Medium/High), and 3 specific improvement recommendations. Output JSON only: {score, risk_category, recommendations[]}",
+        messages: [{
+          role: "user",
+          content: JSON.stringify({
+            name: s.name,
+            on_time_delivery_pct: m.onTimePct,
+            qc_pass_pct: m.qcPct,
+            open_complaints: m.openComplaints,
+            critical_complaints: m.criticalComplaints,
+            total_orders: m.totalOrders,
+            internal_score: m.score,
+            audit_status: s.audit_status,
+            audit_score: s.audit_score,
+          }),
+        }],
+        max_tokens: 600,
+      });
+      const text = data?.content?.[0]?.text || data?.text || "";
+      const parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim());
+      // Upsert the supplier_performance row
+      await supabase.from("supplier_performance").upsert(
+        { supplier_id: s.id, ai_score: parsed },
+        { onConflict: "supplier_id" }
+      );
+      qc.invalidateQueries({ queryKey: ["supplierPerformance"] });
+    } catch {
+      // Silent — badge shows "—" when no ai_score is stored.
+    } finally {
+      setAiBusyId(null);
+    }
+  };
+
   if (isLoading) return <div className="space-y-3">{[1,2,3].map(i=><Skeleton key={i} className="h-28 rounded-xl"/>)}</div>;
 
   return (
@@ -203,7 +281,21 @@ export default function SupplierPerformance() {
                       {s.audit_date&&<span>Last audit: {fmt(s.audit_date)}{auditExpired?" ⚠":""}</span>}
                     </div>
                   </div>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={()=>setEditing(s)}><Pencil className="h-3.5 w-3.5 text-muted-foreground"/></Button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <AIScoreBadge ai={aiScoreFor(s.id)} />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-[11px] gap-1"
+                      onClick={() => runAiScore(s)}
+                      disabled={aiBusyId === s.id}
+                      title="Generate AI evaluation score"
+                    >
+                      {aiBusyId === s.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                      AI Score
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={()=>setEditing(s)}><Pencil className="h-3.5 w-3.5 text-muted-foreground"/></Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
