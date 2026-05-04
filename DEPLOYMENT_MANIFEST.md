@@ -1,8 +1,16 @@
 # MerQuant ERP — Deployment Manifest
-**Generated:** 2026-04-17  
-**Live URL:** https://merquant2.netlify.app  
-**GitHub:** https://github.com/copperh3ad-bot/Merquant-AI  
-**Latest commit:** 248d6ec
+**Generated:** 2026-04-17 · last scrubbed 2026-05-04 (C1)
+**Live URL:** see Netlify dashboard for the project's primary domain
+**GitHub:** internal — see the repository's actual `origin` remote
+**Latest commit:** see `git log -1`
+
+> **Security note (C1).** Earlier revisions of this file inlined the
+> Supabase project ID, Supabase URL, Netlify site ID, GitHub repo path,
+> and live-domain URLs. Those were removed when this document was
+> committed to the public-by-default repo. Concrete values now live
+> only in `.env` (gitignored), the Netlify site settings, and the
+> Supabase dashboard. Refer to those at deploy time — do not reinline
+> them here.
 
 ---
 
@@ -19,13 +27,13 @@
 
 ## Credentials & IDs
 
-| Resource | Value |
+| Resource | Where to find it |
 |---|---|
-| Supabase Project ID | jcbxmpgjirxqszodotmx |
-| Supabase URL | https://jcbxmpgjirxqszodotmx.supabase.co |
-| Netlify Site ID | 5f7b7802-0082-4db3-ac07-242aa888187d |
-| Netlify Site | merquant2.netlify.app |
-| GitHub Repo | copperh3ad-bot/Merquant-AI |
+| Supabase Project ID | `.env` (`VITE_SUPABASE_URL` host segment) / Supabase Dashboard → Project Settings |
+| Supabase URL | `VITE_SUPABASE_URL` in `.env` (template at `.env.example`) |
+| Netlify Site ID | Netlify Dashboard → Site Configuration → General |
+| Netlify Site | Netlify Dashboard → Domain management |
+| GitHub Repo | `git remote get-url origin` |
 
 ## Supabase Secrets Required
 
@@ -218,7 +226,7 @@ Quick list (set in Supabase Dashboard → Edge Functions → Secrets):
 
 ## AI Assistant (Edge Function v31)
 
-- Endpoint: `https://jcbxmpgjirxqszodotmx.supabase.co/functions/v1/ai-proxy`
+- Endpoint: `${VITE_SUPABASE_URL}/functions/v1/ai-proxy` (resolved at runtime from env)
 - Model: `claude-sonnet-4-5` (normalises any claude-*-4-* variant)
 - Auth: `verify_jwt: true` — JWT verified at platform level, plus an in-handler `supabase.auth.getUser()` check. Unauthenticated callers get HTTP 401 before any Anthropic API call is made (2026-05-01 hardening).
 - Handles: SQL queries (exec_sql RPC), React component generation, data answers
