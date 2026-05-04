@@ -2,7 +2,51 @@
   publish = "dist"
   command = "npm run build"
 
+# SPA routing — every non-asset request falls through to index.html so
+# react-router can pick up deep links.
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
+# ── Security headers (Phase-3 H2) ───────────────────────────────────────
+# Applied to every response. `Cache-Control` is intentionally NOT set
+# globally because Vite emits hashed asset filenames that are safe to
+# cache forever; Netlify's default headers already do the right thing.
+#
+# CSP notes:
+# - script-src 'self' only — no third-party JS at all.
+# - style-src allows 'unsafe-inline' because Tailwind/shadcn inject
+#   utility-class styles via inline <style>. There is no first-party
+#   inline JS — script-src does NOT include 'unsafe-inline'.
+# - connect-src lists every host the app talks to from the browser:
+#   the Supabase REST/Edge endpoint (https), the Realtime endpoint
+#   (wss), and Google Calendar OAuth (used by GCalSync). Anthropic is
+#   NEVER reached directly from the browser — calls go through the
+#   ai-proxy edge function on the Supabase host — so api.anthropic.com
+#   is deliberately omitted.
+# - frame-ancestors 'none' replaces X-Frame-Options for modern browsers.
+# - report-uri omitted — wire one up later if needed.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Strict-Transport-Security  = "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options     = "nosniff"
+    Referrer-Policy            = "strict-origin-when-cross-origin"
+    X-Frame-Options            = "DENY"
+    Permissions-Policy         = "camera=(), geolocation=(), payment=(), microphone=(self)"
+    Content-Security-Policy    = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://jcbxmpgjirxqszodotmx.supabase.co wss://jcbxmpgjirxqszodotmx.supabase.co https://accounts.google.com https://www.googleapis.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; manifest-src 'self'; worker-src 'self'"
+
+# Service worker must NOT be cached — otherwise users get stuck on a
+# stale SW that never re-fetches the new bundle.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+# manifest.json — short cache so PWA install prompt sees fresh metadata
+# without going stale forever.
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Cache-Control = "public, max-age=300"
