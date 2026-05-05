@@ -1,6 +1,7 @@
 import React from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { logError } from "@/lib/logger";
 
 export default class PageErrorBoundary extends React.Component {
   constructor(props) {
@@ -13,7 +14,12 @@ export default class PageErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
+    // S6 — also persist to error_log via the structured logger. logError
+    // is fire-and-forget; failures inside it are swallowed so a logger
+    // crash can never block the UI from rendering its fallback.
+    // eslint-disable-next-line no-console
     console.error("[MerQuant] Page crash:", error, info?.componentStack);
+    logError(error, { componentStack: info?.componentStack });
   }
 
   render() {

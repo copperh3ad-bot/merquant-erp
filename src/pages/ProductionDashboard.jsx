@@ -278,7 +278,7 @@ export default function ProductionDashboard() {
               <tbody>
                 {output.slice(0, 200).map((o, i) => (
                   <tr key={o.id} className={cn("border-b", i % 2 === 0 && "bg-[#EBF0FA]/50")}>
-                    <td className="px-3 py-1.5">{format(new Date(o.output_date), "dd MMM")}</td>
+                    <td className="px-3 py-1.5">{o.output_date ? format(new Date(o.output_date), "dd MMM") : "—"}</td>
                     <td className="px-3 py-1.5 font-medium">{o.po_number || "—"}</td>
                     <td className="px-3 py-1.5">{o.article_code || "—"}</td>
                     <td className="px-3 py-1.5">{o.line_name || "—"}</td>
