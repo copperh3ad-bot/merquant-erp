@@ -7,9 +7,9 @@ A production-grade AI-powered ERP system for textile merchandising operations.
 
 ## Live System
 
-- **Production:** https://merquant.netlify.app *(deploy to activate)*
-- **Supabase Project:** `jcbxmpgjirxqszodotmx` (ap-northeast-1, Tokyo)
-- **Stack:** React 18 + Vite + Tailwind CSS + shadcn/ui + Supabase + Anthropic Claude
+- **Production:** see Netlify dashboard for the project's primary domain
+- **Supabase Project:** see your `.env` (`VITE_SUPABASE_URL`) and the Supabase dashboard for the project ref / region
+- **Stack:** React 19 + Vite + Tailwind CSS v3 + shadcn/ui + Supabase + Anthropic Claude
 
 ---
 
@@ -19,29 +19,32 @@ A production-grade AI-powered ERP system for textile merchandising operations.
 |--------|---------|
 | **Orders** | PO management · 16-stage workflow · Batch splitting · Email crawler |
 | **Tracking** | T&A Calendar · Lab Dips · Samples · QC Inspections · Job Cards · Tech Packs |
-| **Materials** | Fabric Working · Yarn Planning · Trims · Accessories · Fabric Orders |
+| **Materials** | Fabric Working · Yarn Planning · Trims · Accessories · Fabric Orders · Fabric Inventory (rolls + AI shade grouping) |
+| **Production** | Capacity Planning (with AI line allocation) · Shop Floor (real-time stage tracking + AI bottleneck) · Job Work (subcontractor orders + jspdf gate pass) |
 | **Logistics** | Shipments · Commercial Invoices · Shipping Docs · Packing Lists · Proforma |
 | **Finance** | Costing sheets · Margin analysis · Payments & LC · Compliance |
-| **CRM** | RFQ management · Quotations · Complaints · Buyer Contacts · Supplier Performance |
-| **AI** | Tech pack extraction · Email classification · Natural language queries · AI Programmer |
+| **CRM** | RFQ management · Quotations · Complaints · Buyer Contacts · Supplier Performance (with AI risk scoring) |
+| **Buyer** | Cost-blind Buyer Portal — POs / shipments / samples scoped via RLS, customer-service AI chat |
+| **AI** | Tech pack extraction · Email classification · Natural language queries · AI Programmer · AIVoiceEntry mic |
 
 ---
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/copperh3ad-bot/MerQuant.git
-cd MerQuant
+git clone <repo-url>
+cd merquant-erp
 npm install
-cp .env.example .env   # add your Supabase credentials
+cp .env.example .env   # fill in VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
 npm run dev            # runs at http://localhost:5173
+git config core.hooksPath .githooks   # opt into the secret-scan pre-commit hook (one-time)
 ```
 
 ## Environment Variables
 
 ```env
-VITE_SUPABASE_URL=https://jcbxmpgjirxqszodotmx.supabase.co
-VITE_SUPABASE_ANON_KEY=your_anon_key
+VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=<your-anon-key>
 ```
 
 ## Deploy

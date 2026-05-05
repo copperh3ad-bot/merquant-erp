@@ -33,16 +33,40 @@ with both an UP and a DOWN block. To roll back the database:
 
 The repo also keeps the original `supabase/migrations/` timestamp-based
 files. Those are the "main line" migrations that the Supabase CLI auto-
-applies. The new `migrations/30-40` files in this pass are **manual-apply
-only** — they live alongside the timestamp set rather than replacing it.
+applies. The new `migrations/up/0016-0026` files in this pass are
+**manual-apply only** — they live alongside the timestamp set rather
+than replacing it.
 
 ---
 
-## Pass summary
+## Pass summary (final, 2026-05-04)
 
-To be filled in at the end of the pass.
+- [x] Phase 1 (S1-S8) — system shortcomings: domain-module re-export
+      shells; React Query + optimistic updates on PO approval; Realtime
+      subscriptions on PODetail / Dashboard; null-safety + structured
+      logger + `error_log` table; postgres → devDeps. (S7 xlsx → exceljs
+      deferred — CVE risk already mitigated via pinning + SRI per the
+      original audit Finding 14.)
+- [x] Phase 2 (F1-F8) — AI-native feature parity:
+      F1 ShopFloor, F2 CapacityPlanning AI allocate, F3 FabricInventory
+      with shade grouping + shortage alerts, F4 JobWork with AI cost
+      estimate + jspdf gate-pass, F5 BuyerPortal with cost-blind chat
+      and RLS-scoped reads, F6 PWA + AIVoiceEntry (5-page responsive
+      overrides deferred — pages already use Tailwind responsive
+      classes), F7 SupplierPerformance ai_score, F8 NLM schema
+      context update.
+- [x] Phase 3 — hardening:
+      C1 (scrub manifest), C2 (ai-proxy verify_jwt + admin client),
+      C3 (exec_sql Owner/Manager-only, mig 0023),
+      C4 (`bootstrap_first_owner`, mig 0024),
+      H2 (netlify CSP + security headers),
+      M2 (email confirmation re-enabled, mig 0025),
+      AI-RL (ai-proxy per-user rate limit, mig 0026),
+      M3 (full CI workflow), L3 (Dependabot), M4 (xlsx purge),
+      D2 (pre-commit secret scan), Q3 (costing/BOM lib + 23 tests).
+- [x] Final build + tests + lint pass: 465/465 tests, build clean.
 
-- [ ] Phase 1 (S1-S8) — system shortcomings
-- [ ] Phase 2 (F1-F8) — AI-native feature parity
-- [ ] Phase 3 (C1-C4, H2, AI-RL, M2-M4, L3, D2, Q3) — hardening
-- [ ] Final build + tests + lint pass
+If something needs to be undone, the per-commit messages on the
+`feat/v2-ai-native-and-hardening` branch document each change in
+isolation — `git log --oneline` then `git revert <sha>` is the
+fine-grained path.
