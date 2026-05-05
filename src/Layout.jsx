@@ -46,6 +46,8 @@ const ALL_NAV = [
   // category=Trim). The standalone src/pages/Trims.jsx + mfg.trims
   // table are deprecated. This entry was: { name: "Trims", page: "Trims", permission: "TRIM_EDIT" }.
   { group: "Materials",       name: "Accessories & Packaging",  icon: Package,          page: "PackagingPlanning",      permission: "ACCESSORY_EDIT" },
+  { group: "Materials",       name: "Fabric Inventory (AI)",    icon: Layers,           page: "FabricInventory",        permission: "FABRIC_SPEC_EDIT" },
+  { group: "Materials",       name: "Job Work (AI)",            icon: Briefcase,        page: "JobWork",                permission: "ACCESSORY_EDIT" },
   { group: "Materials",       name: "Accessory POs",            icon: FileBox,          page: "AccessoryPurchaseOrders",permission: "ACCESSORY_EDIT" },
   // ── Logistics & Finance ────────────────────────────────────────
   { group: "Logistics",       name: "Suppliers",                icon: Building2,        page: "Suppliers" },
@@ -56,6 +58,7 @@ const ALL_NAV = [
   { group: "Logistics",       name: "Capacity Planning",        icon: Factory,          page: "CapacityPlanning" },
   { group: "Logistics",       name: "WIP Tracker",              icon: Factory,          page: "WIPTracker" },
   { group: "Logistics",       name: "Production Dashboard",     icon: Factory,          page: "ProductionDashboard" },
+  { group: "Logistics",       name: "Shop Floor (AI)",          icon: Factory,          page: "ShopFloor" },
   { group: "Logistics",       name: "Packing List",             icon: Package,          page: "PackingList" },
   { group: "Logistics",       name: "Proforma Invoice",         icon: Receipt,          page: "ProformaInvoice" },
   { group: "Finance",         name: "Costing",                  icon: DollarSign,       page: "CostingSheet",           permission: "COSTING_EDIT" },
@@ -64,6 +67,8 @@ const ALL_NAV = [
   { group: "Finance",         name: "Compliance",               icon: ShieldAlert,      page: "Compliance" },
   { group: "Finance",         name: "Reports",                  icon: BarChart2,        page: "Reports",                permission: "REPORTS_VIEW" },
   // ── CRM ──────────────────────────────────────────────────────────────────
+  // Buyer Portal — visible only when role = Buyer (canSeePage gates this).
+  { group: "CRM",             name: "Buyer Portal",             icon: Briefcase,        page: "BuyerPortal" },
   { group: "CRM",             name: "RFQ & Quotations",         icon: Briefcase,        page: "CRM" },
   { group: "CRM",             name: "Buyer Contacts",           icon: Users,            page: "BuyerContacts" },
   { group: "CRM",             name: "Supplier Performance",     icon: TrendingUp,       page: "SupplierPerformance" },

@@ -45,6 +45,29 @@ const SYSTEM_PROMPT = `You are an expert full-stack developer and AI builder age
 - commercial_invoices: id, po_id, po_number, invoice_number, invoice_date, total_amount, currency, status, notes
 - packing_lists: id, po_id, po_number, status, notes
 
+### AI-Native Production (v2)
+- shop_floor_entries: id, po_id, entry_date, stage (Cutting/Stitching/Finishing/Packing/QC), pieces_in, pieces_out, operators, defects, machine_count, ai_summary (jsonb {bottleneck, yield_pct, recommendations[]}), notes, created_by
+- capacity_plans (extended): now also has plan_date, line_name, total_operators, available_machines, shift_hours, target_pieces, ai_allocation (jsonb array of {po_id, line_name, allocated_pieces, days_required, reasoning}), status (manual/ai_generated/approved). Original per-PO scheduling columns (po_id, planned_start_date, planned_end_date, etc.) retained — both shapes coexist.
+- job_work_orders: id, jw_number, po_id, vendor_name, vendor_contact, work_type (Embroidery/Printing/Washing/Stitching/Cutting), pieces_sent, pieces_received, rate_per_piece, total_cost, sent_date, received_date, status (Sent/In Progress/Received/Closed), gate_pass_pdf_url, ai_cost_estimate (jsonb {estimated_cost, comparable_orders[], confidence}), notes
+
+### AI-Native Materials (v2)
+- fabric_rolls: id, roll_number, fabric_type, gsm, width_cm, color, batch_number, supplier, received_meters, consumed_meters, available_meters (GENERATED ALWAYS AS received_meters - consumed_meters — NEVER include in INSERT/UPDATE), shade_group, location, received_date, status. CRITICAL: writes to available_meters will be rejected by Postgres.
+- fabric_roll_consumption: id, roll_id, po_id, consumed_meters, consumed_date, notes — every consumption decrements roll.consumed_meters via trigger.
+
+### AI Scoring & Audit (v2)
+- supplier_performance.ai_score (jsonb): { score (0-100), risk_category (Low/Medium/High), recommendations[], reasoning, scored_at } — added column, original metric columns retained.
+- error_log: id, message, stack, context, url, created_at, created_by — Owner-only SELECT, all authenticated INSERT.
+- ai_proxy_calls: id, user_id, called_at, tokens_used — used for rate limiting; Owner-only SELECT.
+
+## Role Scoping & Buyer Isolation (CRITICAL)
+The current user's role is one of: Owner, Manager, Merchandiser, QC Inspector, Supplier, Buyer, Viewer.
+
+If the requesting user has role "Buyer":
+- ALWAYS filter purchase_orders, shipments, samples, lab_dips, qc_inspections by the user's own customer_name(s). The link is buyer_contacts.buyer_user_id = auth.uid() — match purchase_orders.customer_name (lower) to buyer_contacts.customer_name (lower) for that user. RLS enforces this at the DB layer, but never write SQL that attempts to bypass it.
+- NEVER reveal cost, margin, or pricing fields. Specifically: NEVER include costing_sheets, payments, supplier_performance, fabric_orders.unit_price, po_items.unit_price/total_price/expected_price, ai_proxy_calls, or error_log in any response.
+- NEVER reveal data from other buyers — even aggregated counts that could leak presence.
+- If asked about cost, margin, suppliers, other buyers, or system internals — refuse politely with type "answer" explaining this is not available to buyer accounts.
+
 ## Key Formulas
 - Yarn KG: total_meters × GSM × width_cm / 39.37 / 1000
 - Fabric total_required: consumption_per_unit × order_qty × (1 + wastage/100)
@@ -121,6 +144,12 @@ const QUICK_PROMPTS = [
   { label: "Trim cost report",        icon: Terminal,  prompt: "Show trim_items with quantity_required > 0, grouped by po_number, summing quantity_required per category" },
   { label: "Article tracker page",    icon: Code2,     prompt: "Generate a React page showing all articles for a selected PO with components, fabric totals, and yarn KG. Use mfg.articles.listByPO() and formula: total_meters × GSM × width_cm / 39.37 / 1000" },
   { label: "Add delivery_date index", icon: Terminal,  prompt: "Add an index on po_items(delivery_date) and purchase_orders(ex_factory_date) for faster date queries" },
+  { label: "Shop floor bottleneck",   icon: Zap,       prompt: "From shop_floor_entries in the last 7 days, show stage, SUM(pieces_in), SUM(pieces_out), and yield % (pieces_out/pieces_in). Sort by yield ascending so the worst stage shows first." },
+  { label: "Low fabric rolls",        icon: Search,    prompt: "Show fabric_rolls where available_meters < 100, grouped by fabric_type. Include roll_number, color, supplier, available_meters, location." },
+  { label: "Open job work",           icon: Database,  prompt: "Show job_work_orders where status != 'Closed', including jw_number, vendor_name, work_type, pieces_sent, pieces_received, sent_date, total_cost. Sort by sent_date descending." },
+  { label: "Supplier risk view",      icon: Zap,       prompt: "Show suppliers from supplier_performance where ai_score->>'risk_category' = 'High', including supplier_name, on_time_pct, quality_score, ai_score->>'reasoning'." },
+  { label: "Capacity utilisation",    icon: Database,  prompt: "From capacity_plans where plan_date >= current_date - interval '30 days' and status = 'approved', show line_name, SUM(target_pieces), AVG(shift_hours)." },
+  { label: "Recent errors (Owner)",   icon: Terminal,  prompt: "Show last 50 entries from error_log, including message, url, created_at. Owner-only — confirm role first." },
 ];
 
 function TypeBadge({ type }) {
