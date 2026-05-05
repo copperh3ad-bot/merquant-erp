@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   getPromptForKind,
+  getLayoutDiscoveryPromptForMasterData,
+  LAYOUT_DISCOVERY_VERSION,
   PROMPT_VERSION_BY_KIND,
   MODEL_BY_KIND,
   MODEL_CHAIN_BY_KIND,
@@ -79,5 +81,38 @@ describe('getPromptForKind (rejected inputs)', () => {
   it('does not throw on the two known kinds', () => {
     expect(() => getPromptForKind('tech_pack')).not.toThrow();
     expect(() => getPromptForKind('master_data')).not.toThrow();
+  });
+});
+
+describe('getLayoutDiscoveryPromptForMasterData (Phase 2 step 1)', () => {
+  it('returns a tool named discover_master_data_layout with the expected schema shape', () => {
+    const { tool, systemPrompt, version, models } = getLayoutDiscoveryPromptForMasterData();
+    expect(tool.name).toBe('discover_master_data_layout');
+    expect(tool.input_schema).toBeDefined();
+    expect(tool.input_schema.type).toBe('object');
+    expect(tool.input_schema.required).toEqual(expect.arrayContaining(['sheets', '_confidence']));
+
+    const sheetItem = tool.input_schema.properties.sheets.items;
+    expect(sheetItem.required).toEqual(expect.arrayContaining(['name', 'purpose', 'column_mapping']));
+    expect(sheetItem.properties.purpose.enum).toEqual(expect.arrayContaining([
+      'articles', 'fabric_consumption', 'accessory_consumption', 'carton_master',
+      'price_list', 'suppliers', 'seasons', 'production_lines', 'ignore',
+    ]));
+
+    expect(typeof systemPrompt).toBe('string');
+    expect(systemPrompt.length).toBeGreaterThan(200);
+    expect(version).toBe(LAYOUT_DISCOVERY_VERSION);
+    expect(version).toMatch(/two_step/);
+    expect(Array.isArray(models)).toBe(true);
+    expect(models[0]).toMatch(/haiku/i);
+  });
+
+  it('LAYOUT_DISCOVERY_VERSION is distinct from the legacy single-shot version', () => {
+    expect(LAYOUT_DISCOVERY_VERSION).not.toBe(PROMPT_VERSION_BY_KIND.master_data);
+  });
+
+  it('legacy getPromptForKind("master_data") still returns v5 (legacy single-shot)', () => {
+    const { version } = getPromptForKind('master_data');
+    expect(version).toBe('master_data.v5');
   });
 });

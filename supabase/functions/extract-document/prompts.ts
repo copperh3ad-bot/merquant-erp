@@ -28,6 +28,13 @@ export const PROMPT_VERSION_BY_KIND: Record<ExtractionKind, string> = {
   master_data: "master_data.v5",  // v5 (2026-05-03): added structured yarn_count + yarn_type to fabric_consumption (parity with tech_pack.v3)
 };
 
+// Phase 2 (2026-05-01): two-step master_data extraction. Step 1 asks the model
+// to identify the layout (sheet purpose + column->field mapping) WITHOUT
+// extracting values; step 2 applies that mapping deterministically in JS.
+// When index.ts uses the two-step path successfully, the persisted
+// prompt_version is LAYOUT_DISCOVERY_VERSION rather than the legacy v3.
+export const LAYOUT_DISCOVERY_VERSION = "master_data.v4_two_step";
+
 // Phase E2: every kind starts on Haiku and escalates to Sonnet on low
 // confidence (see CONFIDENCE_FALLBACK_THRESHOLD in index.ts). MODEL_BY_KIND
 // is kept as the *primary* model only; the fallback chain is in MODEL_CHAIN_BY_KIND.
@@ -496,6 +503,138 @@ const MASTER_DATA_TOOL = {
     required: ["_confidence"],
   },
 } as const;
+
+// ----- Phase 2: layout discovery (step 1 of master_data two-step) -----
+
+const LAYOUT_DISCOVERY_SYSTEM_PROMPT = `
+${COMMON_RULES}
+
+You are analysing a customer-supplied master-data XLSX. You are NOT extracting
+values yet — you are identifying the LAYOUT of each worksheet so a deterministic
+post-processor can extract values cleanly in a second step.
+
+The user message contains each worksheet rendered as a CSV block. The first
+non-empty row of each sheet is usually the column header.
+
+For every worksheet, return one entry in "sheets" with:
+- name: the EXACT sheet name as given in the input
+- purpose: which standardized output section the sheet feeds. One of:
+    "articles", "fabric_consumption", "accessory_consumption", "carton_master",
+    "price_list", "suppliers", "seasons", "production_lines", "ignore"
+  Use "ignore" for cover pages, intro / notes / instruction sheets, and
+  header-only or empty sheets.
+- column_mapping: an object mapping each source column header (verbatim, exactly
+  as it appears in the header row) to a target field name. Use the literal
+  string "skip" for columns that don't map (notes, internal IDs, blank columns).
+  For purpose="ignore", an empty object {} is fine.
+- confidence_per_column: per source-header confidence in your chosen mapping
+  (0.0 to 1.0). Lower this aggressively for ambiguous columns.
+
+Allowed target field names per purpose (any other name will be discarded):
+- articles:              item_code, brand, product_type, size
+- fabric_consumption:    item_code, component_type, fabric_type, gsm, width_cm,
+                         consumption_per_unit, wastage_percent, color
+- accessory_consumption: item_code, category, item_name, material, size_spec,
+                         placement, consumption_per_unit
+- carton_master:         item_code, units_per_carton, carton_length_cm,
+                         carton_width_cm, carton_height_cm
+- price_list:            item_code, price_usd, effective_from
+- suppliers:             name, contact_email, contact_phone
+- seasons:               name, start_date, end_date
+- production_lines:      name, line_type, daily_capacity
+
+═══════════════════════════════════════════════════════════════════════
+COLUMN MAPPING RULES
+═══════════════════════════════════════════════════════════════════════
+
+1. The column HEADER is your primary signal. If a header literally says
+   "Part" or "Component" or "component_type", it maps to component_type.
+   Don't second-guess it based on the values below.
+
+2. Use header SEMANTICS for non-obvious column names. Examples:
+     "Material", "Fabric", "Composition"   -> fabric_type
+     "Width", "Width (cm)"                 -> width_cm
+     "Cut/Unit", "Consumption", "Usage"    -> consumption_per_unit
+     "GSM", "Weight"                       -> gsm
+     "Wastage", "Waste %"                  -> wastage_percent
+     "SKU", "Item code", "Article", "Code" -> item_code
+
+3. ABSOLUTELY FORBIDDEN: never map any header to component_type if its values
+   look like fabric descriptions (e.g. "85% Modal Jersey Knit", "300 GSM",
+   "Sateen", "Cotton 100%"). Those values belong in fabric_type. Valid
+   component_type values are short part names like "Flat Sheet", "Fitted
+   Sheet", "Pillow Case", "Sham", "Fabric Bag", "Top Fabric", "Bottom",
+   "Skirt", "Binding", "Filling", "Front", "Back".
+
+4. Each source header maps to AT MOST ONE target field. Don't assign the
+   same target field to two source headers in the same sheet — pick the
+   better one and "skip" the other.
+
+5. If you can't decide between two purposes, pick the more likely one and
+   lower confidence_per_column for the ambiguous columns.
+
+Produce one tool call to "discover_master_data_layout".
+
+For "_confidence.overall" use:
+  0.9-1.0 = headers were explicit; mapping is unambiguous
+  0.6-0.9 = some inference, but mapping is sound
+  0.3-0.6 = significant guesswork; ambiguous columns
+  0.0-0.3 = file barely resembles master data
+`.trim();
+
+const LAYOUT_DISCOVERY_TOOL = {
+  name: "discover_master_data_layout",
+  description: "Identify the layout of each worksheet (purpose + column-to-field mapping) so a deterministic post-processor can extract values.",
+  input_schema: {
+    type: "object",
+    properties: {
+      sheets: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name:    { type: "string" },
+            purpose: {
+              type: "string",
+              enum: [
+                "articles",
+                "fabric_consumption",
+                "accessory_consumption",
+                "carton_master",
+                "price_list",
+                "suppliers",
+                "seasons",
+                "production_lines",
+                "ignore",
+              ],
+            },
+            column_mapping:        { type: "object" },
+            confidence_per_column: { type: "object" },
+          },
+          required: ["name", "purpose", "column_mapping"],
+        },
+      },
+      _confidence: {
+        type: "object",
+        properties: {
+          overall: { type: "number" },
+        },
+        required: ["overall"],
+      },
+      _notes: { type: ["string", "null"] },
+    },
+    required: ["sheets", "_confidence"],
+  },
+} as const;
+
+export function getLayoutDiscoveryPromptForMasterData() {
+  return {
+    systemPrompt: LAYOUT_DISCOVERY_SYSTEM_PROMPT,
+    tool: LAYOUT_DISCOVERY_TOOL,
+    version: LAYOUT_DISCOVERY_VERSION,
+    models: MODEL_CHAIN_BY_KIND.master_data,
+  };
+}
 
 export function getPromptForKind(kind: ExtractionKind) {
   if (kind === "tech_pack") {

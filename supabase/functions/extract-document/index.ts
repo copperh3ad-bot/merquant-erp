@@ -19,10 +19,15 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as XLSX from "https://esm.sh/xlsx@0.18.5";
-import { getPromptForKind, type ExtractionKind } from "./prompts.ts";
+import {
+  getPromptForKind,
+  getLayoutDiscoveryPromptForMasterData,
+  type ExtractionKind,
+} from "./prompts.ts";
 import { validateExtraction } from "./extractionValidator.js";
 import { parseBobTechPack } from "./bobTechPackParser.js";
 import { bobToTechPackShape } from "./bobAdapter.js";
+import { applyLayout } from "./deterministicApply.js";
 
 const SUPABASE_URL      = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
@@ -131,6 +136,41 @@ function xlsxToText(bytes: Uint8Array): string {
     blocks.push(`=== Sheet: "${name}" ===\n${csv}`);
   }
   return blocks.join("\n\n");
+}
+
+// Phase 2: structured per-sheet view used by the deterministic post-processor.
+// Returns one entry per sheet with the header row pulled out and the data
+// rows keyed by source-column header (verbatim). Blank-header columns and
+// fully-blank rows are dropped so the layout step only sees real data.
+type ParsedSheet = { name: string; headers: string[]; rows: Record<string, unknown>[] };
+function xlsxToSheets(bytes: Uint8Array): ParsedSheet[] {
+  const wb = XLSX.read(bytes, { type: "array" });
+  const out: ParsedSheet[] = [];
+  for (const name of wb.SheetNames) {
+    const sheet = wb.Sheets[name];
+    if (!sheet) continue;
+    const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", blankrows: false }) as unknown[][];
+    if (!aoa || aoa.length === 0) continue;
+    const rawHeaders = (aoa[0] || []).map((h) => String(h ?? "").trim());
+    const headers = rawHeaders.filter((h) => h !== "");
+    if (headers.length === 0) continue;
+    const rows: Record<string, unknown>[] = [];
+    for (let i = 1; i < aoa.length; i++) {
+      const row = aoa[i] || [];
+      const obj: Record<string, unknown> = {};
+      let anyValue = false;
+      for (let j = 0; j < rawHeaders.length; j++) {
+        const h = rawHeaders[j];
+        if (!h) continue;
+        const v = row[j];
+        obj[h] = v;
+        if (v != null && String(v).trim() !== "") anyValue = true;
+      }
+      if (anyValue) rows.push(obj);
+    }
+    out.push({ name, headers, rows });
+  }
+  return out;
 }
 
 function computeCostUsd(
@@ -353,12 +393,18 @@ Deno.serve(async (req) => {
   }
   const userId = userData.user.id;
 
-  // Dedup
+  // Dedup: a (file_hash, kind) tuple uniquely identifies a recent extraction
+  // attempt. Scoping by kind matters because the same physical file can
+  // legitimately be uploaded twice with different kinds — e.g. a customer
+  // sends one XLSX that the user first imports as a tech_pack and then
+  // re-imports as master_data. Without the kind filter, the second upload
+  // would silently surface the first extraction (wrong shape, wrong path).
   const sinceIso = new Date(Date.now() - DEDUP_WINDOW_MS).toISOString();
   const { data: dupRows, error: dupErr } = await supabase
     .from("ai_extractions")
     .select("id, created_at, review_status")
     .eq("file_hash", fileHash)
+    .eq("kind", kind)
     .gte("created_at", sinceIso)
     .not("review_status", "in", "(rejected,superseded)")
     .order("created_at", { ascending: false })
@@ -466,8 +512,97 @@ Deno.serve(async (req) => {
     }
   }
 
+  // ---------------------------------------------------------------- Phase 2 two-step (master_data + xlsx only)
+  // Step 1: ask the model for the per-sheet purpose + column mapping (no values).
+  // Step 2: apply that mapping deterministically in JS.
+  // Any failure (timeout, no_tool_use, http_error, empty sheets[], applyLayout
+  // throws) falls through to the legacy single-shot path below. The discovery
+  // cost is added to the legacy cost on fallback so billing stays honest.
+  let twoStepCostUsd = 0;
+  let twoStepFailureReason: string | null = null;
+  if (kind === "master_data" && format === "xlsx") {
+    try {
+      const discovery = getLayoutDiscoveryPromptForMasterData();
+      const xlsxText = xlsxToText(bytes);
+      const discoveryUserContent: unknown[] = [{
+        type: "text",
+        text: `File: ${fileName} (${bytes.length} bytes, kind=${kind})\n\n${xlsxText}`,
+      }];
+      const discoveryChain = await callAnthropicChain(
+        discovery.models,
+        discovery.systemPrompt,
+        discovery.tool,
+        discoveryUserContent,
+      );
+      twoStepCostUsd = discoveryChain.total_cost_usd;
+      if (discoveryChain.kind === "ok") {
+        const layout = discoveryChain.final.extracted as { sheets?: unknown[] };
+        if (Array.isArray(layout.sheets) && layout.sheets.length > 0) {
+          const parsedSheets = xlsxToSheets(bytes);
+          const { extracted } = applyLayout(parsedSheets, layout) as { extracted: Record<string, unknown> };
+          const validation = validateExtraction(kind, extracted) as {
+            issues: Array<Record<string, unknown>>;
+            status: "passed" | "warned" | "failed";
+            error_count: number;
+            warning_count: number;
+          };
+          const { error: insertErr } = await supabase.from("ai_extractions").insert({
+            ...baseRow,
+            prompt_version: discovery.version,
+            model: discoveryChain.final.model,
+            validation_status: validation.status,
+            validation_issues: validation.issues,
+            raw_llm_response: discoveryChain.final.raw as Record<string, unknown>,
+            extracted_data: extracted,
+            tokens_input: discoveryChain.final.usage.input_tokens,
+            tokens_output: discoveryChain.final.usage.output_tokens,
+            cost_usd: Number(twoStepCostUsd.toFixed(4)),
+          });
+          if (insertErr) {
+            console.error("[extract-document] insert (two-step) failed:", insertErr.message);
+            return err("PERSIST_FAILED", "Extraction worked but we couldn't save the result. Please try again.", insertErr.message, 500);
+          }
+          const meta = (extracted._extraction_meta as { summary?: Record<string, unknown> } | undefined)?.summary ?? {};
+          const summary: Record<string, unknown> = {
+            model: discoveryChain.final.model,
+            source: "two_step",
+            attempts: discoveryChain.attempts.length,
+            errors: validation.error_count,
+            warnings: validation.warning_count,
+            sheets_processed: meta.sheets_processed,
+            rows_out: meta.rows_out,
+          };
+          for (const [k, v] of Object.entries(extracted)) {
+            if (Array.isArray(v)) summary[k] = v.length;
+          }
+          const conf = (extracted._confidence as { overall?: number } | undefined)?.overall;
+          if (typeof conf === "number") summary["confidence_overall"] = conf;
+          return j({
+            ok: true,
+            extraction_id: extractionId,
+            validation_status: validation.status,
+            summary,
+          }, 200);
+        }
+        twoStepFailureReason = "discovery returned empty sheets[]";
+      } else {
+        const last = discoveryChain.attempts[discoveryChain.attempts.length - 1];
+        twoStepFailureReason = `discovery exhausted (kind=${last?.kind ?? "unknown"})`;
+      }
+    } catch (e) {
+      twoStepFailureReason = `two-step threw: ${(e as Error).message ?? String(e)}`;
+    }
+    if (twoStepFailureReason) {
+      console.log(`[extract-document] Phase 2 two-step skipped, falling back to single-shot v3: ${twoStepFailureReason}`);
+    }
+  }
+
   const userContent = buildUserContent(format, fileName, fileMime, bytes, kind);
   const chain = await callAnthropicChain(models, systemPrompt, tool, userContent);
+
+  // total_cost_usd includes any cost burned on a failed two-step discovery
+  // attempt above, so the persisted ai_extractions row reflects real spend.
+  const combinedCostUsd = Number((chain.total_cost_usd + twoStepCostUsd).toFixed(4));
 
   if (chain.kind === "exhausted") {
     const lastFailure = chain.attempts[chain.attempts.length - 1];
@@ -479,7 +614,7 @@ Deno.serve(async (req) => {
         rejected_at: new Date().toISOString(),
         rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
         error_code: "EXTRACTION_LLM_TIMEOUT", error_message: `aborted at ${ANTHROPIC_TIMEOUT_MS}ms`,
-        cost_usd: chain.total_cost_usd,
+        cost_usd: combinedCostUsd,
       });
       return err("EXTRACTION_LLM_TIMEOUT", "The AI took too long to respond. Please try again in a minute.", `fetch aborted at ${ANTHROPIC_TIMEOUT_MS}ms`, 504);
     }
@@ -515,7 +650,7 @@ Deno.serve(async (req) => {
         rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
         raw_llm_response: lastFailure.body as Record<string, unknown>,
         error_code: "EXTRACTION_LLM_ERROR", error_message: `Anthropic ${lastFailure.status}`,
-        cost_usd: chain.total_cost_usd,
+        cost_usd: combinedCostUsd,
       });
       console.error("[extract-document] anthropic error", lastFailure.status, JSON.stringify(lastFailure.body).slice(0, 200));
       return err("EXTRACTION_LLM_ERROR", "The AI service returned an error. Please try again, or contact support if it keeps happening.", `Anthropic returned status ${lastFailure.status}`, 502);
@@ -528,14 +663,23 @@ Deno.serve(async (req) => {
         rejection_reason: "Auto-rejected due to extraction failure (see error_code).",
       raw_llm_response: (lastFailure as { raw?: Record<string, unknown> }).raw,
       error_code: "EXTRACTION_LLM_INVALID_JSON", error_message: "tool_use block missing",
-      cost_usd: chain.total_cost_usd,
+      cost_usd: combinedCostUsd,
     });
     return err("EXTRACTION_LLM_INVALID_JSON", "The AI couldn't produce a structured result for this file. Please review the raw output or try a clearer source.", "tool_use block missing or invalid", 502);
   }
 
   // Success
   const final = chain.final;
-  const validation = validateExtraction(kind, final.extracted) as {
+  // For master_data + xlsx, record that this row came from the legacy
+  // single-shot path (and why two-step bailed) so we can debug fallbacks.
+  const finalExtracted = { ...(final.extracted as Record<string, unknown>) };
+  if (kind === "master_data" && format === "xlsx") {
+    finalExtracted._extraction_meta = {
+      path: "single_shot",
+      fallback_from_two_step: twoStepFailureReason,
+    };
+  }
+  const validation = validateExtraction(kind, finalExtracted) as {
     issues: Array<Record<string, unknown>>;
     status: "passed" | "warned" | "failed";
     error_count: number;
@@ -548,17 +692,17 @@ Deno.serve(async (req) => {
     validation_status: validation.status,
     validation_issues: validation.issues,
     raw_llm_response: final.raw as Record<string, unknown>,
-    extracted_data: final.extracted as Record<string, unknown>,
+    extracted_data: finalExtracted,
     tokens_input: final.usage.input_tokens,
     tokens_output: final.usage.output_tokens,
-    cost_usd: Number(chain.total_cost_usd.toFixed(4)),
+    cost_usd: combinedCostUsd,
   });
   if (insertErr) {
     console.error("[extract-document] insert failed:", insertErr.message);
     return err("PERSIST_FAILED", "Extraction worked but we couldn't save the result. Please try again.", insertErr.message, 500);
   }
 
-  const ed = (final.extracted ?? {}) as Record<string, unknown>;
+  const ed = finalExtracted;
   const summary: Record<string, unknown> = {
     model: final.model,
     source: chain.attempts.length > 1 ? "llm_with_fallback" : "llm",
