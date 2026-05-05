@@ -273,12 +273,12 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-5">
-      {/* Role debug banner — shows if profile not loaded correctly */}
-      {role === "Viewer" && (
+      {/* Role debug banner — shows if the profile hasn't loaded yet */}
+      {!role && (
         <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-amber-800">⚠ Logged in as Viewer — profile may not have loaded</p>
-            <p className="text-xs text-amber-700 mt-0.5">Your database role is Owner. Click Refresh to reload your permissions.</p>
+            <p className="text-sm font-semibold text-amber-800">⚠ Profile not loaded — permissions unavailable</p>
+            <p className="text-xs text-amber-700 mt-0.5">Click Refresh to reload your permissions.</p>
           </div>
           <button
             onClick={refreshProfile}

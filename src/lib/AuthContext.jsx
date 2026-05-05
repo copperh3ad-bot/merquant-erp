@@ -131,7 +131,7 @@ export function AuthProvider({ children }) {
 
   const isLoading      = session === undefined;
   const user           = session?.user ?? null;
-  const role           = profile?.role ?? "Viewer";
+  const role           = profile?.role ?? null;
   const team           = profile?.team ?? null;
   const isOwner        = role === "Owner";
   const isManager      = role === "Manager"      || isOwner;

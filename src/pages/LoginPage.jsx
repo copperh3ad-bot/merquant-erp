@@ -10,8 +10,7 @@ import { cn } from "@/lib/utils";
 const SIGNUP_ROLES = [
   { value: "Merchandiser",  label: "Merchandiser",  desc: "Upload BOMs, manage fabric specs, track orders" },
   { value: "Manager",       label: "Manager",        desc: "Approve workflows, manage teams" },
-  { value: "QC Inspector",  label: "QC Inspector",   desc: "Inspections, lab dips, samples" },
-  { value: "Viewer",        label: "Viewer (Read-only)", desc: "View data without editing" },
+  { value: "QC Inspector",  label: "QC Inspector",   desc: "QC inspections" },
 ];
 
 export default function LoginPage() {

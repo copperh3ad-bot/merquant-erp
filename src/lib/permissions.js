@@ -2,9 +2,9 @@
 // Owner       → full access to everything including AI system edits
 // Manager     → manage operations, approve/reject, human-in-loop gating
 // Merchandiser → upload BOMs, manage data foundation (articles, fabric specs, trims)
-// QC Inspector → inspections, lab dips, samples
-// Supplier    → view only their linked POs
-// Viewer      → read-only
+// QC Inspector → QC inspections only (lab dips/samples are Owner+Manager)
+// Supplier    → role value preserved but not used in any active matrix;
+//               Supplier scoping is deferred until suppliers are invited.
 
 export const ROLES = {
   OWNER:        "Owner",
@@ -12,7 +12,6 @@ export const ROLES = {
   MERCHANDISER: "Merchandiser",
   QC_INSPECTOR: "QC Inspector",
   SUPPLIER:     "Supplier",
-  VIEWER:       "Viewer",
 };
 
 // Role rank — higher number = more permissions
@@ -22,7 +21,6 @@ export const ROLE_RANK = {
   Merchandiser:   60,
   "QC Inspector": 40,
   Supplier:       20,
-  Viewer:         10,
 };
 
 export function hasRole(userRole, requiredRole) {
@@ -42,7 +40,7 @@ export const PERMISSIONS = {
   PO_EDIT:              ["Owner", "Manager"],            // Only Owner/Manager can edit POs
   PO_DELETE:            ["Owner"],
   PO_STATUS_ADVANCE:    ["Owner", "Manager"],
-  PO_VIEW:              ["Owner", "Manager", "Merchandiser", "QC Inspector", "Supplier", "Viewer"],
+  PO_VIEW:              ["Owner", "Manager", "Merchandiser", "QC Inspector"],
   PO_SUBMIT_APPROVAL:   ["Owner", "Manager", "Merchandiser"],  // Anyone can submit for approval
   PO_APPROVE:           ["Owner", "Manager"],            // Only Manager+ can approve/reject
   PRICE_OVERRIDE:       ["Owner", "Manager"],            // Manager can override po_item prices
@@ -61,10 +59,11 @@ export const PERMISSIONS = {
   ACCESSORY_EDIT:       ["Owner", "Manager", "Merchandiser"],
   SKU_APPROVE:          ["Owner", "Manager"],            // SKU review approval: Managers must do it
 
-  // QC — QC Inspector's domain
+  // QC — narrowed per Finding 5 directive: QC Inspector writes only
+  // qc_inspections; lab_dips/samples/compliance_docs are Owner+Manager-only.
   QC_CREATE:            ["Owner", "Manager", "QC Inspector"],
-  LAB_DIP_EDIT:         ["Owner", "Manager", "QC Inspector", "Merchandiser"],
-  SAMPLE_EDIT:          ["Owner", "Manager", "QC Inspector", "Merchandiser"],
+  LAB_DIP_EDIT:         ["Owner", "Manager"],
+  SAMPLE_EDIT:          ["Owner", "Manager"],
 
   // Finance / costing
   COSTING_EDIT:         ["Owner", "Manager"],
@@ -233,9 +232,9 @@ export const ROLE_INFO = {
   "QC Inspector": {
     color:       "bg-lime-100 text-lime-800 border-lime-200",
     badgeColor:  "bg-lime-500",
-    description: "Quality control team. Manages inspections, lab dips, and sample approvals.",
-    capabilities: ["QC inspections", "Lab dip tracking", "Sample records", "Compliance docs"],
-    restricted:   ["PO editing", "Financial data", "AI features"],
+    description: "Quality control team. Manages QC inspections.",
+    capabilities: ["Create and edit QC inspections"],
+    restricted:   ["Lab dips & samples editing", "PO editing", "Financial data", "AI features"],
   },
   Supplier: {
     color:       "bg-amber-100 text-amber-800 border-amber-200",
@@ -244,12 +243,18 @@ export const ROLE_INFO = {
     capabilities: ["View their POs", "View their shipments"],
     restricted:   ["All editing", "Other suppliers' data", "Financial data"],
   },
-  Viewer: {
-    color:       "bg-gray-100 text-gray-700 border-gray-200",
-    badgeColor:  "bg-gray-400",
-    description: "Read-only access to non-sensitive data.",
-    capabilities: ["View POs, shipments, production"],
-    restricted:   ["All editing", "Financial data", "AI features"],
-  },
 };
 
+// Safe fallback for ROLE_INFO lookups when a profile hasn't loaded yet
+// or the user's role isn't in the matrix. Keeps badge rendering from
+// crashing without implying any particular access level.
+export const UNKNOWN_ROLE_INFO = {
+  color:       "bg-gray-100 text-gray-700 border-gray-200",
+  badgeColor:  "bg-gray-400",
+  description: "Role not yet loaded.",
+  capabilities: [],
+};
+
+export function getRoleInfo(role) {
+  return ROLE_INFO[role] || UNKNOWN_ROLE_INFO;
+}

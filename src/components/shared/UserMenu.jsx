@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useAuth } from "@/lib/AuthContext";
 import { LogOut, ChevronDown, User, Shield, Crown, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ROLE_INFO } from "@/lib/permissions";
+import { getRoleInfo } from "@/lib/permissions";
 
 export default function UserMenu() {
   const { user, profile, role, signOut, isOwner, isManager } = useAuth();
@@ -12,7 +12,7 @@ export default function UserMenu() {
   const displayName = profile?.full_name || user?.email?.split("@")[0] || "User";
   const email = user?.email || "";
   const initials = displayName.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
-  const roleInfo = ROLE_INFO[role] || ROLE_INFO.Viewer;
+  const roleInfo = getRoleInfo(role);
   const team = profile?.team?.name;
 
   const handleSignOut = async () => {
