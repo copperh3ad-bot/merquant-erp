@@ -354,7 +354,7 @@ export default function AIAssistant() {
   const textareaRef = useRef();
   const { role, can, isOwner, profile, refreshProfile } = useAuth();
 
-  // If profile hasn't loaded yet (role defaults to "Viewer"), trigger a refresh
+  // If profile hasn't loaded yet (role is null), trigger a refresh
   React.useEffect(() => {
     if (!profile) refreshProfile();
   }, []);

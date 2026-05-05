@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/AuthContext";
 import { rbac, customerTeams } from "@/api/supabaseClient";
-import { ROLE_INFO, ROLES } from "@/lib/permissions";
+import { ROLE_INFO, ROLES, getRoleInfo } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,13 +19,16 @@ import { cn } from "@/lib/utils";
 import PermissionGate from "@/components/shared/PermissionGate";
 import EmptyState from "@/components/shared/EmptyState";
 
-const ROLE_LIST = ["Owner","Manager","Merchandiser","QC Inspector","Supplier","Viewer"];
+// Roles available for assignment in the user-management UI. Supplier
+// is intentionally absent until supplier scoping ships (Finding 5
+// directive); Viewer was eliminated.
+const ROLE_LIST = ["Owner","Manager","Merchandiser","QC Inspector"];
 const DEPARTMENTS = ["Merchandising","Production","QC","Sourcing","Finance","Management","Other"];
 const TEAM_COLORS = ["#6366f1","#8b5cf6","#ec4899","#f59e0b","#10b981","#3b82f6","#ef4444","#14b8a6","#f97316","#84cc16"];
 
 // ── Shared helpers ────────────────────────────────────────────────────────
 function RoleBadge({ role, size = "sm" }) {
-  const info = ROLE_INFO[role] || ROLE_INFO.Viewer;
+  const info = getRoleInfo(role);
   return (
     <span className={cn("font-semibold border rounded-full", info.color,
       size === "sm" ? "text-[10px] px-2 py-0.5" : "text-xs px-3 py-1"
