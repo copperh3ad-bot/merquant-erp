@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — credential-leak scan
+#
+# Phase-3 hardening (D2). Runs against the staged diff (NOT the
+# working tree) so partial stages still get a clean check.
+#
+# What it catches:
+#   • Supabase JWT secrets / service-role keys (eyJhbGciOiJIUzI1Ni...)
+#   • Anthropic API keys (sk-ant-...)
+#   • Google OAuth client secrets (GOCSPX-...)
+#   • AWS access keys (AKIA...) — covers any S3/Resend/etc. boilerplate
+#   • Postgres connection URIs with embedded passwords
+#   • Generic 'password' / 'secret' env-style assignments with non-trivial values
+#
+# What it does NOT catch (intentionally):
+#   • Strings inside .env (gitignored) or docs/ examples
+#   • Test fixtures with obviously fake tokens
+#
+# False positives: pass with `git commit --no-verify` only after
+# eyeballing the offending hunk. Don't normalise the bypass — it
+# defeats the purpose.
+#
+# To install:  git config core.hooksPath .githooks
+# (one-time per local clone; the docs/CONTRIBUTING.md note covers it)
+
+set -e
+
+RED='\033[0;31m'
+YEL='\033[0;33m'
+NC='\033[0m'
+
+# Patterns to scan for. Each is a tag + grep regex.
+PATTERNS=(
+  "Supabase JWT|eyJhbGciOiJIUzI1NiIs"
+  "Anthropic key|sk-ant-[a-zA-Z0-9_-]{20,}"
+  "Google OAuth secret|GOCSPX-[a-zA-Z0-9_-]+"
+  "AWS access key|AKIA[0-9A-Z]{16}"
+  "Postgres URI w/ password|postgres(ql)?://[^:[:space:]]+:[^@[:space:]]+@"
+  "Service role hint|supabase[\._-]?service[\._-]?role"
+  "Bearer token|Bearer[[:space:]]+[A-Za-z0-9_-]{32,}"
+)
+
+# Files that are explicitly allowed to contain example tokens.
+ALLOW_FILES_REGEX="^(\.env\.example|.*\.test\.[jt]sx?|.*/__fixtures__/|docs/.*\.md)$"
+
+staged_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -Ev '^$' || true)
+if [ -z "$staged_files" ]; then
+  exit 0
+fi
+
+found=0
+echo "$staged_files" | while IFS= read -r f; do
+  # Skip allowed files.
+  if echo "$f" | grep -qE "$ALLOW_FILES_REGEX"; then
+    continue
+  fi
+  # Skip binary files.
+  if git diff --cached --numstat -- "$f" | grep -qE '^-\s+-\s+'; then
+    continue
+  fi
+
+  # Get only the +added lines from the staged diff.
+  added=$(git diff --cached -U0 -- "$f" | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+  if [ -z "$added" ]; then
+    continue
+  fi
+
+  for entry in "${PATTERNS[@]}"; do
+    label="${entry%%|*}"
+    regex="${entry#*|}"
+    if echo "$added" | grep -qE "$regex"; then
+      printf "${RED}[secret-scan] possible %s in %s${NC}\n" "$label" "$f" >&2
+      echo "$added" | grep -nE "$regex" | head -3 >&2
+      printf "${YEL}    → if false-positive, run: git commit --no-verify${NC}\n" >&2
+      found=1
+    fi
+  done
+done
+
+# `while … done` runs in a subshell on bash, so $found is lost. Re-check
+# by running the scan in a captured form.
+violations=$(
+  echo "$staged_files" | while IFS= read -r f; do
+    if echo "$f" | grep -qE "$ALLOW_FILES_REGEX"; then continue; fi
+    added=$(git diff --cached -U0 -- "$f" | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+    [ -z "$added" ] && continue
+    for entry in "${PATTERNS[@]}"; do
+      regex="${entry#*|}"
+      if echo "$added" | grep -qE "$regex"; then
+        echo "hit"
+      fi
+    done
+  done | head -1
+)
+
+if [ -n "$violations" ]; then
+  printf "${RED}commit blocked: secret-like content in staged diff${NC}\n" >&2
+  exit 1
+fi
+
+exit 0

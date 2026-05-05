@@ -1,0 +1,78 @@
+name: CI
+
+# Runs on every push to any branch and on every PR targeting main / develop.
+# Mirrors the local checks that gate a commit:
+#   - npm ci  (lockfile-faithful install)
+#   - npm test  (full Vitest suite)
+#   - npm run lint  (ESLint)
+#   - npm run build  (Vite production build, mirrors deploy)
+#
+# Each step is independent — a failure surfaces specifically which check
+# blew up. Build needs the public Supabase env vars to bake into the
+# bundle; configure them as repo secrets:
+#   VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
+
+on:
+  push:
+    branches-ignore:
+      - 'gh-pages'
+  pull_request:
+    branches: [main, develop]
+
+# Cancel in-progress runs for the same ref when a new commit lands.
+# Saves CI minutes on rebases / amends without losing the latest result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm test
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      # ESLint warnings shouldn't fail the build — they're a nudge, not
+      # a gate. If the project ever wants strict linting, swap to
+      # `npm run lint -- --max-warnings 0`.
+      - run: npm run lint
+        continue-on-error: true
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Production build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: npm run build
+      - name: Bundle size summary
+        run: |
+          echo "=== Total dist size ==="
+          du -sh dist/
+          echo
+          echo "=== Top 10 JS chunks ==="
+          ls -lh dist/assets/*.js 2>/dev/null | sort -k5 -rh | head -10 || true

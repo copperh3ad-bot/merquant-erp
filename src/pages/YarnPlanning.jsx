@@ -17,12 +17,9 @@ import StatusBadge from "@/components/shared/StatusBadge";
 import EmptyState from "@/components/shared/EmptyState";
 import StatCard from "@/components/shared/StatCard";
 import { deriveYarnFields } from "@/lib/yarnInference";
-
-// Formula: Total Meters × GSM × Width(cm) / 39.37 / 1000  → kg
-function toYarnKg(meters, gsm, width) {
-  if (!meters || !gsm || !width) return 0;
-  return +(meters * gsm * width / 39.37 / 1000).toFixed(2);
-}
+// Q3: toYarnKg moved to src/lib/costing.js so it's unit-testable.
+// The function body is identical; only its location changed.
+import { toYarnKg } from "@/lib/costing";
 
 const YARN_STATUSES = ["Planned","Ordered","In Transit","Received","Rejected"];
 const empty = { fabric_type:"", gsm:"", width_cm:"", total_meters:"", yarn_kg:"", yarn_type:"", yarn_count:"", supplier:"", status:"Planned", notes:"" };

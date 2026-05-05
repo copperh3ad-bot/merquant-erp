@@ -1,0 +1,59 @@
+# Dependabot configuration (Phase-3 L3).
+#
+# Dependabot opens PRs for outdated dependencies. We track three
+# ecosystems:
+#
+#   1. npm — the primary frontend stack. Weekly schedule keeps the
+#      noise low; security updates open immediately regardless of
+#      schedule.
+#   2. github-actions — bumps action SHAs when they ship security
+#      fixes (e.g. actions/checkout@v4 → v5).
+#   3. Supabase Edge Functions are Deno + URL-pinned esm.sh imports;
+#      Dependabot can't help there (yet) — track manually via
+#      docs/security/SECRETS_AND_EDGE_HARDENING.md.
+#
+# Major version updates are flagged but NOT auto-PR'd for runtime
+# packages — those need a human to read the changelog. Patch + minor
+# come through automatically.
+#
+# Reviewers / labels are not auto-set; the user manages PR triage
+# manually.
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Karachi"
+    open-pull-requests-limit: 5
+    versioning-strategy: "increase"
+    # Group all minor/patch bumps into one PR per ecosystem to keep the
+    # backlog readable. Major bumps still open individually.
+    groups:
+      runtime-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    # React 19 just landed; ignoring its majors stops Dependabot from
+    # spamming a forced upgrade until we deliberately revisit.
+    ignore:
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-router-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    groups:
+      gha-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
