@@ -38,8 +38,13 @@ export const PERMISSIONS = {
   // AI Programmer — system edits (DDL, code generation, schema changes)
   AI_SYSTEM_EDIT:       ["Owner"],
   ADMIN_AUDIT:          ["Owner"],
-  // AI data queries (read-only natural language queries)
-  AI_DATA_QUERY:        ["Owner", "Manager", "Merchandiser"],
+  // AI data queries (read-only natural language queries).
+  // Owner/Manager only — matches the database-side gate on exec_sql
+  // (migration 36). Merchandisers were permitted historically but the
+  // v2 audit reclassified ad-hoc SQL as a Manager-or-above tool. The
+  // UI lock-screen surfaces here so Merchandisers don't hit a confusing
+  // DB error when the query reaches Postgres.
+  AI_DATA_QUERY:        ["Owner", "Manager"],
 
   // PO management
   PO_CREATE:            ["Owner", "Manager", "Merchandiser"],
