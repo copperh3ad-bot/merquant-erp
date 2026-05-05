@@ -1,4 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// Stub the supabase client so the import chain doesn't throw on
+// missing VITE_SUPABASE_* env vars in CI. The tests below only use
+// `_internals` (pure functions); `mfg` and `skuQueue` are imported by
+// skuMatcher.js but never reached on these code paths.
+vi.mock("@/api/supabaseClient", () => ({
+  mfg: { fabricTemplates: { list: vi.fn() } },
+  skuQueue: { create: vi.fn() },
+}));
+
 import { _internals } from "../../src/lib/skuMatcher.js";
 
 const {
