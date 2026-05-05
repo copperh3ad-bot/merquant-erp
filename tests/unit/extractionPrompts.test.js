@@ -111,8 +111,8 @@ describe('getLayoutDiscoveryPromptForMasterData (Phase 2 step 1)', () => {
     expect(LAYOUT_DISCOVERY_VERSION).not.toBe(PROMPT_VERSION_BY_KIND.master_data);
   });
 
-  it('legacy getPromptForKind("master_data") still returns v3 (fallback path is unchanged)', () => {
+  it('legacy getPromptForKind("master_data") still returns v5 (legacy single-shot)', () => {
     const { version } = getPromptForKind('master_data');
-    expect(version).toBe('master_data.v3');
+    expect(version).toBe('master_data.v5');
   });
 });
