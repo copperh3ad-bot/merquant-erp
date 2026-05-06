@@ -33,6 +33,54 @@ const NUM = /\d+(?:\.\d+)?/g;
 const UNIT_RE = /(cm|mm|inch|in|"|')(?![a-z])/i;
 
 /**
+ * Per docs/architecture.md §6 — detect a "multi-size blob" string. AI
+ * extractions occasionally fold per-size dimension data into a single
+ * cell, e.g.:
+ *
+ *   "Varies by size: 33X33X32 (Twin XL); 40X40X32 (Full)"
+ *
+ * Such strings must NOT be written into per-article dimension columns
+ * (carton_size_cm, stiffener_size, pvc_bag_dimensions, insert_dimensions,
+ * zipper_length_cm) — those columns are scalar per-article and a blob
+ * would break every downstream consumer.
+ *
+ * Detection heuristic — true if any of these hold:
+ *   1. Contains the literal phrase "varies by size" (case-insensitive)
+ *   2. Contains a semicolon AND at least two parenthesised size labels
+ *   3. Contains at least two distinct dimension groups separated by `;`
+ *      or `,` where each group has its own dim numbers
+ *
+ * Tight on purpose — false positives (legit dim wrongly flagged) would
+ * null out real data. False negatives (blob slips through) are
+ * acceptable; the read-side guard in descriptionResolver catches them.
+ */
+export function isMultiSizeBlob(input) {
+  if (input == null) return false;
+  const s = String(input).trim();
+  if (!s) return false;
+
+  // Rule 1 — explicit phrase
+  if (/varies\s+by\s+size/i.test(s)) return true;
+
+  // Rule 2 — multiple parenthesised size labels paired with a separator
+  const parenMatches = s.match(/\([^)]+\)/g) || [];
+  if (parenMatches.length >= 2 && /[;,]/.test(s)) return true;
+
+  // Rule 3 — multiple dim groups separated by `;`. Each segment must
+  // independently look like a dimension (>= 2 numbers).
+  const segments = s.split(/\s*;\s*/).filter(Boolean);
+  if (segments.length >= 2) {
+    let dimGroups = 0;
+    for (const seg of segments) {
+      const nums = seg.match(NUM);
+      if (nums && nums.length >= 2) dimGroups++;
+      if (dimGroups >= 2) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Parse a dimension string into { numbers: number[], unit: string|null }.
  * Returns null if no numbers are found.
  */
@@ -84,6 +132,11 @@ export function formatDimension(parsed, { sort = true, defaultUnit = "CM" } = {}
  */
 export function normalizeDim2D(input) {
   if (input == null || String(input).trim() === "") return input == null ? null : "";
+  // §6 write guard — refuse to canonicalise a multi-size blob into a
+  // scalar per-article column. Returning null lets the caller's
+  // onlyIfBlank/fillIfBlank wrappers leave the existing column alone
+  // rather than overwriting a good value with a blob.
+  if (isMultiSizeBlob(input)) return null;
   const parsed = parseDimension(input);
   if (!parsed || parsed.numbers.length < 2) return String(input).trim();
   // For 2D values that mistakenly contain 3 numbers, sort them all.
@@ -98,6 +151,10 @@ export function normalizeDim2D(input) {
  */
 export function normalizeDim3D(input) {
   if (input == null || String(input).trim() === "") return input == null ? null : "";
+  // §6 write guard — same rule as normalizeDim2D. Carton-size columns
+  // are especially vulnerable because tech-pack rows often list per-size
+  // carton dimensions in a single cell.
+  if (isMultiSizeBlob(input)) return null;
   const parsed = parseDimension(input);
   if (!parsed || parsed.numbers.length < 1) return String(input).trim();
   return formatDimension(parsed, { sort: false });

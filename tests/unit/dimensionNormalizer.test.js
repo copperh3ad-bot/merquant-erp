@@ -5,6 +5,7 @@ import {
   normalizeDim2D,
   normalizeDim3D,
   dimensionsEqual,
+  isMultiSizeBlob,
 } from "../../src/lib/dimensionNormalizer.js";
 
 describe("parseDimension", () => {
@@ -101,5 +102,63 @@ describe("dimensionsEqual — semantic equality (used in audits)", () => {
     expect(dimensionsEqual(null, null)).toBe(true);
     expect(dimensionsEqual("", "")).toBe(true);
     expect(dimensionsEqual("27x52.6", null)).toBe(false);
+  });
+});
+
+// Per docs/architecture.md §6 — isMultiSizeBlob detects strings that
+// fold per-size dimension data into one cell. Such values must NOT be
+// written into per-article scalar dimension columns.
+
+describe("isMultiSizeBlob — detection", () => {
+  it("flags an explicit 'Varies by size:' prefix", () => {
+    expect(isMultiSizeBlob("Varies by size: 33X33X32 (Twin XL); 40X40X32 (Full)")).toBe(true);
+    expect(isMultiSizeBlob("varies by size: 27x52cm")).toBe(true);
+    expect(isMultiSizeBlob("VARIES BY SIZE 33x33")).toBe(true);
+  });
+
+  it("flags multiple parenthesised size labels with a separator", () => {
+    expect(isMultiSizeBlob("33X33X32 (Twin XL); 40X40X32 (Full)")).toBe(true);
+    expect(isMultiSizeBlob("33X33X32 (Twin), 40X40X32 (Full)")).toBe(true);
+  });
+
+  it("flags multiple semicolon-separated dim groups", () => {
+    expect(isMultiSizeBlob("33X33X32; 40X40X32")).toBe(true);
+    expect(isMultiSizeBlob("33x33; 40x40; 50x50")).toBe(true);
+  });
+
+  it("does NOT flag plain single dimensions", () => {
+    expect(isMultiSizeBlob("27x52.6CM")).toBe(false);
+    expect(isMultiSizeBlob("60x40x30")).toBe(false);
+    expect(isMultiSizeBlob("27.00X52.60CM")).toBe(false);
+    expect(isMultiSizeBlob("33X33X32")).toBe(false);
+  });
+
+  it("does NOT flag a single dim with one parenthesised note", () => {
+    // Single label shouldn't be confused with multi-size
+    expect(isMultiSizeBlob("27x52cm (Twin XL)")).toBe(false);
+  });
+
+  it("handles empty / null / whitespace safely", () => {
+    expect(isMultiSizeBlob("")).toBe(false);
+    expect(isMultiSizeBlob(null)).toBe(false);
+    expect(isMultiSizeBlob(undefined)).toBe(false);
+    expect(isMultiSizeBlob("   ")).toBe(false);
+  });
+});
+
+describe("normalize* — refuse to canonicalise multi-size blobs", () => {
+  it("normalizeDim2D returns null for a blob (write guard)", () => {
+    expect(normalizeDim2D("Varies by size: 27x52 (S); 30x55 (M)")).toBeNull();
+    expect(normalizeDim2D("27X52 (S); 30X55 (M)")).toBeNull();
+  });
+
+  it("normalizeDim3D returns null for a blob (carton write guard)", () => {
+    expect(normalizeDim3D("33X33X32 (Twin XL); 40X40X32 (Full)")).toBeNull();
+    expect(normalizeDim3D("Varies by size: 60x40x30; 70x45x35")).toBeNull();
+  });
+
+  it("normal single-dim inputs are unaffected by the blob guard", () => {
+    expect(normalizeDim2D("27x52cm")).toBe("27.00X52.00CM");
+    expect(normalizeDim3D("60x40x30cm")).toBe("60.00X40.00X30.00CM");
   });
 });

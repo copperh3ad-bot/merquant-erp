@@ -19,6 +19,7 @@
  */
 
 import { productFamilyOf } from "@/lib/textileVocabulary";
+import { isMultiSizeBlob } from "@/lib/dimensionNormalizer";
 
 // ── Category alias map ────────────────────────────────────────────────────
 // Each tab's `cfg.category` (left key) maps to a list of substrings that,
@@ -333,11 +334,20 @@ export function extractSkuRelevantPortion(description, articleCode) {
 
 function articleSizeForTab(cfg, articleSizes) {
   if (!articleSizes || !cfg) return "";
-  if (cfg.category === "Polybag")          return articleSizes.pvc_bag_dimensions || "";
-  if (cfg.category === "Stiffener")        return articleSizes.stiffener_size     || "";
-  if (cfg.category === "Carton")           return articleSizes.carton_size_cm     || "";
-  if (cfg.category === "Insert Card")      return articleSizes.insert_dimensions  || "";
-  if (cfg.category === "Zipper")           return articleSizes.zipper_length_cm   || "";
+  // §6 read guard — historical rows in the DB may contain a multi-size
+  // blob that escaped before normalizeDim2D/3D learned to refuse them.
+  // safeSize() blanks any blob value so the caller's fallback chain
+  // (e.g. PackagingPlanning's per-PO cartonSizeMap) takes over instead
+  // of rendering the blob into a per-article size cell.
+  const safeSize = (v) => {
+    const s = v || "";
+    return isMultiSizeBlob(s) ? "" : s;
+  };
+  if (cfg.category === "Polybag")          return safeSize(articleSizes.pvc_bag_dimensions);
+  if (cfg.category === "Stiffener")        return safeSize(articleSizes.stiffener_size);
+  if (cfg.category === "Carton")           return safeSize(articleSizes.carton_size_cm);
+  if (cfg.category === "Insert Card")      return safeSize(articleSizes.insert_dimensions);
+  if (cfg.category === "Zipper")           return safeSize(articleSizes.zipper_length_cm);
   return "";
 }
 
