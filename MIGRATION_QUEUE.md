@@ -18,8 +18,9 @@ Numbering follows the repo convention of 4-digit zero-padded sequential IDs.
 | 0024 | `0024_owner_bootstrap.sql`                     | One-shot `bootstrap_first_owner()` RPC                    | No                     |
 | 0025 | `0025_reenable_email_confirmation.sql`         | Re-enable email confirmation (DB triggers + activation)   | YES — Auth → Email → Confirm email = ON |
 | 0026 | `0026_ai_proxy_rate_limit.sql`                 | `ai_proxy_calls` table + `check_ai_proxy_rate_limit` RPC  | No                     |
+| 0027 | `0027_consumption_library_item_name.sql`       | Add `item_name` col + bump `upsert_key` UNIQUE to 6 cols  | No                     |
 
-All 11 migrations (0016 → 0026) have been applied to the production DB
+All 12 migrations (0016 → 0027) have been applied to the production DB
 (`MerQuant ERP` Supabase project) as of 2026-05-04. They are tagged on
 the live `supabase_migrations.schema_migrations` table by the
 `mcp__supabase__apply_migration` calls that ran during the
