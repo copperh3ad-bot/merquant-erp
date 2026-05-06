@@ -93,7 +93,7 @@ describe('dedupeMasterData', () => {
     expect(summary.fabric.flagged).toHaveLength(1);
   });
 
-  it('dedups accessory_consumption by (item_code, category, material) — exact only', () => {
+  it('dedups accessory_consumption by (item_code, category, material, item_name) — exact only', () => {
     const input = {
       accessory_consumption: [
         { item_code: 'A', category: 'Care Label', material: 'Cotton', consumption_per_unit: 1 },
@@ -108,6 +108,23 @@ describe('dedupeMasterData', () => {
     expect(summary.accessory.after).toBe(3); // A/CL/Cotton + A/HT/Paper + B/CL/Cotton
     expect(summary.accessory.flagged).toHaveLength(1);
     expect(summary.accessory.flagged[0].key).toMatch(/^B/);
+  });
+
+  // Regression: two accessory rows that share (item_code, category,
+  // material) but differ on item_name MUST NOT collapse. Per
+  // docs/architecture.md §2 the accessory dedup key includes item_name
+  // since migration 0024.
+  it('does not collapse accessories that differ only on item_name', () => {
+    const input = {
+      accessory_consumption: [
+        { item_code: 'L', category: 'Label', material: 'Polyester', item_name: 'Brand Label', consumption_per_unit: 1 },
+        { item_code: 'L', category: 'Label', material: 'Polyester', item_name: 'Care Label',  consumption_per_unit: 1 },
+      ],
+    };
+    const { summary } = dedupeMasterData(input);
+    expect(summary.accessory.before).toBe(2);
+    expect(summary.accessory.after).toBe(2);
+    expect(summary.accessory.flagged).toHaveLength(0);
   });
 
   it('exact-dup detection is tolerant to null vs missing fields', () => {

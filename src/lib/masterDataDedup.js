@@ -48,9 +48,16 @@ export function dedupeMasterData(extractedData) {
   }
 
   const out = { ...extractedData };
+  // Per docs/architecture.md §2: dedup keys are
+  //   fabric    → (item_code, component_type, color)
+  //   accessory → (item_code, category, material, item_name)   ← 4-col since mig 0024
+  // The accessory key MUST include item_name; without it, two distinct
+  // accessory rows that share (item_code, category, material) but differ
+  // on item_name (e.g. "Brand Label" vs "Care Label" both Polyester
+  // labels) would be falsely collapsed.
   const summary = {
     fabric:    dedupSection(out, "fabric_consumption",    ["item_code", "component_type", "color"]),
-    accessory: dedupSection(out, "accessory_consumption", ["item_code", "category",       "material"]),
+    accessory: dedupSection(out, "accessory_consumption", ["item_code", "category", "material", "item_name"]),
   };
   return { data: out, summary };
 }

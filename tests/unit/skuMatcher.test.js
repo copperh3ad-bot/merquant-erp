@@ -1,146 +1,194 @@
 import { describe, it, expect, vi } from "vitest";
 
-// Stub the supabase client so the import chain doesn't throw on
-// missing VITE_SUPABASE_* env vars in CI. The tests below only use
-// `_internals` (pure functions); `mfg` and `skuQueue` are imported by
-// skuMatcher.js but never reached on these code paths.
+// Stub the supabase client so the import chain doesn't throw on missing
+// VITE_SUPABASE_* env vars in CI. The tests below only need the pure
+// helpers.
 vi.mock("@/api/supabaseClient", () => ({
   mfg: { fabricTemplates: { list: vi.fn() } },
   skuQueue: { create: vi.fn() },
 }));
 
-import { _internals } from "../../src/lib/skuMatcher.js";
+import { _internals, matchSKUsToTemplates } from "../../src/lib/skuMatcher.js";
+import { mfg } from "@/api/supabaseClient";
 
-const {
-  splitSku,
-  isPrefixExtension,
-  isLikelyOcr,
-  numericSuffixesDiffer,
-  matchShape,
-} = _internals;
+const { normalizeCode, stripVariantSuffix } = _internals;
 
-// 2026-05-04 — locks down the matcher rules from the bug found in the
-// FRIOMP/GPFRIOMP and GPFRIAMP/GPFRIOMP cases. Two structural rejects
-// fire BEFORE Levenshtein:
-//   - prefix-extension (extra alpha letters at the start of the longer
-//     code → different brand/family)
-//   - numeric-suffix mismatch (different size → different SKU)
-// One positive shape rule:
-//   - same length + identical numeric suffix + alpha-prefix Hamming
-//     distance exactly 1 → flagged as ocr_likely for human confirm.
+// Per docs/architecture.md §4 — SKU matching uses NORMALIZATION ONLY:
+//   case + whitespace + dashes + base-SKU variant strip.
+// No fuzzy / Levenshtein. The test cases that previously demonstrated
+// the structural-override behaviour now demonstrate the same outcome via
+// normalization-only: near-but-distinct codes simply don't equate, so
+// they fall through to the unknowns list rather than being false-matched.
 
-describe("splitSku", () => {
-  it("splits trailing numeric suffix from alpha prefix", () => {
-    expect(splitSku("GPFRIOMP33")).toEqual(["GPFRIOMP", "33"]);
-    expect(splitSku("FRIOMP36")).toEqual(["FRIOMP", "36"]);
-    expect(splitSku("GPFRIAMP78")).toEqual(["GPFRIAMP", "78"]);
+describe("normalizeCode", () => {
+  it("uppercases", () => {
+    expect(normalizeCode("gpte78")).toBe("GPTE78");
   });
 
-  it("returns empty numeric suffix for codes ending in alpha", () => {
-    expect(splitSku("ABC")).toEqual(["ABC", ""]);
+  it("trims surrounding whitespace", () => {
+    expect(normalizeCode("  GPTE78  ")).toBe("GPTE78");
   });
 
-  it("uppercases and trims", () => {
-    expect(splitSku("  gpfriomp33  ")).toEqual(["GPFRIOMP", "33"]);
+  it("strips embedded whitespace, dashes, underscores", () => {
+    expect(normalizeCode("GPTE-78")).toBe("GPTE78");
+    expect(normalizeCode("GPTE_78")).toBe("GPTE78");
+    expect(normalizeCode("GP TE 78")).toBe("GPTE78");
+    expect(normalizeCode("GP-TE_78 ABC")).toBe("GPTE78ABC");
   });
 
-  it("handles null/undefined safely", () => {
-    expect(splitSku(null)).toEqual(["", ""]);
-    expect(splitSku(undefined)).toEqual(["", ""]);
-  });
-});
-
-describe("isPrefixExtension", () => {
-  it("rejects when the longer code has an alpha brand prefix", () => {
-    // FRIOMP36 vs GPFRIOMP36 — "GP" is a brand prefix → different family
-    expect(isPrefixExtension("FRIOMP36", "GPFRIOMP36")).toBe(true);
-    expect(isPrefixExtension("GPFRIOMP36", "FRIOMP36")).toBe(true); // symmetric
+  it("returns empty string for null / undefined / blank", () => {
+    expect(normalizeCode(null)).toBe("");
+    expect(normalizeCode(undefined)).toBe("");
+    expect(normalizeCode("")).toBe("");
+    expect(normalizeCode("   ")).toBe("");
   });
 
-  it("does not flag identical or non-suffix relationships", () => {
-    expect(isPrefixExtension("GPFRIOMP33", "GPFRIOMP33")).toBe(false);
-    expect(isPrefixExtension("GPFRIOMP33", "GPFRIAMP33")).toBe(false); // same length
-    expect(isPrefixExtension("FRIOMP36", "FRIOMP38")).toBe(false); // not suffix relation
-  });
-
-  it("does not treat numeric prefix as brand qualifier", () => {
-    // 100ABC vs ABC — the leading digits could be a year or version
-    expect(isPrefixExtension("ABC", "100ABC")).toBe(false);
+  it("treats already-normalised codes as fixed points (idempotent)", () => {
+    expect(normalizeCode("GPTE78")).toBe("GPTE78");
+    expect(normalizeCode(normalizeCode("gp te-78"))).toBe("GPTE78");
   });
 });
 
-describe("isLikelyOcr", () => {
-  it("flags single-character body swap with identical numeric suffix", () => {
-    // GPFRIAMP33 vs GPFRIOMP33 — A↔O at one position, suffix 33 matches
-    expect(isLikelyOcr("GPFRIAMP33", "GPFRIOMP33")).toBe(true);
-    expect(isLikelyOcr("GPFRIAMP78", "GPFRIOMP78")).toBe(true);
-    expect(isLikelyOcr("GPFRIAMP50", "GPFRIOMP50")).toBe(true);
+describe("stripVariantSuffix", () => {
+  it("strips a trailing dash + 1-4 alphanumeric variant", () => {
+    expect(stripVariantSuffix("FRIOMP-RED")).toBe("FRIOMP");
+    expect(stripVariantSuffix("GPTE78-L")).toBe("GPTE78");
+    expect(stripVariantSuffix("ABC-123")).toBe("ABC");
+    expect(stripVariantSuffix("ABC-X1Y2")).toBe("ABC");
   });
 
-  it("rejects when numeric suffixes differ", () => {
-    expect(isLikelyOcr("GPFRIAMP33", "GPFRIOMP38")).toBe(false);
+  it("returns null when no dash variant is present", () => {
+    expect(stripVariantSuffix("GPTE78")).toBeNull();
+    expect(stripVariantSuffix("FRIOMP36")).toBeNull();
+    expect(stripVariantSuffix("")).toBeNull();
+    expect(stripVariantSuffix(null)).toBeNull();
   });
 
-  it("rejects when alpha prefix Hamming distance > 1", () => {
-    // FTAMP46 vs FTATE46 — alpha prefixes differ in 2 positions
-    expect(isLikelyOcr("FTAMP46", "FTATE46")).toBe(false);
+  it("does not strip a long suffix (5+ chars after dash)", () => {
+    // "-NAVYBLUE" is 8 chars, far longer than a typical color/size code,
+    // so it isn't treated as a variant.
+    expect(stripVariantSuffix("FRIOMP-NAVYBLUE")).toBeNull();
   });
 
-  it("rejects when lengths differ", () => {
-    expect(isLikelyOcr("FRIOMP36", "GPFRIOMP36")).toBe(false);
-  });
-
-  it("rejects when no numeric suffix", () => {
-    expect(isLikelyOcr("ABCDE", "ABCDF")).toBe(false);
-  });
-});
-
-describe("numericSuffixesDiffer", () => {
-  it("detects size differences", () => {
-    expect(numericSuffixesDiffer("FRIOMP36", "FRIOMP38")).toBe(true);
-    expect(numericSuffixesDiffer("FRIOMP36", "FRIOMP79")).toBe(true);
-  });
-
-  it("returns false when suffixes match or are absent", () => {
-    expect(numericSuffixesDiffer("FRIOMP36", "FRIOMP36")).toBe(false);
-    expect(numericSuffixesDiffer("ABC", "DEF")).toBe(false);
+  it("strips only the LAST suffix when there are several dashes", () => {
+    expect(stripVariantSuffix("BAGW3-W4-RED")).toBe("BAGW3-W4");
   });
 });
 
-describe("matchShape — top-level decision", () => {
-  it("returns exact for identical codes (case-insensitive)", () => {
-    expect(matchShape("GPFRIOMP33", "GPFRIOMP33").type).toBe("exact");
-    expect(matchShape("gpfriomp33", "GPFRIOMP33").type).toBe("exact");
+// ── End-to-end matchSKUsToTemplates ─────────────────────────────────────
+//
+// The bug-regression cases from 2026-05-04 are reframed: with no
+// Levenshtein in play, FRIOMP36 simply isn't equal to GPFRIOMP36 after
+// normalising, so it lands in unknowns rather than being false-matched.
+
+const buildTemplate = (code, name = code) => ({
+  article_code: code,
+  article_name: name,
+  components: [],
+});
+
+describe("matchSKUsToTemplates", () => {
+  it("matches exact codes case-insensitively and stripping dashes", async () => {
+    mfg.fabricTemplates.list.mockResolvedValue([buildTemplate("GPTE78")]);
+    const { matched, unknowns } = await matchSKUsToTemplates([
+      { item_code: "gpte-78", item_description: "" },
+    ]);
+    expect(matched).toHaveLength(1);
+    expect(unknowns).toHaveLength(0);
+    expect(matched[0].matchType).toBe("exact");
+    expect(matched[0].template.article_code).toBe("GPTE78");
   });
 
-  it("rejects prefix-extensions even when Levenshtein is high", () => {
-    // FRIOMP36 vs GPFRIOMP36 — Levenshtein similarity ≈ 0.8 but we reject
-    const result = matchShape("FRIOMP36", "GPFRIOMP36");
-    expect(result.type).toBe("reject");
-    expect(result.reason).toBe("prefix-extension");
+  it("matches by article_name when item_code misses", async () => {
+    mfg.fabricTemplates.list.mockResolvedValue([
+      buildTemplate("GPTE78", "Standard Pillow Insert"),
+    ]);
+    const { matched } = await matchSKUsToTemplates([
+      { item_code: "X-UNKNOWN", item_description: "Standard Pillow Insert" },
+    ]);
+    expect(matched).toHaveLength(1);
+    expect(matched[0].matchType).toBe("exact");
   });
 
-  it("rejects numeric-suffix mismatches even when alpha matches", () => {
-    // FRIOMP36 vs FRIOMP38 — alpha prefix identical, only suffix differs
-    const result = matchShape("FRIOMP36", "FRIOMP38");
-    expect(result.type).toBe("reject");
-    expect(result.reason).toBe("numeric-suffix-mismatch");
+  it("resolves base-SKU when raw code has a colour/size variant", async () => {
+    mfg.fabricTemplates.list.mockResolvedValue([buildTemplate("FRIOMP")]);
+    const { matched, unknowns } = await matchSKUsToTemplates([
+      { item_code: "FRIOMP-RED" },
+    ]);
+    expect(matched).toHaveLength(1);
+    expect(unknowns).toHaveLength(0);
+    expect(matched[0].matchType).toBe("base_sku");
   });
 
-  it("flags single-char body swap as ocr_likely", () => {
-    const result = matchShape("GPFRIAMP33", "GPFRIOMP33");
-    expect(result.type).toBe("ocr_likely");
-    expect(result.reason).toBe("single-char-swap");
+  it("does NOT match FRIOMP36 → GPFRIOMP36 (different brand prefix)", async () => {
+    // The bug regression case: pre-2026-05-04 Levenshtein matchers gave
+    // these ~0.8 similarity and falsely matched. Normalize-only doesn't
+    // equate them, so the item lands in unknowns.
+    mfg.fabricTemplates.list.mockResolvedValue([buildTemplate("GPFRIOMP36")]);
+    const { matched, unknowns } = await matchSKUsToTemplates([
+      { item_code: "FRIOMP36" },
+    ]);
+    expect(matched).toHaveLength(0);
+    expect(unknowns).toHaveLength(1);
+    expect(unknowns[0].bestGuess).toBeNull();
   });
 
-  it("does not match across different product families (FTAMP vs FTATE)", () => {
-    const result = matchShape("FTAMP46", "FTATE46");
-    expect(result.type).toBe("reject");
+  it("does NOT match FRIOMP36 → FRIOMP38 (different size)", async () => {
+    mfg.fabricTemplates.list.mockResolvedValue([buildTemplate("FRIOMP38")]);
+    const { matched, unknowns } = await matchSKUsToTemplates([
+      { item_code: "FRIOMP36" },
+    ]);
+    expect(matched).toHaveLength(0);
+    expect(unknowns).toHaveLength(1);
   });
 
-  it("returns reject with empty input", () => {
-    expect(matchShape("", "ABC").type).toBe("reject");
-    expect(matchShape("ABC", "").type).toBe("reject");
-    expect(matchShape(null, undefined).type).toBe("reject");
+  it("does NOT match GPFRIAMP33 → GPFRIOMP33 (single-char body swap)", async () => {
+    // Previously OCR-likely + human-confirm. Now: just unknowns.
+    mfg.fabricTemplates.list.mockResolvedValue([buildTemplate("GPFRIOMP33")]);
+    const { matched, unknowns } = await matchSKUsToTemplates([
+      { item_code: "GPFRIAMP33" },
+    ]);
+    expect(matched).toHaveLength(0);
+    expect(unknowns).toHaveLength(1);
+  });
+
+  it("does NOT match FTAMP46 → FTATE46 (multi-position alpha diff)", async () => {
+    mfg.fabricTemplates.list.mockResolvedValue([buildTemplate("FTATE46")]);
+    const { matched, unknowns } = await matchSKUsToTemplates([
+      { item_code: "FTAMP46" },
+    ]);
+    expect(matched).toHaveLength(0);
+    expect(unknowns).toHaveLength(1);
+  });
+
+  it("emits unknowns with bestGuess=null (no similarity-based guesses)", async () => {
+    mfg.fabricTemplates.list.mockResolvedValue([
+      buildTemplate("GPFRIOMP36"),
+      buildTemplate("FRIOMP38"),
+    ]);
+    const { unknowns } = await matchSKUsToTemplates([
+      { item_code: "FRIOMP36" },
+    ]);
+    expect(unknowns).toHaveLength(1);
+    expect(unknowns[0].bestGuess).toBeNull();
+  });
+
+  it("handles an empty templates list", async () => {
+    mfg.fabricTemplates.list.mockResolvedValue([]);
+    const { matched, unknowns } = await matchSKUsToTemplates([
+      { item_code: "GPTE78" },
+    ]);
+    expect(matched).toHaveLength(0);
+    expect(unknowns).toHaveLength(1);
+  });
+
+  it("handles items with empty item_code (description-only fallback)", async () => {
+    mfg.fabricTemplates.list.mockResolvedValue([
+      buildTemplate("GPTE78", "Standard Pillow Insert"),
+    ]);
+    const { matched } = await matchSKUsToTemplates([
+      { item_code: "", item_description: "Standard Pillow Insert" },
+    ]);
+    expect(matched).toHaveLength(1);
   });
 });

@@ -188,28 +188,13 @@ export default function PurchaseOrders() {
           if (r.kind === "fabric") hasFabricNorm.add(n);
         }
 
-        // Levenshtein distance for fuzzy SKU match (handles OCR errors like P→B, F→E, K→O)
-        const levenshtein = (a, b) => {
-          if (a === b) return 0;
-          const m = a.length, n = b.length;
-          if (!m) return n;
-          if (!n) return m;
-          const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-          for (let i = 0; i <= m; i++) dp[i][0] = i;
-          for (let j = 0; j <= n; j++) dp[0][j] = j;
-          for (let i = 1; i <= m; i++) {
-            for (let j = 1; j <= n; j++) {
-              dp[i][j] = a[i-1] === b[j-1]
-                ? dp[i-1][j-1]
-                : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
-            }
-          }
-          return dp[m][n];
-        };
-
-        const allMasterCodes = [...hasFabricNorm];
+        // Per docs/architecture.md §4: SKU matching uses NORMALIZATION ONLY
+        // (case + whitespace + dashes + base-SKU variant strip). No
+        // fuzzy / Levenshtein — that path was responsible for false matches
+        // like FRIOMP36 ↔ GPFRIOMP36 in early 2026. SKUs that don't resolve
+        // via normalize-then-strip-variant fall through to the SKU review
+        // queue, never auto-matched on similarity.
         const baseSkuResolutions = new Map();  // raw -> resolved norm (deterministic, auto-apply)
-        const fuzzyResolutions = new Map();    // raw -> resolved norm (OCR, needs confirmation)
         const stillMissing = [];
         const stripVariantSuffix = (code) => {
           const m = /^(.+)-([A-Z0-9]{1,4})$/i.exec(code);
@@ -217,7 +202,9 @@ export default function PurchaseOrders() {
         };
         for (const { raw, norm } of itemCodeNorm) {
           if (hasFabricNorm.has(norm)) continue;
-          // 1) Deterministic: strip color/variant suffix from RAW (preserves hyphens), then normalize
+          // Deterministic: strip color/variant suffix from RAW (preserves
+          // hyphens), then normalize. If the stripped form is in master,
+          // auto-resolve. Otherwise the SKU is genuinely missing.
           const baseRaw = stripVariantSuffix(raw);
           const baseNorm = baseRaw ? normalizeCode(baseRaw) : null;
           if (baseNorm && hasFabricNorm.has(baseNorm)) {
@@ -225,20 +212,7 @@ export default function PurchaseOrders() {
             console.log(`[PO Import] Base-SKU match (auto): "${raw}" → "${canonicalFor.get(baseNorm)}"`);
             continue;
           }
-          // 2) Fuzzy: Levenshtein for likely OCR errors
-          const maxDist = Math.max(2, Math.floor(norm.length / 5));
-          let best = null, bestDist = Infinity;
-          for (const md of allMasterCodes) {
-            if (Math.abs(md.length - norm.length) > maxDist) continue;
-            const d = levenshtein(norm, md);
-            if (d < bestDist && d <= maxDist) { best = md; bestDist = d; }
-          }
-          if (best) {
-            fuzzyResolutions.set(raw, best);
-            console.log(`[PO Import] Fuzzy match: "${raw}" → "${canonicalFor.get(best)}" (distance ${bestDist})`);
-          } else {
-            stillMissing.push(raw);
-          }
+          stillMissing.push(raw);
         }
 
         // Auto-apply deterministic base-SKU matches (no user confirmation)
@@ -260,36 +234,10 @@ export default function PurchaseOrders() {
           }
         }
 
-        // Confirm fuzzy matches with user before proceeding
-        if (fuzzyResolutions.size > 0) {
-          const lines = [...fuzzyResolutions.entries()].map(([raw, norm]) =>
-            `  ${raw}  →  ${canonicalFor.get(norm)}`
-          ).join("\n");
-          const ok = confirm(
-            `${fuzzyResolutions.size} SKU code(s) didn't match exactly but look similar to existing Master Data SKUs.\n\n` +
-            `Likely OCR errors during PO extraction. Use these matches?\n\n${lines}\n\n` +
-            `Click OK to use these matches, or Cancel to abort and fix the PO manually.`
-          );
-          if (!ok) throw new Error("Import cancelled — fuzzy SKU matches not approved.");
-          // Apply fuzzy matches: rewrite item_codes in enrichedItems to canonical form
-          for (const item of enrichedItems) {
-            const raw = item.item_code?.trim();
-            const fuzzyNorm = fuzzyResolutions.get(raw);
-            if (fuzzyNorm) {
-              item.item_code = canonicalFor.get(fuzzyNorm);
-            }
-          }
-          // Also rebuild itemCodeNorm so downstream uses the corrected codes
-          itemCodeNorm.length = 0;
-          itemCodesRaw.length = 0;
-          for (const i of enrichedItems) {
-            const trimmed = i.item_code?.trim();
-            if (trimmed && !itemCodesRaw.includes(trimmed)) {
-              itemCodesRaw.push(trimmed);
-              itemCodeNorm.push({ raw: trimmed, norm: normalizeCode(trimmed) });
-            }
-          }
-        }
+        // (No fuzzy-match confirmation step — removed per
+        // docs/architecture.md §4. SKUs that didn't resolve via normalize +
+        // base-SKU strip are now in stillMissing and will surface as the
+        // user-facing error below.)
 
         if (stillMissing.length) {
           throw new Error(
