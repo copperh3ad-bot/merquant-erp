@@ -25,6 +25,10 @@ import { productFamilyOf } from "@/lib/textileVocabulary";
 // when found in a tech-pack element's category-flavoured field
 // (trim_type / accessory_type / label_type / category / type / section),
 // count as a match. Comparison is case-insensitive.
+// Per docs/architecture.md §5 — Trim alias list aligned with the spec.
+// The literal word "trim" still matches via the substring path in
+// matchesCategory() (e.g. element category "Trim Detail" still hits the
+// Trim tab), so dropping it from the alias list does not regress.
 const CATEGORY_ALIASES = {
   "Label":       ["label", "law tag", "care label", "size label", "brand label", "hang tag", "wash label"],
   "Insert Card": ["insert card", "insert", "color paper insert", "art card", "bleach card"],
@@ -33,7 +37,21 @@ const CATEGORY_ALIASES = {
   "Carton":      ["carton", "carton box", "outer carton", "shipping carton", "carton size"],
   "Sticker":     ["sticker", "barcode sticker", "size sticker", "upc sticker", "barcode label", "qr code"],
   "Zipper":      ["zipper", "zip", "zipper end piecing"],
-  "Trim":        ["trim", "binding", "piping", "elastic", "drawcord", "ribbon", "velcro"],
+  "Trim":        ["thread", "sewing thread", "stopper", "cord lock", "cord stopper", "elastic", "cord", "metal stopper"],
+};
+
+// Per docs/architecture.md §5 — overlap suppression. Without these,
+// alias substring-matching can route the same element to two tabs:
+//   • "barcode label" hits Label (alias "label") AND Sticker (alias
+//     "barcode label"). Spec: it belongs only to Sticker.
+//   • "carton stiffener" hits Stiffener (alias "stiffener") AND Carton
+//     (alias "carton"). Spec: it belongs only to Carton.
+// CATEGORY_EXCLUSIONS lists substrings that, when present in the
+// element's category text, disqualify the element from the named tab —
+// regardless of any positive alias match.
+const CATEGORY_EXCLUSIONS = {
+  "Label":     ["sticker", "barcode", "qr code"],
+  "Stiffener": ["carton"],
 };
 
 // Words/phrases that indicate an element is NOT a planning category at all
@@ -55,11 +73,22 @@ function isBlacklisted(elemCat) {
   return NON_CATEGORY_BLACKLIST.some((b) => e.includes(b));
 }
 
+// _internals exposes private helpers for direct unit testing without
+// pulling them into the public API. Don't import from this in product
+// code — use resolveDescription() instead.
+export const _internals = {
+  // populated below after function declarations
+};
+
 function matchesCategory(elemCat, tab) {
   if (!elemCat) return false;
   if (isBlacklisted(elemCat)) return false;
   const e = String(elemCat).toLowerCase().trim();
   const t = String(tab).toLowerCase().trim();
+  // Per docs/architecture.md §5 — exclusion check runs FIRST so it can
+  // veto a match the alias / substring path would otherwise allow.
+  const exclusions = CATEGORY_EXCLUSIONS[tab];
+  if (Array.isArray(exclusions) && exclusions.some((x) => e.includes(x))) return false;
   // Exact / substring match (legacy + AI fuzzy)
   if (e === t || e.includes(t) || t.includes(e)) return true;
   // Alias map match
@@ -67,6 +96,12 @@ function matchesCategory(elemCat, tab) {
   if (Array.isArray(aliases) && aliases.some((a) => e.includes(a))) return true;
   return false;
 }
+
+// Wire internal helpers up for tests now that they're declared.
+_internals.matchesCategory = matchesCategory;
+_internals.isBlacklisted   = isBlacklisted;
+_internals.CATEGORY_ALIASES   = CATEGORY_ALIASES;
+_internals.CATEGORY_EXCLUSIONS = CATEGORY_EXCLUSIONS;
 
 // Synonym map for the Label tab's typeOption dropdown. Each key is one of
 // the cfg.typeOptions values; the value is a list of keywords that, when
