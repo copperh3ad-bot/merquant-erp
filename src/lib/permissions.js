@@ -46,6 +46,15 @@ export const PERMISSIONS = {
   // DB error when the query reaches Postgres.
   AI_DATA_QUERY:        ["Owner", "Manager"],
 
+  // AIVoiceEntry — reusable voice-input mic component
+  // (src/components/shared/AIVoiceEntry.jsx). Defined here so any
+  // future callsite can gate via can("AI_VOICE_ENTRY") before
+  // rendering. As of this commit the component has zero callers, so
+  // no UI wrap exists to guard yet — the permission is forward-
+  // looking, NOT a PAGE_VISIBILITY entry (it's a component, not a
+  // routed page). Buyer + Supplier intentionally excluded.
+  AI_VOICE_ENTRY:       ["Owner", "Manager", "Merchandiser"],
+
   // PO management
   PO_CREATE:            ["Owner", "Manager", "Merchandiser"],
   PO_EDIT:              ["Owner", "Manager"],            // Only Owner/Manager can edit POs
