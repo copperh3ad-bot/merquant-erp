@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Save, Plus, Trash2, Upload, Download, Printer, Package, Settings, FileSpreadsheet } from "lucide-react";
 import UploadPackagingSheet from "@/components/packaging/UploadPackagingSheet";
 import { db, mfg, accessoryTemplates, supabase } from "@/api/supabaseClient";
-import { resolveDescription, findTechPackForArticle } from "@/lib/descriptionResolver";
+import { resolveDescription, findTechPackForArticle, _internals as descInternals } from "@/lib/descriptionResolver";
 import { allCanonicals } from "@/lib/textileVocabulary";
 
 // ── Tab configuration ─────────────────────────────────────────────────────
@@ -529,13 +529,19 @@ export default function PackagingPlanning() {
     }
   };
 
-  // Tab summary counts
+  // Tab summary counts.
+  // Per docs/architecture.md §7 — tabs filter by matchesCategory()
+  // (loose substring + alias + exclusion) rather than strict equality.
+  // Strict equality would drop e.g. an item with category="Hang Tag"
+  // from the Label tab even though Hang Tag is a Label alias per §5.
   const tabCounts = useMemo(() => {
     const counts = {};
     SUB_TABS.forEach(tab => {
       const cfg = TAB_CONFIG[tab];
       counts[tab] = existingItems.filter(
-        i => i.po_id === activePo?.id && i.category === cfg.category && i.quantity_required > 0
+        i => i.po_id === activePo?.id
+          && descInternals.matchesCategory(i.category, cfg.category)
+          && i.quantity_required > 0
       ).length;
     });
     return counts;
