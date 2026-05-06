@@ -150,7 +150,7 @@ export default function PODetail() {
   const unknownsCount = parseInt(new URLSearchParams(window.location.search).get("unknowns") || "0");
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { can, profile } = useAuth();
+  const { can, profile, role } = useAuth();
   const canPriceOverride = can("PRICE_OVERRIDE");
   const canEditItems = can("BOM_UPLOAD"); // Owner + Manager + Merchandiser can add/edit/delete line items
   const [showItemForm, setShowItemForm] = useState(false);
