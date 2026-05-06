@@ -529,6 +529,57 @@ export default function PackagingPlanning() {
     }
   };
 
+  // ── Sewing Thread banner (Trim tab only) ────────────────────────────
+  // Per docs/architecture.md §7. Aggregates sewing-thread-flavoured
+  // entries from tech_packs.extracted_trim_specs across the active PO's
+  // articles. Surfaces distinct colors / counts / suppliers so the
+  // procurement team sees a thread-only roll-up at the top of the Trim
+  // tab without having to hunt through the per-article rows below.
+  //
+  // A trim spec counts as "sewing thread" when any of these contain
+  // the word "thread" (case-insensitive): trim_type, category,
+  // material, description, item_name. We don't gate on a single field
+  // because AI extractions and BOB extractions disagree on which one
+  // carries the intent.
+  const sewingThreadSummary = useMemo(() => {
+    if (!activePo) return null;
+    const articleCodesInPo = new Set(poArticles.map(a => (a.article_code || "").trim().toUpperCase()).filter(Boolean));
+    if (articleCodesInPo.size === 0) return null;
+
+    const isThread = (s) => /thread/i.test(String(s || ""));
+    const rows = [];
+    const colors    = new Set();
+    const counts    = new Set(); // tex / count / Nm / etc.
+    const suppliers = new Set();
+    const articles  = new Set();
+
+    for (const tp of techPacks) {
+      const code = (tp.article_code || "").trim().toUpperCase();
+      if (!code || !articleCodesInPo.has(code)) continue;
+      const trims = Array.isArray(tp.extracted_trim_specs) ? tp.extracted_trim_specs : [];
+      for (const t of trims) {
+        const matches = isThread(t.trim_type) || isThread(t.category) || isThread(t.material)
+          || isThread(t.description) || isThread(t.item_name);
+        if (!matches) continue;
+        rows.push({ article_code: code, ...t });
+        articles.add(code);
+        if (t.color) colors.add(String(t.color));
+        if (t.size_spec) counts.add(String(t.size_spec));
+        else if (t.count) counts.add(String(t.count));
+        if (t.supplier) suppliers.add(String(t.supplier));
+      }
+    }
+
+    if (rows.length === 0) return null;
+    return {
+      total:        rows.length,
+      articles:     Array.from(articles).sort(),
+      colors:       Array.from(colors).sort(),
+      counts:       Array.from(counts).sort(),
+      suppliers:    Array.from(suppliers).sort(),
+    };
+  }, [activePo?.id, poArticles, techPacks]);
+
   // Tab summary counts.
   // Per docs/architecture.md §7 — tabs filter by matchesCategory()
   // (loose substring + alias + exclusion) rather than strict equality.
@@ -703,6 +754,28 @@ export default function PackagingPlanning() {
           </button>
         ))}
       </div>
+
+      {/* Sewing Thread banner — Trim tab only, when tech_packs have
+          thread-tagged entries for any article in this PO. Per
+          docs/architecture.md §7. */}
+      {subTab === "Trim" && sewingThreadSummary && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <div className="font-semibold mb-1">
+            Sewing Thread (from tech packs) — {sewingThreadSummary.total} entr{sewingThreadSummary.total === 1 ? "y" : "ies"} across {sewingThreadSummary.articles.length} article{sewingThreadSummary.articles.length === 1 ? "" : "s"}
+          </div>
+          <div className="space-y-0.5">
+            {sewingThreadSummary.colors.length > 0 && (
+              <div><span className="font-medium">Colors:</span> {sewingThreadSummary.colors.join(", ")}</div>
+            )}
+            {sewingThreadSummary.counts.length > 0 && (
+              <div><span className="font-medium">Counts / sizes:</span> {sewingThreadSummary.counts.join(", ")}</div>
+            )}
+            {sewingThreadSummary.suppliers.length > 0 && (
+              <div><span className="font-medium">Suppliers:</span> {sewingThreadSummary.suppliers.join(", ")}</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Articles */}
       {!activePo ? (
