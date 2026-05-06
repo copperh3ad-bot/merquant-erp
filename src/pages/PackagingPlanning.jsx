@@ -459,7 +459,16 @@ export default function PackagingPlanning() {
       const rows = allRows[tab]?.[art.id] || [];
       for (const row of rows) {
         const hasContent = cfg.splitDescSize ? (row.description || row.size) : (row.type || row.quality);
-        if (!hasContent) continue;
+        // Per docs/architecture.md §7 — an emptied row that came from
+        // the DB (existing_id present, no content now) should be
+        // DELETED. Without this branch, clearing a row's fields in
+        // the UI silently leaves the old DB row in place.
+        if (!hasContent) {
+          if (row.existing_id) {
+            ops.push(supabase.from("accessory_items").delete().eq("id", row.existing_id));
+          }
+          continue;
+        }
         const qty = art.order_quantity || 0;
         const data = {
           po_id: activePo.id,
