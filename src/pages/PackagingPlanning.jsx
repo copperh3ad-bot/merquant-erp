@@ -548,26 +548,49 @@ export default function PackagingPlanning() {
   }, [existingItems, activePo?.id]);
 
   // ── Bottom summary: aggregate ALL items for this PO across all tabs ─────
-  // Groups by (category, item_description, size_spec) so the same item
-  // ordered for multiple articles rolls up into one row showing the total
-  // requirement. This is what the procurement team needs to issue a single
-  // PO per item regardless of which garment article it belongs to.
+  //
+  // Per docs/architecture.md §7, the summary key is the 7-tuple:
+  //   (category, item_description, size_spec, color, placement,
+  //    supplier, garment_size)
+  //
+  // Two of those (placement, garment_size) are reserved per the spec
+  // but not yet present as columns on accessory_items in this DB —
+  // they're keyed in as empty strings here, so behaviour collapses to
+  // a 5-tuple key today and will lift to the full 7-tuple
+  // automatically when those columns are added (no further code
+  // change required at that time, just include them in the destructure
+  // and select clause when the columns ship).
+  //
+  // The previous 3-tuple key over-aggregated: items differing only on
+  // color or supplier rolled into a single misleading total. Procurement
+  // would issue one PO at the merged total to "some" supplier when in
+  // fact the items needed to be split.
   const itemSummary = useMemo(() => {
     if (!activePo) return [];
     const map = new Map();
     for (const it of existingItems) {
       if (it.po_id !== activePo.id) continue;
       if (!it.quantity_required || it.quantity_required <= 0) continue;
+      const placement    = it.placement    || "";  // reserved per §7
+      const garment_size = it.garment_size || "";  // reserved per §7
       const key = [
         it.category || "",
         it.item_description || "",
         it.size_spec || "",
+        it.color || "",
+        placement,
+        it.supplier || "",
+        garment_size,
       ].join("||");
       if (!map.has(key)) {
         map.set(key, {
           category:         it.category || "",
           item_description: it.item_description || "",
           size_spec:        it.size_spec || "",
+          color:            it.color || "",
+          placement,
+          supplier:         it.supplier || "",
+          garment_size,
           unit:             it.unit || "Pcs",
           total_qty:        0,
           articles:         new Set(),
