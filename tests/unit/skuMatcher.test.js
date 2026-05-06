@@ -8,7 +8,7 @@ vi.mock("@/api/supabaseClient", () => ({
   skuQueue: { create: vi.fn() },
 }));
 
-import { _internals, matchSKUsToTemplates } from "../../src/lib/skuMatcher.js";
+import { _internals, matchSKUsToTemplates, applyTemplateToArticle } from "../../src/lib/skuMatcher.js";
 import { mfg } from "@/api/supabaseClient";
 
 const { normalizeCode, stripVariantSuffix } = _internals;
@@ -190,5 +190,79 @@ describe("matchSKUsToTemplates", () => {
       { item_code: "", item_description: "Standard Pillow Insert" },
     ]);
     expect(matched).toHaveLength(1);
+  });
+});
+
+// Regression net for Fix 1 — wastage_percent || 6 → ?? 0. The old
+// fallback inflated total_required by 6% on every component where
+// wastage was null, undefined, OR explicitly 0.
+
+describe("applyTemplateToArticle", () => {
+  const article = { id: "a1", article_code: "PF-MP-Q", order_quantity: 100 };
+  const template = {
+    components: [
+      { component_type: "Platform", consumption_per_unit: 2.0, wastage_percent: 10 },
+      { component_type: "Skirt",    consumption_per_unit: 0.5, wastage_percent: 5  },
+    ],
+  };
+
+  it("applies explicit wastage correctly", () => {
+    const result = applyTemplateToArticle(article, template);
+    // Platform: 2.0 × 100 × 1.10 = 220
+    expect(result.components[0].total_required).toBeCloseTo(220, 3);
+    // Skirt: 0.5 × 100 × 1.05 = 52.5
+    expect(result.components[1].total_required).toBeCloseTo(52.5, 3);
+  });
+
+  it("treats null wastage_percent as 0%, not 6% (bug fix: ?? 0)", () => {
+    const noWastage = {
+      components: [{ component_type: "Shell", consumption_per_unit: 2.0, wastage_percent: null }],
+    };
+    const result = applyTemplateToArticle(article, noWastage);
+    // Must be exactly 200, not 212 (which the old || 6 bug produced)
+    expect(result.components[0].total_required).toBeCloseTo(200, 3);
+  });
+
+  it("treats undefined wastage_percent as 0%", () => {
+    const noWastage = {
+      components: [{ component_type: "Shell", consumption_per_unit: 2.0 }],
+    };
+    const result = applyTemplateToArticle(article, noWastage);
+    expect(result.components[0].total_required).toBeCloseTo(200, 3);
+  });
+
+  it("treats explicit 0 wastage as 0% (not 6%)", () => {
+    const zeroWastage = {
+      components: [{ component_type: "Shell", consumption_per_unit: 2.0, wastage_percent: 0 }],
+    };
+    const result = applyTemplateToArticle(article, zeroWastage);
+    expect(result.components[0].total_required).toBeCloseTo(200, 3);
+  });
+
+  it("sums total_fabric_required across all components", () => {
+    const result = applyTemplateToArticle(article, template);
+    // 220 + 52.5 = 272.5
+    expect(result.total_fabric_required).toBeCloseTo(272.5, 3);
+  });
+
+  it("preserves article fields", () => {
+    const result = applyTemplateToArticle(article, template);
+    expect(result.id).toBe("a1");
+    expect(result.article_code).toBe("PF-MP-Q");
+    expect(result.order_quantity).toBe(100);
+  });
+
+  it("handles zero order_quantity — all totals are 0", () => {
+    const result = applyTemplateToArticle({ ...article, order_quantity: 0 }, template);
+    result.components.forEach(c => expect(c.total_required).toBe(0));
+    expect(result.total_fabric_required).toBe(0);
+  });
+
+  it("uses customComponents when provided, ignoring template", () => {
+    const custom = [{ component_type: "Custom", consumption_per_unit: 3.0, wastage_percent: 0 }];
+    const result = applyTemplateToArticle(article, template, custom);
+    expect(result.components).toHaveLength(1);
+    expect(result.components[0].component_type).toBe("Custom");
+    expect(result.components[0].total_required).toBeCloseTo(300, 3);
   });
 });
