@@ -157,7 +157,7 @@ export async function enqueueUnknownSKUs({ poId, poNumber, items, poItemIds = {}
 export function applyTemplateToArticle(article, template, customComponents = null) {
   const comps = (customComponents || template?.components || []).map(c => {
     const net = (c.consumption_per_unit || 0) * (article.order_quantity || 0);
-    return { ...c, total_required: +(net * (1 + (c.wastage_percent || 6) / 100)).toFixed(4) };
+    return { ...c, total_required: +(net * (1 + (c.wastage_percent ?? 0) / 100)).toFixed(4) };
   });
   const total_fabric_required = +comps.reduce((s, c) => s + (c.total_required || 0), 0).toFixed(4);
   return { ...article, components: comps, total_fabric_required };
