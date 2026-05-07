@@ -71,6 +71,23 @@ const TAB_CONFIG = {
     sizePlaceholder: "e.g. 56x28x27",
     defaultWastage: 2,
   },
+  // Many Bamboo / Box-Spring / Encasement SKUs ship in a printed retail
+  // box one-per-unit, branded with artwork. Source files (BOB packaging
+  // sheet) label this row variously: "Color Box", "Printed Box",
+  // "Display Box", "Outer Box", "Box Material". All route to this tab
+  // via matchesCategory in descriptionResolver.
+  "Printed Box": {
+    category: "Printed Box",
+    typeOptions: ["Color Box", "Printed Display Box", "Brown Mailer", "Window Box", "Other"],
+    typeLabel: "Box Type",
+    splitDescSize: true,
+    descLabel: "Quality / Material",
+    descPlaceholder: "e.g. 350gsm coated FBB, 4-color print, full UV",
+    sizeLabel: "Size (LxWxH cm)",
+    sizePlaceholder: "e.g. 30x22x10",
+    defaultWastage: 2,
+    showEAN: true,
+  },
   Sticker: {
     category: "Sticker",
     typeOptions: allCanonicals("sticker_type"),

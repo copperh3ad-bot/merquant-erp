@@ -98,8 +98,26 @@ describe("§5 — CATEGORY_EXCLUSIONS (overlap suppression)", () => {
 });
 
 describe("§5 — exclusion rules wired only on the listed tabs", () => {
-  it("only Label and Stiffener have exclusions configured", () => {
-    expect(Object.keys(CATEGORY_EXCLUSIONS).sort()).toEqual(["Label", "Stiffener"]);
+  it("Label, Stiffener and Carton have exclusions configured", () => {
+    // Carton was added when the Printed Box tab landed — so retail
+    // printed boxes don't double-route to the master shipping Carton.
+    expect(Object.keys(CATEGORY_EXCLUSIONS).sort()).toEqual(["Carton", "Label", "Stiffener"]);
+  });
+
+  it("Carton excludes printed-box terms (retail boxes have their own tab)", () => {
+    expect(matchesCategory("Color Box", "Carton")).toBe(false);
+    expect(matchesCategory("Display Box", "Carton")).toBe(false);
+    expect(matchesCategory("Window Box", "Carton")).toBe(false);
+    // But the master shipper (no "box" qualifier) still routes:
+    expect(matchesCategory("Master Carton", "Carton")).toBe(true);
+    expect(matchesCategory("Outer Carton", "Carton")).toBe(true);
+  });
+
+  it("Printed Box routes correctly via its own aliases", () => {
+    expect(matchesCategory("Color Box", "Printed Box")).toBe(true);
+    expect(matchesCategory("Display Box", "Printed Box")).toBe(true);
+    expect(matchesCategory("Window Box", "Printed Box")).toBe(true);
+    expect(matchesCategory("Gift Box", "Printed Box")).toBe(true);
   });
 
   it("Trim has no exclusions, so 'thread' classifies even when other categories match", () => {

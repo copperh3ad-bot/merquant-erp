@@ -40,7 +40,16 @@ const CATEGORY_ALIASES = {
   "Insert Card": ["insert card", "color paper insert", "art card", "bleach card"],
   "Polybag":     ["polybag", "poly bag", "pvc bag", "pvc", "pe bag", "opp bag", "ldpe bag", "bag material"],
   "Stiffener":   ["stiffener", "cardboard", "card stiffener", "stiffener size"],
-  "Carton":      ["carton", "carton box", "outer carton", "shipping carton", "carton size", "master carton", "shipper"],
+  // "carton box" intentionally removed — that label belongs to the
+  // Printed Box tab below (retail printed display box, not the master
+  // shipping carton). Keep the master-carton synonyms only.
+  "Carton":      ["carton", "outer carton", "shipping carton", "carton size", "master carton", "shipper"],
+  // Retail printed display box — distinct from the master shipping carton.
+  // Source files label this row variously; we accept all common phrasings.
+  "Printed Box": ["printed box", "color box", "colour box", "display box",
+                  "outer box", "gift box", "retail box", "window box",
+                  "box material", "carton box", "1pc/box", "1 pc per box",
+                  "inner box", "individual box"],
   "Sticker":     ["sticker", "barcode sticker", "size sticker", "upc sticker", "barcode label", "qr code"],
   "Zipper":      ["zipper", "zip", "zipper end piecing"],
   // Match MAS — union of legacy aliases (binding/piping/drawcord/ribbon/
@@ -81,7 +90,11 @@ CATEGORY_ALIASES["Carton"].push("secondary packaging", "secondary pack", "shippi
 // regardless of any positive alias match.
 const CATEGORY_EXCLUSIONS = {
   "Label":     ["sticker", "barcode", "qr code"],
-  "Stiffener": ["carton"],
+  "Stiffener": ["carton", "printed box", "color box", "colour box", "display box"],
+  // Carton tab is the master shipper — exclude retail printed boxes so
+  // they don't double-route. They have their own tab.
+  "Carton":    ["printed box", "color box", "colour box", "display box",
+                "gift box", "retail box", "window box", "1pc/box"],
 };
 
 // Words/phrases that indicate an element is NOT a planning category at all
