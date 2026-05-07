@@ -6,8 +6,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Save, Plus, Trash2, Upload, Download, Printer, Package, Settings, FileSpreadsheet } from "lucide-react";
 import UploadPackagingSheet from "@/components/packaging/UploadPackagingSheet";
 import { db, mfg, accessoryTemplates, supabase } from "@/api/supabaseClient";
-import { resolveDescription, findTechPackForArticle, _internals as descInternals } from "@/lib/descriptionResolver";
+import { resolveDescription, findTechPackForArticle, matchesCategory } from "@/lib/descriptionResolver";
 import { allCanonicals } from "@/lib/textileVocabulary";
+import { isMultiSizeBlob } from "@/lib/dimensionNormalizer";
 
 // ── Tab configuration ─────────────────────────────────────────────────────
 //
@@ -107,11 +108,61 @@ const numInputCls = "w-16 text-center text-xs border border-gray-300 rounded px-
 const calcInclWastage = (qty, wastage, multiplier = 1) =>
   Math.ceil((qty || 0) * (parseFloat(multiplier) || 1) * (1 + (parseFloat(wastage) || 0) / 100));
 
+// Operator-friendly carton-size formatter — strips trailing decimals.
+// Used by cartonSizeMap so a stored value of 60.000 renders as "60"
+// rather than "60.0" or "60.000". Aligned with MAS.
+const formatNum = (n) => {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return String(n ?? "");
+  return String(num % 1 === 0 ? Math.round(num) : num);
+};
+
+// A row is meaningful (counts toward saves + summary) when the user
+// has actually provided per-accessory content. Bare type alone — the
+// pre-selected dropdown default — is NOT enough: that just means the
+// row was seeded with a placeholder. Without this guard, every empty
+// row totals to (order_qty × wastage) pieces and pollutes the
+// procurement summary.
+//
+//   non-splitDescSize tabs (Labels, Insert Card, Sticker, Zipper, Trim):
+//     row counts if `quality` (the description) is present OR
+//     the user has typed a custom type that's not the default.
+//   splitDescSize tabs (Polybag, Stiffener, Carton):
+//     row counts if `description` OR `size` is present.
+//
+// Aligned with MAS.
+const rowHasContent = (cfg, row) => {
+  if (!row) return false;
+  if (cfg.splitDescSize) {
+    return !!(row.description?.trim() || row.size?.trim());
+  }
+  const qualityFilled = !!row.quality?.trim();
+  // typeOptions[0] is the placeholder default. A row with the
+  // placeholder type and no quality is unfilled.
+  const typeFilled = !!row.type?.trim() && row.type !== cfg.typeOptions[0];
+  return qualityFilled || typeFilled;
+};
+
+// Default row leaves `type` empty (placeholder shown via the dropdown
+// itself). Without this, rowHasContent had to special-case
+// typeOptions[0] which made the rule confusing — empty type now
+// genuinely means "nothing selected".
+//
+// Procurement / floor-supervisor enrichment fields (color, placement,
+// supplier) — AI extraction already pulls these from the source
+// tech-pack; the page now surfaces them so a buyer can issue a
+// complete supplier PO and a floor incharge knows where each accessory
+// goes on the article. For splitDescSize tabs (Carton/Polybag/
+// Stiffener), `color` is not rendered because their DB color column
+// already stores the dimension under a legacy convention.
 const defaultRow = (cfg) => ({
-  type: cfg.typeOptions[0],
+  type: "",
   quality: "",
   description: "",
   size: "",
+  color: "",
+  placement: "",
+  supplier: "",
   wastage_percent: cfg.defaultWastage,
   multiplier: 1,
   pc_ean_code: "",
@@ -591,7 +642,7 @@ export default function PackagingPlanning() {
       const cfg = TAB_CONFIG[tab];
       counts[tab] = existingItems.filter(
         i => i.po_id === activePo?.id
-          && descInternals.matchesCategory(i.category, cfg.category)
+          && matchesCategory(i.category, cfg.category)
           && i.quantity_required > 0
       ).length;
     });
