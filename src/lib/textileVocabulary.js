@@ -71,8 +71,20 @@ const PART_NAMES = {
   "Quilting":        ["quilting", "quilt"],
   "Pillow Compression": ["pillow compression"],
 
-  // Window treatments / specialty
-  "Window":          ["window", "window outside", "window inside"],
+  // Window treatments / specialty.
+  // All four naming variations buyers use for the same physical part
+  // (Window (Inside), Inside Window, Window (Outside), Outside Window)
+  // map to the single canonical "Window". The parenthesized forms
+  // are stripped to "Window" by partNameCanonical.canonicalisePart()
+  // before lookup; the unparenthesized "inside window" / "outside
+  // window" need to be in the alias list directly. Inside vs outside
+  // is preserved as a variant qualifier on the consumption row, NOT
+  // as a separate part — calculations and dimensions are identical.
+  "Window":          ["window", "window outside", "window inside",
+                      "outside window", "inside window"],
+
+  // Specialty geometric panels
+  "Triangle":        ["triangle", "triangle panel", "triangle piece"],
 };
 
 // ── Fabric types (canonical = construction word, e.g. "Jersey Knit",
