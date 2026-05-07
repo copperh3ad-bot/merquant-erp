@@ -94,7 +94,11 @@ export const _internals = {
   // populated below after function declarations
 };
 
-function matchesCategory(elemCat, tab) {
+// Exported alongside the _internals path. MAS exports matchesCategory
+// directly, so any caller doing `import { matchesCategory } from "@/lib/
+// descriptionResolver"` works the same in both repos. _internals stays
+// in place for tests that prefer the namespaced reference.
+export function matchesCategory(elemCat, tab) {
   if (!elemCat) return false;
   if (isBlacklisted(elemCat)) return false;
   const e = String(elemCat).toLowerCase().trim();
