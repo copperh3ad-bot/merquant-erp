@@ -32,7 +32,11 @@ const ALLOWED_ORIGINS = new Set(
 );
 function corsHeaders(req: Request) {
   const origin = req.headers.get("Origin") ?? "";
-  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  // Allow any localhost / 127.0.0.1 dev port — Vite picks 5173+ but
+  // jumps when ports are taken (parallel Claude worktrees etc.).
+  // Production origins still come from the static allowlist.
+  const isLocalhostDev = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
+  const allow = (ALLOWED_ORIGINS.has(origin) || isLocalhostDev) ? origin : "null";
   return {
     "Access-Control-Allow-Origin": allow,
     "Vary": "Origin",

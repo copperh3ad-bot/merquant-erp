@@ -73,7 +73,8 @@ const ALLOWED_ORIGINS = new Set(
 );
 function corsHeaders(req: Request) {
   const origin = req.headers.get("Origin") ?? "";
-  const allow = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+  const isLocalhostDev = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
+  const allow = (ALLOWED_ORIGINS.has(origin) || isLocalhostDev) ? origin : "null";
   return {
     "Access-Control-Allow-Origin": allow,
     "Vary": "Origin",
