@@ -28,17 +28,156 @@
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Upload, Paperclip, FileText, Image as ImageIcon, AlertTriangle, CheckCircle2, XCircle, Loader2, ExternalLink, Trash2 } from "lucide-react";
 import { dedupeMasterData } from "@/lib/masterDataDedup";
 import { detectAndAutoFix } from "@/lib/extractionAnomalyDetector";
+import * as XLSX from "xlsx";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB — matches extract-document's server limit
 const ACCEPTED_EXTS = [".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png", ".webp"];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+// Parse an XLSX file in the BROWSER and return a text rendering that
+// mirrors what the edge function's xlsxToText() does — sheets joined
+// by separator headers, blank rows skipped. Browser memory is far
+// more generous than Supabase's edge worker (256 MB cap), so doing
+// the parse client-side avoids WORKER_RESOURCE_LIMIT errors on
+// busy master-data files. The edge function accepts a pre_parsed_text
+// field and skips its own SheetJS pass when set.
+async function xlsxFileToText(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const wb = XLSX.read(buf, { type: "array" });
+  const blocks = [];
+  for (const name of wb.SheetNames) {
+    const sheet = wb.Sheets[name];
+    if (!sheet) continue;
+    const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false }).trim();
+    if (!csv) continue;
+    blocks.push(`=== Sheet: "${name}" ===\n${csv}`);
+  }
+  return blocks.join("\n\n");
+}
+
+function isXlsxFile(file) {
+  if (!file) return false;
+  const m = (file.type || "").toLowerCase();
+  if (m.includes("spreadsheet") || m.includes("excel")) return true;
+  const n = (file.name || "").toLowerCase();
+  return n.endsWith(".xlsx") || n.endsWith(".xls");
+}
+
+// Threshold (in characters of pre-parsed text) above which a master-
+// data XLSX gets auto-split per sheet. Single-shot extractions handle
+// up to ~60k chars comfortably under Supabase's 150s wall-clock cap;
+// anything larger risks WORKER_RESOURCE_LIMIT or LLM_TRUNCATED.
+// Splitting per sheet keeps each child extraction well inside the
+// budget. Tech-pack uploads are not auto-split (BOB fast path is
+// deterministic and free; whole-file context matters).
+const AUTO_SPLIT_THRESHOLD_CHARS = 60_000;
+
+function uint8ToBase64(bytes) {
+  let s = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return btoa(s);
+}
+
+// Sanitise a sheet name into a filename-safe slug. Sheet names can
+// contain spaces, slashes, parens — keep alphanumerics + hyphens.
+function slugify(s) {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 60) || "sheet";
+}
+
+// Split an XLSX into N per-sheet sub-uploads. Each sub-upload has a
+// fresh single-sheet workbook so its bytes (and SHA-256) differ from
+// every other sub-upload — required for the edge function's dedup
+// path to NOT block siblings of the same batch.
+//
+// Returns: [{ sheetName, syntheticFileName, base64, sizeBytes, preParsedText }, ...]
+async function splitXlsxBySheet(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const wb = XLSX.read(buf, { type: "array" });
+  const baseName = (file.name || "upload.xlsx").replace(/\.xlsx?$/i, "");
+  // A single accessory_consumption sheet with 200+ SKU-rows produces ~30k+
+  // output tokens from Haiku and trips EXTRACTION_LLM_TRUNCATED. We
+  // pre-emptively chunk a sheet whose CSV exceeds CHUNK_THRESHOLD chars
+  // into row-sized sub-sheets (HEADER_ROWS preserved per chunk so each
+  // sub-sheet is self-describing). Empty / small sheets pass through as one.
+  const CHUNK_THRESHOLD = 50_000;     // ~50KB CSV → ~one Haiku 32k-token completion
+  const ROWS_PER_CHUNK  = 80;          // typical master-data row → ~250 chars CSV → ~20k chars / chunk
+  const HEADER_ROWS     = 1;           // assume the first row is the header
+  const out = [];
+  for (const sheetName of wb.SheetNames) {
+    const sheet = wb.Sheets[sheetName];
+    if (!sheet) continue;
+    const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false }).trim();
+    if (!csv) continue;
+
+    // Try the single-shot path first. If the CSV is small enough, emit
+    // the sheet as one part (existing behaviour).
+    if (csv.length <= CHUNK_THRESHOLD) {
+      const subWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(subWb, sheet, sheetName);
+      const subBytes = new Uint8Array(XLSX.write(subWb, { type: "array", bookType: "xlsx" }));
+      out.push({
+        sheetName,
+        syntheticFileName: `${baseName}__${slugify(sheetName)}.xlsx`,
+        base64: uint8ToBase64(subBytes),
+        sizeBytes: subBytes.length,
+        preParsedText: `=== Sheet: "${sheetName}" ===\n${csv}`,
+      });
+      continue;
+    }
+
+    // Row-level chunking. Read the sheet as a 2D array, peel off the
+    // header rows, then slice the data rows into chunks of ROWS_PER_CHUNK.
+    const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" });
+    if (aoa.length <= HEADER_ROWS) {
+      // Header-only sheet — emit as one part (likely template).
+      const subWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(subWb, sheet, sheetName);
+      const subBytes = new Uint8Array(XLSX.write(subWb, { type: "array", bookType: "xlsx" }));
+      out.push({
+        sheetName,
+        syntheticFileName: `${baseName}__${slugify(sheetName)}.xlsx`,
+        base64: uint8ToBase64(subBytes),
+        sizeBytes: subBytes.length,
+        preParsedText: `=== Sheet: "${sheetName}" ===\n${csv}`,
+      });
+      continue;
+    }
+    const header = aoa.slice(0, HEADER_ROWS);
+    const body   = aoa.slice(HEADER_ROWS);
+    const totalChunks = Math.ceil(body.length / ROWS_PER_CHUNK);
+    for (let i = 0; i < totalChunks; i++) {
+      const slice = body.slice(i * ROWS_PER_CHUNK, (i + 1) * ROWS_PER_CHUNK);
+      const chunkAoa = [...header, ...slice];
+      const chunkSheet = XLSX.utils.aoa_to_sheet(chunkAoa);
+      const chunkCsv = XLSX.utils.sheet_to_csv(chunkSheet, { blankrows: false }).trim();
+      const subWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(subWb, chunkSheet, sheetName);
+      const subBytes = new Uint8Array(XLSX.write(subWb, { type: "array", bookType: "xlsx" }));
+      out.push({
+        sheetName: `${sheetName} (part ${i + 1}/${totalChunks})`,
+        syntheticFileName: `${baseName}__${slugify(sheetName)}_part${i + 1}of${totalChunks}.xlsx`,
+        base64: uint8ToBase64(subBytes),
+        sizeBytes: subBytes.length,
+        preParsedText: `=== Sheet: "${sheetName}" (rows ${i * ROWS_PER_CHUNK + 1}–${i * ROWS_PER_CHUNK + slice.length} of ${body.length}) ===\n${chunkCsv}`,
+      });
+    }
+  }
+  return out;
+}
 
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -153,6 +292,17 @@ function ExtractionValidationCard({ extraction, onApply, onReject, onOpenReview,
 
   const kindLabel = kind === "master_data" ? "Master data" : "Tech pack";
 
+  // Surface validation state so the user knows when to use Edit vs Apply.
+  // hasErrors is authoritative — it mirrors what the apply RPC actually checks
+  // (validation_status='failed'). Counting issue records by severity would
+  // disable the button for older extractions whose issues were emitted as
+  // 'error' before the validator relaxed exact-duplicate handling to 'warn'.
+  const issues       = Array.isArray(extraction.validation_issues) ? extraction.validation_issues : [];
+  const errorCount   = issues.filter((i) => i?.severity === "error").length;
+  const warningCount = issues.filter((i) => i?.severity === "warn").length;
+  const hasErrors    = extraction.validation_status === "failed";
+  const hasWarnings  = !hasErrors && (warningCount > 0 || extraction.validation_status === "warned");
+
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden">
       <div className="px-4 py-3 bg-muted/30 border-b border-border flex items-center justify-between">
@@ -197,18 +347,37 @@ function ExtractionValidationCard({ extraction, onApply, onReject, onOpenReview,
         </div>
       )}
 
+      {(hasWarnings || hasErrors) && (
+        <div className={`px-4 py-2 border-t text-xs ${hasErrors ? "bg-rose-50 border-rose-200 text-rose-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+          <AlertTriangle className="w-3 h-3 inline mr-1" />
+          {hasErrors
+            ? <><strong>{errorCount} error{errorCount !== 1 ? "s" : ""}</strong>{warningCount ? ` and ${warningCount} warning${warningCount !== 1 ? "s" : ""}` : ""} — fix in detail before applying.</>
+            : <><strong>{warningCount} warning{warningCount !== 1 ? "s" : ""}</strong> — open in detail to edit rows or accept and apply as-is.</>}
+        </div>
+      )}
+
       <div className="px-4 py-3 bg-muted/20 border-t border-border flex items-center justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={onReject} disabled={busy}>
           <XCircle className="w-3.5 h-3.5 mr-1" /> Reject
         </Button>
-        <Button variant="outline" size="sm" onClick={onOpenReview} disabled={busy}>
-          <ExternalLink className="w-3.5 h-3.5 mr-1" /> Review in detail
+        {/* When there are warnings or errors, promote "Edit in detail" to a
+            primary-styled button so the user sees the right next step. */}
+        <Button
+          variant={hasWarnings || hasErrors ? "default" : "outline"}
+          size="sm"
+          onClick={onOpenReview}
+          disabled={busy}
+          className={hasErrors ? "bg-rose-600 hover:bg-rose-700 text-white gap-1" : "gap-1"}
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          {hasErrors ? "Fix errors in detail" : hasWarnings ? "Edit in detail" : "Review in detail"}
         </Button>
         <Button
           size="sm"
           onClick={onApply}
-          disabled={busy || sectionCount === 0}
+          disabled={busy || sectionCount === 0 || hasErrors}
           className="gap-1"
+          title={hasErrors ? "Fix errors first — apply is blocked when there are validation errors." : undefined}
         >
           {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
           Validate & Apply
@@ -284,6 +453,7 @@ function ProgressBubble({ fileName, fileSize, phase, percent, startedAt }) {
 
   const phaseLabel = {
     reading: "Reading file from disk",
+    splitting: "Splitting into per-sheet chunks",
     uploading: "Uploading to AI",
     parsing: "AI parsing (this can take 10–30s)",
     done: "Done",
@@ -376,6 +546,23 @@ export default function FileFeeder() {
   // Selected file kind for the next upload. "auto" lets us guess from the
   // filename; otherwise pin the kind explicitly.
   const [kindOverride, setKindOverride] = useState("auto");
+  // Selected customer for upcoming uploads. Forwarded as `customer_name` to
+  // extract-document, which uses it to look up a per-buyer prompt overlay
+  // (table customer_extraction_overlays). "" = no overlay (generic prompt).
+  const [uploadCustomer, setUploadCustomer] = useState("");
+  // Distinct customer names (from purchase_orders) to populate the picker.
+  const { data: customerOptions = [] } = useQuery({
+    queryKey: ["distinctCustomerNames"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("purchase_orders")
+        .select("customer_name")
+        .not("customer_name", "is", null);
+      if (error) throw error;
+      return [...new Set((data || []).map(r => r.customer_name).filter(Boolean))].sort();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
 
   // Scroll to bottom on every new message.
   useEffect(() => {
@@ -502,14 +689,140 @@ export default function FileFeeder() {
           setPhase("reading", 10);
           const b64 = await fileToBase64(file);
           console.log("[FileFeeder] base64 length:", b64.length);
+
+          // Pre-parse XLSX in the browser so the edge function doesn't
+          // have to run SheetJS on its own. Without this, busy master-
+          // data files trip Supabase's WORKER_RESOURCE_LIMIT during
+          // the SheetJS pass + CSV expansion. The edge function checks
+          // for `pre_parsed_text` and skips its xlsxToText call when
+          // present.
+          let preParsedText = null;
+          if (isXlsxFile(file)) {
+            try {
+              preParsedText = await xlsxFileToText(file);
+              console.log("[FileFeeder] pre-parsed XLSX, text length:", preParsedText.length);
+            } catch (e) {
+              console.warn("[FileFeeder] client-side XLSX parse failed; falling back to server-side:", e?.message || e);
+            }
+          }
           setPhase("reading", 100);
 
-          // Phase 2: hand off to the edge function (network upload).
-          // supabase.functions.invoke doesn't expose upload progress, but
-          // the indeterminate pulse + phase label communicates the handoff.
-          setPhase("uploading");
           const kind = kindOverride === "auto" ? guessKindFromFilename(file.name) : kindOverride;
           console.log("[FileFeeder] kind:", kind, "(override:", kindOverride, ")");
+
+          // ── AUTO-SPLIT (master-data only) ────────────────────────────
+          // Files that would push a single extract-document call past
+          // Supabase's 150s wall-clock cap get split per sheet client-
+          // side. Each chunk runs as its own extract-document call;
+          // they share a batch_id so the Review queue can group them.
+          // Tech-packs aren't split — BOB fast path needs whole-file
+          // context anyway.
+          const shouldAutoSplit =
+            kind === "master_data" &&
+            isXlsxFile(file) &&
+            preParsedText !== null &&
+            preParsedText.length > AUTO_SPLIT_THRESHOLD_CHARS;
+
+          if (shouldAutoSplit) {
+            setPhase("splitting");
+            let parts;
+            try {
+              parts = await splitXlsxBySheet(file);
+            } catch (e) {
+              console.warn("[FileFeeder] auto-split failed; falling back to single-shot:", e?.message || e);
+              parts = null;
+            }
+            if (parts && parts.length > 1) {
+              const batchId = (typeof crypto !== "undefined" && crypto.randomUUID)
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              console.log(`[FileFeeder] auto-split into ${parts.length} parts, batch_id: ${batchId}`);
+
+              setPhase("uploading");
+              const promises = parts.map(p =>
+                supabase.functions.invoke("extract-document", {
+                  body: {
+                    kind,
+                    file_name: p.syntheticFileName,
+                    file_mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    file_size_bytes: p.sizeBytes,
+                    file_base64: p.base64,
+                    pre_parsed_text: p.preParsedText,
+                    batch_id: batchId,
+                    ...(uploadCustomer ? { customer_name: uploadCustomer } : {}),
+                  },
+                }).then(async ({ data, error }) => {
+                  // Recover non-2xx body off error.context, mirroring single-shot path
+                  if (error && error.context && typeof error.context.json === "function") {
+                    try {
+                      const recovered = await error.context.json();
+                      if (recovered && typeof recovered === "object") return { sheetName: p.sheetName, data: recovered, error: null };
+                    } catch { /* fall through */ }
+                  }
+                  return { sheetName: p.sheetName, data, error };
+                })
+              );
+
+              setPhase("parsing");
+              const results = await Promise.allSettled(promises);
+              setPhase("done", 100);
+
+              const ok = [];
+              const dup = [];
+              const failed = [];
+              for (const r of results) {
+                if (r.status !== "fulfilled") {
+                  failed.push({ sheetName: "?", reason: String(r.reason?.message || r.reason || "rejected") });
+                  continue;
+                }
+                const { sheetName, data, error } = r.value;
+                if (error) { failed.push({ sheetName, reason: error.message || "error" }); continue; }
+                if (!data) { failed.push({ sheetName, reason: "empty response" }); continue; }
+                if (data?.ok) { ok.push({ sheetName, extraction_id: data.extraction_id }); continue; }
+                if (data?.code === "EXTRACTION_DUPLICATE") {
+                  dup.push({ sheetName, existing_id: data?.dev_detail?.existing_extraction_id });
+                  continue;
+                }
+                failed.push({ sheetName, reason: data?.user_message || data?.code || "failed" });
+              }
+
+              append({
+                type: "assistant",
+                content: (
+                  <div>
+                    <p className="text-xs mb-2">
+                      <Sparkles className="w-3 h-3 inline mr-1" />
+                      Split <strong>{file.name}</strong> into <strong>{parts.length}</strong> parts (one per sheet) so each fits inside Supabase's processing limits.
+                    </p>
+                    <div className="rounded-md bg-muted/40 p-2 text-[11px] space-y-0.5">
+                      {ok.length > 0 && <div className="text-emerald-700"><CheckCircle2 className="w-3 h-3 inline mr-1" />{ok.length} extracted: {ok.map(x => x.sheetName).join(", ")}</div>}
+                      {dup.length > 0 && <div className="text-amber-700"><AlertTriangle className="w-3 h-3 inline mr-1" />{dup.length} already in queue: {dup.map(x => x.sheetName).join(", ")}</div>}
+                      {failed.length > 0 && (
+                        <div className="text-rose-700">
+                          <XCircle className="w-3 h-3 inline mr-1" />{failed.length} failed:
+                          <ul className="list-disc ml-5 mt-1">
+                            {failed.map((f, i) => <li key={i}><strong>{f.sheetName}</strong>: {f.reason}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-2">
+                      <Button size="sm" variant="outline" className="text-xs gap-1"
+                        onClick={() => navigate(`/AIExtractionReview`)}>
+                        <ExternalLink className="w-3 h-3" /> Review batch in queue
+                      </Button>
+                    </div>
+                  </div>
+                ),
+              });
+              continue;
+            }
+            // splitXlsxBySheet returned 0 or 1 parts → fall through to single-shot
+            console.log("[FileFeeder] auto-split skipped (one or zero non-empty sheets); using single-shot");
+          }
+
+          // Phase 2 (single-shot): hand off to the edge function.
+          setPhase("uploading");
           const invokePromise = supabase.functions.invoke("extract-document", {
             body: {
               kind,
@@ -517,6 +830,8 @@ export default function FileFeeder() {
               file_mime: file.type || "application/octet-stream",
               file_size_bytes: file.size,
               file_base64: b64,
+              ...(preParsedText !== null ? { pre_parsed_text: preParsedText } : {}),
+              ...(uploadCustomer ? { customer_name: uploadCustomer } : {}),
             },
           });
           // After ~1.5s, flip the label from "uploading" to "parsing" so
@@ -738,7 +1053,7 @@ export default function FileFeeder() {
 
       setBusy(false);
     },
-    [append, applyingId, navigate, kindOverride, updateMessage],
+    [append, applyingId, navigate, kindOverride, uploadCustomer, updateMessage],
   );
 
   async function fetchExtraction(id) {
@@ -839,7 +1154,7 @@ export default function FileFeeder() {
     if (Array.isArray(extracted?.fabric_consumption) && extracted.fabric_consumption.length)
       f.fabric_consumption = extracted.fabric_consumption.map((r) => ({ item_code: r.item_code, component_type: r.component_type, color: r.color ?? "" }));
     if (Array.isArray(extracted?.accessory_consumption) && extracted.accessory_consumption.length)
-      f.accessory_consumption = extracted.accessory_consumption.map((r) => ({ item_code: r.item_code, category: r.category, material: r.material ?? "" }));
+      f.accessory_consumption = extracted.accessory_consumption.map((r) => ({ item_code: r.item_code, category: r.category, material: r.material ?? "", item_name: r.item_name ?? "" }));
     if (Array.isArray(extracted?.carton_master) && extracted.carton_master.length)
       f.carton_master = extracted.carton_master.map((r) => r.item_code).filter(Boolean);
     if (Array.isArray(extracted?.price_list) && extracted.price_list.length)
@@ -945,6 +1260,21 @@ export default function FileFeeder() {
               </button>
             ))}
           </div>
+          {customerOptions.length > 0 && (
+            <>
+              <span className="text-xs text-muted-foreground ml-2">Buyer:</span>
+              <select
+                value={uploadCustomer}
+                onChange={(e) => setUploadCustomer(e.target.value)}
+                disabled={busy}
+                className="px-2 py-1 text-xs border border-border rounded-md bg-card max-w-[140px]"
+                title="If this buyer has a saved extraction overlay (custom rules in customer_extraction_overlays), it will be appended to the AI prompt for this upload."
+              >
+                <option value="">— generic prompt —</option>
+                {customerOptions.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </>
+          )}
           <Button variant="outline" size="sm" onClick={() => navigate("/AIExtractionReview")} className="gap-1 ml-1">
             <ExternalLink className="w-3.5 h-3.5" /> All extractions
           </Button>
