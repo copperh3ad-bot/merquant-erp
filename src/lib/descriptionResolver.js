@@ -202,6 +202,7 @@ function pickLabelType(elem, cfg) {
     elem?.type,
     elem?.description,
     elem?.material,
+    elem?.value, // BOB packaging-sheet shape (defence-in-depth — labels rarely come this way, but guarding doesn't cost anything)
   ]
     .filter(Boolean)
     .map((s) => String(s).toLowerCase())
@@ -256,6 +257,7 @@ function pickTypeFromDescription(elem, cfg) {
   const haystack = [
     elem?.description,
     elem?.material,
+    elem?.value, // BOB packaging-sheet items (Printed Box / Stiffener / Polybag) carry their material spec text in `value`
     elem?.quality,
     elem?.type,
     elem?.trim_type,
@@ -571,14 +573,16 @@ function dedupeBy(elems, keyFn) {
 const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 // Trims/Accessories: same description text means same physical item, even
 // if `trim_type` differs ("Stiffener" + "Stiffener (Cardboard)" both
-// describe the same cardboard insert).
-const trimAccessoryKey = (e) => norm(e.description || e.material);
+// describe the same cardboard insert). Includes `value` so BOB
+// packaging-sheet items (which only carry their content there) don't
+// all dedup to the same empty key and silently collapse.
+const trimAccessoryKey = (e) => norm(e.description || e.material || e.value);
 // Labels: section/label_type matters because two labels can have identical
 // description ("3M non woven material...") but cover different sections
 // ("Law tag/Care" vs "Size label"). Keying on description + section keeps
 // both in the result.
 const labelKey = (e) => {
-  const desc = norm(e.description || e.material);
+  const desc = norm(e.description || e.material || e.value);
   const section = norm(e.section || e.label_type || e.type);
   if (!desc && !section) return "";
   return `${desc}||${section}`;
@@ -775,7 +779,9 @@ export function resolveDescription({
   // nothing).
   if ((cfg.category === "Sticker" || cfg.category === "Insert Card") && merged.length > 1) {
     const hasPhysicalDims = (e) => {
-      const text = String(e.description || e.material || "").toLowerCase();
+      // Include `value` so BOB packaging-sheet items where the dim sits
+      // in `value` (e.g. "Color box size" entries) get detected.
+      const text = String(e.description || e.material || e.value || "").toLowerCase();
       return /\d+\s*(mm|cm|in|inch|")\b/.test(text)
           || /\d+\s*x\s*\d+/.test(text);  // matches 76mmx23mm, 4x7cm, 3X5
     };
