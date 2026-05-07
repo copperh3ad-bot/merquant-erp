@@ -63,8 +63,6 @@ export default function FabricWorking() {
   // display time. See @/lib/unitSystem for the conversion math.
   // NULL on the row → fallback to DEFAULT_UNIT_SYSTEM (metric) so old
   // POs keep rendering exactly as before.
-  // NB: must be declared AFTER activePo — referencing activePo above its
-  // useMemo would TDZ-throw on every render.
   const unitSystem = activePo?.unit_system || DEFAULT_UNIT_SYSTEM;
   const widthLabel = widthUnitLabel(unitSystem);
   const handleUnitSystemChange = async (next) => {
@@ -112,44 +110,51 @@ export default function FabricWorking() {
       const byCodeSizePart = new Map();
 
       for (const tp of data || []) {
-        const chart = tp?.extracted_measurements?.size_chart;
-        if (!chart || typeof chart !== "object") continue;
-
         if (!byCodeSize.has(tp.article_code)) byCodeSize.set(tp.article_code, new Map());
         if (!byCodeSizePart.has(tp.article_code)) byCodeSizePart.set(tp.article_code, new Map());
         const sizeMap = byCodeSize.get(tp.article_code);
         const sizePartMap = byCodeSizePart.get(tp.article_code);
 
-        for (const [sizeRaw, row] of Object.entries(chart)) {
-          const dim = row?.product_dimensions;
-          const parts = row?.part_dimensions;
-          const sizeKey = normalizeSizeKey(sizeRaw);
-          const itemCode = row?.item_code;
+        // Family tech packs ship with a `size_chart` map (one entry per
+        // size). When present, build the size-keyed indexes from it.
+        const chart = tp?.extracted_measurements?.size_chart;
+        if (chart && typeof chart === "object") {
+          for (const [sizeRaw, row] of Object.entries(chart)) {
+            const dim = row?.product_dimensions;
+            const parts = row?.part_dimensions;
+            const sizeKey = normalizeSizeKey(sizeRaw);
+            const itemCode = row?.item_code;
 
-          if (dim) {
-            // First-seen wins (results are ordered by created_at DESC so most
-            // recent tech pack is authoritative).
-            if (!sizeMap.has(sizeKey)) sizeMap.set(sizeKey, String(dim));
-            if (itemCode && !byItemCode.has(itemCode)) byItemCode.set(itemCode, String(dim));
-          }
+            if (dim) {
+              // First-seen wins (results are ordered by created_at DESC so most
+              // recent tech pack is authoritative).
+              if (!sizeMap.has(sizeKey)) sizeMap.set(sizeKey, String(dim));
+              if (itemCode && !byItemCode.has(itemCode)) byItemCode.set(itemCode, String(dim));
+            }
 
-          if (parts && typeof parts === "object") {
-            if (!sizePartMap.has(sizeKey)) sizePartMap.set(sizeKey, new Map());
-            const partMap = sizePartMap.get(sizeKey);
-            for (const [partName, partDim] of Object.entries(parts)) {
-              if (!partDim) continue;
-              const partKey = normalizeSizeKey(partName);
-              if (!partMap.has(partKey)) partMap.set(partKey, String(partDim));
-              if (itemCode) {
-                if (!byItemPart.has(itemCode)) byItemPart.set(itemCode, new Map());
-                const ipm = byItemPart.get(itemCode);
-                if (!ipm.has(partKey)) ipm.set(partKey, String(partDim));
+            if (parts && typeof parts === "object") {
+              if (!sizePartMap.has(sizeKey)) sizePartMap.set(sizeKey, new Map());
+              const partMap = sizePartMap.get(sizeKey);
+              for (const [partName, partDim] of Object.entries(parts)) {
+                if (!partDim) continue;
+                const partKey = normalizeSizeKey(partName);
+                if (!partMap.has(partKey)) partMap.set(partKey, String(partDim));
+                if (itemCode) {
+                  if (!byItemPart.has(itemCode)) byItemPart.set(itemCode, new Map());
+                  const ipm = byItemPart.get(itemCode);
+                  if (!ipm.has(partKey)) ipm.set(partKey, String(partDim));
+                }
               }
             }
           }
         }
 
-        // Fallback: some older tech packs only populate a single this_sku row.
+        // Fallback (and the common case for AI-extracted tech packs):
+        // tech_packs rows store the single SKU's spec under `this_sku`.
+        // Without this branch every per-SKU dim is lost and the Fabric
+        // Working sheet shows an empty "Dimensions" column.
+        // Earlier this code had `continue` above when size_chart was
+        // missing, which unintentionally skipped this fallback entirely.
         const only = tp?.extracted_measurements?.this_sku;
         if (only?.product_dimensions) {
           if (only.item_code && !byItemCode.has(only.item_code)) {
@@ -183,6 +188,51 @@ export default function FabricWorking() {
   // Both partKey and the map keys arrive here already lowercase-normalised
   // by normalizeSizeKey; we pass them through canonicalPartName which is
   // case-insensitive.
+  // The AI extraction often emits a single combined product_dimensions
+  // string for sheet-set SKUs like:
+  //
+  //   '88"X 99" (Flat Sheet) / 54x74+17" (Fitted Sheet) / 20"W x 30"L x2 (Pillow Case)'
+  //
+  // Per-part lookups (byItemPart / byCodeSizePart) miss this because
+  // the data isn't structured per part — it's one blob. This parser
+  // splits the blob into a Map<canonicalPart, dimSlice> by matching
+  // `<dim> (<partLabel>)` segments. Returns null when the string
+  // doesn't look structured (no parenthesised part labels), in which
+  // case the caller falls back to the unsliced string.
+  //
+  // Used at display time so non-set products (single-component, no
+  // parens) keep their master dimension intact.
+  const splitCombinedDims = (combined) => {
+    if (!combined || typeof combined !== "string") return null;
+    // Real tech-packs separate per-part dim entries with `;`, `,`, `/`, `|`,
+    // or em/en-dashes (Walmart pipe-delimited; some buyers use unicode dashes
+    // copy-pasted from Word). The character class for both the dim body and
+    // the trailing separator covers all of them.
+    const re = /([^/;,|–—]+?)\s*\(([^)]+)\)\s*(?:[/;,|–—]|$)/g;
+    const out = new Map();
+    let m;
+    while ((m = re.exec(combined)) !== null) {
+      const dim = m[1].trim();
+      const partLabel = m[2].trim();
+      if (!dim || !partLabel) continue;
+      const canonKey = canonicalPartName(partLabel).toLowerCase();
+      if (!canonKey) continue;
+      if (!out.has(canonKey)) out.set(canonKey, dim);
+    }
+    return out.size > 0 ? out : null;
+  };
+
+  // Pull the dim for a specific part out of a combined string. Returns
+  // null if the string isn't structured per-part OR the requested part
+  // isn't named in it.
+  const sliceCombinedForPart = (combined, partKey) => {
+    if (!partKey) return null;
+    const map = splitCombinedDims(combined);
+    if (!map) return null;
+    const requestedCanonical = canonicalPartName(partKey).toLowerCase();
+    return map.get(requestedCanonical) ?? null;
+  };
+
   const resolvePartFuzzy = (partMap, partKey) => {
     if (!partMap || !partKey) return null;
     const direct = partMap.get(partKey);
@@ -257,7 +307,20 @@ export default function FabricWorking() {
     const isStructuredByItemPart =
       partKey && article?.article_code && dimsIndex.byItemPart?.has(article.article_code);
     if (!isStructuredByItemPart && article?.article_code && dimsIndex.byItemCode.has(article.article_code)) {
-      return dimsIndex.byItemCode.get(article.article_code);
+      const combined = dimsIndex.byItemCode.get(article.article_code);
+      // If a specific part was requested AND the combined string has
+      // explicit per-part labels (sheet sets), slice out just that
+      // part's dim. Otherwise return the combined string as the
+      // "master dimension" (single-component products like Mattress
+      // Protectors don't have parenthesised parts).
+      if (partKey) {
+        const sliced = sliceCombinedForPart(combined, partKey);
+        if (sliced) return sliced;
+        // The string IS structured per-part but doesn't name THIS
+        // part — leave blank rather than show a wrong combined dim.
+        if (splitCombinedDims(combined)) return "";
+      }
+      return combined;
     }
 
     // Layer 3a: per-part (article_code, size) match.
@@ -274,12 +337,21 @@ export default function FabricWorking() {
 
     // Layer 3b: legacy (article_code, size) match.
     // Same gate as 2b — if a per-part map exists for this (article, size)
-    // pair, don't fall through to the whole-SKU dimension.
+    // pair, don't fall through to the whole-SKU dimension. And same
+    // per-part slicing trick as 2b: if the combined string is
+    // sheet-set-shaped, slice the requested part out.
     if (!isStructuredByCodeSize && article?.article_code && sizeKey) {
       const sizeMap = dimsIndex.byCodeSize.get(article.article_code);
       if (sizeMap) {
-        const hit = sizeMap.get(sizeKey);
-        if (hit) return hit;
+        const combined = sizeMap.get(sizeKey);
+        if (combined) {
+          if (partKey) {
+            const sliced = sliceCombinedForPart(combined, partKey);
+            if (sliced) return sliced;
+            if (splitCombinedDims(combined)) return "";
+          }
+          return combined;
+        }
       }
     }
 
