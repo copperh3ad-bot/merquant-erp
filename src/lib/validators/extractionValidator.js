@@ -64,6 +64,39 @@ function requireFieldAt(rows, sectionPath, field, severity) {
   return out;
 }
 
+// Compare two rows for "exact" equality across the data-bearing fields the
+// dedup pass uses. If true, the duplicate is harmless — masterDataDedup will
+// silently collapse them — so we downgrade to a warning instead of failing
+// the whole extraction.
+function rowsExactlyEqual(a, b) {
+  const numFields = ['consumption_per_unit', 'wastage_percent', 'gsm', 'width_cm',
+                     'units_per_carton', 'carton_length_cm', 'carton_width_cm', 'carton_height_cm',
+                     'price_usd', 'daily_capacity'];
+  // Includes article-level attributes (size, brand, product_type) so two
+  // articles sharing item_code but differing in size are correctly flagged
+  // as a key-only duplicate (ERROR), not an exact duplicate (WARN).
+  const txtFields = ['fabric_type', 'item_name', 'size_spec', 'placement', 'color', 'supplier',
+                     'size', 'brand', 'product_type', 'category', 'component_type', 'material',
+                     'description', 'name', 'line_type'];
+  for (const f of numFields) {
+    const av = a?.[f], bv = b?.[f];
+    const an = av == null || av === '' ? null : Number(av);
+    const bn = bv == null || bv === '' ? null : Number(bv);
+    if (an == null && bn == null) continue;
+    if (an == null || bn == null) return false;
+    if (!Number.isFinite(an) || !Number.isFinite(bn)) return false;
+    if (Math.abs(an - bn) > 1e-6) return false;
+  }
+  for (const f of txtFields) {
+    // Case-insensitive — Haiku capitalisation drift shouldn't flip a row
+    // from "exact dup" to "miscategorised".
+    const av = (a?.[f] ?? '').toString().trim().toLowerCase();
+    const bv = (b?.[f] ?? '').toString().trim().toLowerCase();
+    if (av !== bv) return false;
+  }
+  return true;
+}
+
 function findDuplicatesAt(rows, sectionPath, keyCols) {
   const out = [];
   const seen = new Map(); // composite key → first row index
@@ -71,12 +104,18 @@ function findDuplicatesAt(rows, sectionPath, keyCols) {
     const key = keyCols.map((c) => normKey(r[c])).join('||');
     if (!key.replace(/\|/g, '')) return;
     if (seen.has(key)) {
+      const firstIdx = seen.get(key);
+      const exact = rowsExactlyEqual(rows[firstIdx], r);
       out.push(issue(
-        ERROR,
-        'DUPLICATE_KEY',
+        // Exact duplicates are auto-collapsed by masterDataDedup before
+        // apply, so they're not a blocking error — just a warning.
+        exact ? WARN : ERROR,
+        exact ? 'DUPLICATE_KEY_EXACT' : 'DUPLICATE_KEY',
         `${sectionPath}[${i}]`,
-        `Duplicate ${keyCols.join('+')}: ${keyCols.map((c) => `${c}="${r[c] ?? ''}"`).join(', ')} — same as ${sectionPath}[${seen.get(key)}]`,
-        `Each row in ${sectionPath} must have a unique combination of (${keyCols.join(', ')}).`,
+        `${exact ? 'Exact duplicate' : 'Duplicate'} ${keyCols.join('+')}: ${keyCols.map((c) => `${c}="${r[c] ?? ''}"`).join(', ')} — same as ${sectionPath}[${firstIdx}]${exact ? ' (will be auto-collapsed on apply)' : ''}`,
+        exact
+          ? 'No action needed — the system will silently collapse exact-content duplicates.'
+          : `Each row in ${sectionPath} must have a unique combination of (${keyCols.join(', ')}). Different consumption/wastage values across rows with the same key suggests an AI miscategorisation.`,
       ));
     } else {
       seen.set(key, i);
@@ -215,7 +254,7 @@ function validateMdAccessoryConsumption(rows) {
   const out = [];
   out.push(...requireFieldAt(rows, 'accessory_consumption', 'item_code', ERROR));
   out.push(...requireFieldAt(rows, 'accessory_consumption', 'category', ERROR));
-  out.push(...findDuplicatesAt(rows, 'accessory_consumption', ['item_code', 'category', 'material']));
+  out.push(...findDuplicatesAt(rows, 'accessory_consumption', ['item_code', 'category', 'material', 'item_name']));
   out.push(...requireNumericRangeAt(rows, 'accessory_consumption', 'consumption_per_unit', 0.001, 100, WARN));
   return out;
 }

@@ -36,9 +36,22 @@ describe('validateExtraction (tech_pack)', () => {
     expect(miss.severity).toBe('error');
   });
 
-  it('3. duplicate skus[].item_code -> DUPLICATE_KEY error', () => {
+  it('3a. exact-duplicate skus[].item_code -> DUPLICATE_KEY_EXACT warn', () => {
+    // Two identical SKU rows — the dedup pass will silently collapse
+    // them, so the validator downgrades to a warning rather than
+    // failing the whole extraction. Aligned with MAS.
     const r = validateExtraction('tech_pack', validTechPack({
       skus: [validSku({ item_code: 'X1' }), validSku({ item_code: 'X1' })],
+    }));
+    expect(r.status).toBe('warned');
+    expect(r.issues.find((i) => i.code === 'DUPLICATE_KEY_EXACT' && i.path === 'skus[1]')).toBeTruthy();
+  });
+
+  it('3b. key-only duplicate skus[].item_code (different brand) -> DUPLICATE_KEY error', () => {
+    // Same item_code but different brand → AI miscategorisation, hard
+    // failure. Validator must NOT downgrade these.
+    const r = validateExtraction('tech_pack', validTechPack({
+      skus: [validSku({ item_code: 'X1', brand: 'Bob' }), validSku({ item_code: 'X1', brand: 'Acme' })],
     }));
     expect(r.status).toBe('failed');
     expect(r.issues.find((i) => i.code === 'DUPLICATE_KEY' && i.path === 'skus[1]')).toBeTruthy();
