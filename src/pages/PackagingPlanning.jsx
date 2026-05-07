@@ -234,6 +234,17 @@ function ArticleBlock({ art, cfg, rows, onChange, templates = [], cartonSize = "
               )}
               <th className="border border-gray-300 px-2 py-1.5 text-center w-24">Wastage %</th>
               <th className="border border-gray-300 px-2 py-1.5 text-center w-28" style={{ backgroundColor: "#FFF2CC" }}>Incl. Wastage Qty</th>
+              {/* Color column — only on tabs where the DB color
+                  column isn't being used for the dimension under the
+                  legacy convention. For splitDescSize tabs (Carton /
+                  Polybag / Stiffener) the size column already plays
+                  that role; their actual colour isn't currently
+                  captured. */}
+              {!cfg.splitDescSize && (
+                <th className="border border-gray-300 px-2 py-1.5 text-left w-36" style={{ backgroundColor: "#FCE4EC" }}>Color</th>
+              )}
+              <th className="border border-gray-300 px-2 py-1.5 text-left w-44" style={{ backgroundColor: "#E1F5FE" }}>Placement</th>
+              <th className="border border-gray-300 px-2 py-1.5 text-left w-32" style={{ backgroundColor: "#FFF8E1" }}>Supplier</th>
               {cfg.showEAN && (
                 <>
                   <th className="border border-gray-300 px-2 py-1.5 text-left w-36" style={{ backgroundColor: "#E8F5E9" }}>PC EAN Code</th>
@@ -288,6 +299,23 @@ function ArticleBlock({ art, cfg, rows, onChange, templates = [], cartonSize = "
                 </td>
                 <td className="border border-gray-300 px-2 py-1 text-center font-bold" style={{ backgroundColor: "#FFF2CC" }}>
                   {calcInclWastage(qty, row.wastage_percent, row.multiplier || 1).toLocaleString()}
+                </td>
+                {!cfg.splitDescSize && (
+                  <td className="border border-gray-300 px-1.5 py-1" style={{ backgroundColor: "#FCE4EC" }}>
+                    <input className={inputCls} placeholder="e.g. White / PMS 5255C"
+                      value={row.color || ""}
+                      onChange={e => update(idx, "color", e.target.value)} />
+                  </td>
+                )}
+                <td className="border border-gray-300 px-1.5 py-1" style={{ backgroundColor: "#E1F5FE" }}>
+                  <input className={inputCls} placeholder="e.g. Inside neck seam"
+                    value={row.placement || ""}
+                    onChange={e => update(idx, "placement", e.target.value)} />
+                </td>
+                <td className="border border-gray-300 px-1.5 py-1" style={{ backgroundColor: "#FFF8E1" }}>
+                  <input className={inputCls} placeholder="Supplier name"
+                    value={row.supplier || ""}
+                    onChange={e => update(idx, "supplier", e.target.value)} />
                 </td>
                 {cfg.showEAN && (
                   <>
@@ -509,12 +537,12 @@ export default function PackagingPlanning() {
     for (const art of poArticles) {
       const rows = allRows[tab]?.[art.id] || [];
       for (const row of rows) {
-        const hasContent = cfg.splitDescSize ? (row.description || row.size) : (row.type || row.quality);
-        // Per docs/architecture.md §7 — an emptied row that came from
-        // the DB (existing_id present, no content now) should be
-        // DELETED. Without this branch, clearing a row's fields in
-        // the UI silently leaves the old DB row in place.
-        if (!hasContent) {
+        // rowHasContent treats placeholder-default + empty quality as
+        // empty (matches MAS). Per docs/architecture.md §7, an emptied
+        // row that came from the DB (existing_id present, no content
+        // now) is DELETED — without this branch, clearing a row's
+        // fields in the UI silently leaves the old DB row in place.
+        if (!rowHasContent(cfg, row)) {
           if (row.existing_id) {
             ops.push(supabase.from("accessory_items").delete().eq("id", row.existing_id));
           }
@@ -531,7 +559,12 @@ export default function PackagingPlanning() {
           size_spec: cfg.category === "Insert Card"
             ? (row.type || "")
             : (cfg.splitDescSize ? (row.description || "") : (row.quality || "")),
-          color: cfg.splitDescSize ? (row.size || "") : "",
+          // For splitDescSize tabs, DB color holds the dimension under
+          // a legacy convention. For all other tabs it holds the
+          // actual color (now persisted from row.color).
+          color: cfg.splitDescSize ? (row.size || "") : (row.color || ""),
+          placement: row.placement || "",
+          supplier:  row.supplier  || "",
           quantity_required: calcInclWastage(qty, row.wastage_percent, row.multiplier || 1),
           wastage_percent: parseFloat(row.wastage_percent) || 0,
           multiplier: parseFloat(row.multiplier) || 1,
