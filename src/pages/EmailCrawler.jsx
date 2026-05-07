@@ -480,13 +480,15 @@ export default function EmailCrawler() {
   const [queryStr, setQueryStr] = useState("subject:order OR subject:PO OR subject:purchase");
   const [crawlerEmail, setCrawlerEmail] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  // { count: number, at: ISO string } — populated after each auto-import loop.
+  const [lastAutoImport, setLastAutoImport] = useState(null);
 
-  // Auto-crawl every 3 hours while tab is open
+  // Auto-crawl every 1 hour while tab is open.
   useEffect(() => {
     const ONE_HOUR = 1 * 60 * 60 * 1000;
     const interval = setInterval(() => {
       if (!crawling && crawlerEmail) {
-        console.log("[Auto-crawl] 3h timer fired, starting crawl...");
+        console.log("[Auto-crawl] 1h timer fired, starting crawl...");
         handleCrawl();
       }
     }, ONE_HOUR);
@@ -693,6 +695,7 @@ export default function EmailCrawler() {
         }
       }
       log(`Auto-import done. Created/linked: ${autoCreated} · Already imported: ${autoSkipped} · Errors: ${autoErrors}`, autoErrors ? "warning" : "success");
+      setLastAutoImport({ count: autoCreated, at: new Date().toISOString() });
       window.__autoImportRunning = false;
       setCrawlStats(stats);
       qc.invalidateQueries({ queryKey: ["emailCrawl"] });
@@ -995,6 +998,12 @@ export default function EmailCrawler() {
             </p>
           ) : (
             <p className="text-xs text-red-600 mt-1">No crawler email configured. <a href="/settings" className="underline">Set one in Settings</a>.</p>
+          )}
+          {lastAutoImport && (
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Last auto-import: {lastAutoImport.count} PO{lastAutoImport.count === 1 ? "" : "s"} at{" "}
+              {format(new Date(lastAutoImport.at), "HH:mm")}
+            </p>
           )}
         </div>
         <Button onClick={() => refetch()} variant="outline" size="sm" disabled={isLoading} className="gap-1.5 text-xs">
