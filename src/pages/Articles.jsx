@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Layers, Plus, Trash2, Pencil, Search, Upload } from "lucide-react";
+import { Layers, Plus, Trash2, Pencil, Search, Upload, AlertTriangle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import EmptyState from "@/components/shared/EmptyState";
 import FabricEditDialog from "@/components/fabric/FabricEditDialog";
@@ -182,9 +182,25 @@ export default function Articles() {
                       ))}
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                      <Upload className="h-3.5 w-3.5 shrink-0"/>
-                      <span>No fabric specs — upload sheet or edit manually</span>
+                    <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-1.5">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5"/>
+                        <span>
+                          <strong>No fabric components on file.</strong>{" "}
+                          Upload a master-data <code className="text-[10px]">sku_fabric_consumption</code> sheet for this SKU,
+                          or click <em>Edit fabric</em> below to add components by hand.
+                        </span>
+                      </div>
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 text-[11px] gap-1 border-amber-300 hover:bg-amber-100"
+                          onClick={() => setEditingArticle(article)}
+                        >
+                          <Pencil className="h-3 w-3"/> Edit fabric
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </CardContent>
