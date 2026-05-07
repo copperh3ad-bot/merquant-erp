@@ -441,13 +441,23 @@ export default function PackagingPlanning() {
     [articles, activePo]
   );
 
-  // Build carton size map from PO items: article_code → "LxWxH"
+  // Build carton size map from PO items: article_code → "LxWxH".
+  //
+  // The numbers come from po_items.carton_* which were populated by
+  // explode_po_bom from master-data (price_list / master_articles).
+  // We prefer this over articles.carton_size_cm because the latter
+  // can contain the AI's messy combined-size string ("Varies by size:
+  // 33X33X32 (Twin XL); 40X40X32 (Full/Queen); ...") whereas this map
+  // gives a clean per-article numeric value. Decimals stripped via
+  // formatNum for operator-friendly display (60.000 → "60").
+  // Aligned with MAS.
   const cartonSizeMap = useMemo(() => {
     const map = {};
     if (activePo) {
       poItemsForCarton.filter(i => i.po_id === activePo.id).forEach(item => {
         if (item.item_code && item.carton_length && item.carton_width && item.carton_height) {
-          map[item.item_code.trim().toUpperCase()] = `${item.carton_length}x${item.carton_width}x${item.carton_height}`;
+          map[item.item_code.trim().toUpperCase()] =
+            `${formatNum(item.carton_length)}x${formatNum(item.carton_width)}x${formatNum(item.carton_height)}`;
         }
       });
     }
@@ -476,22 +486,69 @@ export default function PackagingPlanning() {
       const cfg = TAB_CONFIG[tab];
       init[tab] = {};
       poArticles.forEach(art => {
+        // explode_po_bom writes the SPECIFIC accessory_type (e.g.
+        // "Master Carton", "Brand Label") into the `category` column
+        // rather than the canonical tab name ("Carton", "Label").
+        // Strict equality misses those rows. matchesCategory does the
+        // same alias-aware lookup the resolver uses elsewhere — same
+        // change MAS made.
         const existing = existingItems.filter(
-          i => i.po_id === activePo.id && i.article_code === art.article_code && i.category === cfg.category
+          i => i.po_id === activePo.id
+            && i.article_code === art.article_code
+            && (i.category === cfg.category || matchesCategory(i.category, cfg.category))
         );
 
         if (existing.length > 0) {
-          init[tab][art.id] = existing.map(e => ({
-            type: cfg.category === "Insert Card" ? (e.size_spec || "") : e.item_description,
-            quality: cfg.category === "Insert Card" ? (e.item_description || "") : (cfg.splitDescSize ? "" : (e.size_spec || "")),
-            description: cfg.splitDescSize ? (e.size_spec || "") : "",
-            size: cfg.splitDescSize ? (e.color || "") : "",
-            wastage_percent: e.wastage_percent ?? cfg.defaultWastage,
-            multiplier: e.multiplier ?? 1,
-            pc_ean_code: e.pc_ean_code || "",
-            carton_ean_code: e.carton_ean_code || "",
-            existing_id: e.id,
-          }));
+          init[tab][art.id] = existing.map(e => {
+            // Existing accessory_items rows from explode_po_bom land
+            // with shape:
+            //   item_description = the build description ("3-Ply...")
+            //   size_spec        = the SIZE blob ("Varies by size: ...")
+            //   color            = NULL
+            // …whereas page-saved rows for splitDescSize tabs use the
+            // legacy convention where size_spec holds the description
+            // text and color holds the dimension.
+            //
+            // Detect the explode shape via isMultiSizeBlob(size_spec)
+            // and rearrange so the UI shows the description in the
+            // Description column and gets a clean per-article size
+            // from cartonSizeMap (Carton tab) or leaves the size for
+            // the user to fill (Polybag / Stiffener).
+            const sizeSpecIsBlob = isMultiSizeBlob(e.size_spec);
+            if (cfg.splitDescSize && sizeSpecIsBlob) {
+              return {
+                type: "",
+                quality: "",
+                description: e.item_description || "",
+                size: cfg.category === "Carton"
+                  ? (cartonSizeMap[(art.article_code || "").trim().toUpperCase()] || "")
+                  : "",
+                color:     "",
+                placement: e.placement || "",
+                supplier:  e.supplier  || "",
+                wastage_percent: e.wastage_percent ?? cfg.defaultWastage,
+                multiplier: e.multiplier ?? 1,
+                pc_ean_code: e.pc_ean_code || "",
+                carton_ean_code: e.carton_ean_code || "",
+                existing_id: e.id,
+              };
+            }
+            // Standard mapping for page-saved rows.
+            return {
+              type: cfg.category === "Insert Card" ? (e.size_spec || "") : e.item_description,
+              quality: cfg.category === "Insert Card" ? (e.item_description || "") : (cfg.splitDescSize ? "" : (e.size_spec || "")),
+              description: cfg.splitDescSize ? (e.size_spec || "") : "",
+              size: cfg.splitDescSize ? (e.color || "") : "",
+              color:     cfg.splitDescSize ? "" : (e.color || ""),
+              placement: e.placement || "",
+              supplier:  e.supplier  || "",
+              wastage_percent: e.wastage_percent ?? cfg.defaultWastage,
+              multiplier: e.multiplier ?? 1,
+              pc_ean_code: e.pc_ean_code || "",
+              carton_ean_code: e.carton_ean_code || "",
+              existing_id: e.id,
+            };
+          });
         } else {
           // No saved rows for this article+category — try to seed from master
           // data, then fall back to the linked tech pack. Tier-2 picks up
@@ -510,6 +567,19 @@ export default function PackagingPlanning() {
           // pvc_bag_dimensions, insert_dimensions, zipper_length_cm) based
           // on cfg.category. Populated from master-data Articles sheet via
           // migration 0005_articles_size_fields.
+          //
+          // Override articles.carton_size_cm with the clean numeric value
+          // from cartonSizeMap (built off po_items.carton_*, which itself
+          // came from master-data). Beats the AI-extracted "Varies by
+          // size: 33X33X32cm (Twin XL); 40X40X32 (Full/Queen); ..." string
+          // that articles.carton_size_cm sometimes holds for sheet-set
+          // tech packs. Falls back to the article's own value when
+          // cartonSizeMap has no entry. Aligned with MAS.
+          const cleanCarton = getCartonSize(art);
+          const articleSizesEffective = cleanCarton
+            ? { ...art, carton_size_cm: cleanCarton }
+            : art;
+
           const seeded = resolveDescription({
             articleCode: art.article_code,
             tabCategory: cfg.category,
@@ -517,7 +587,7 @@ export default function PackagingPlanning() {
             masterSpecs: masterAccessorySpecs,
             techPack,
             techPackLabelSpecs: techPack?.extracted_label_specs ?? null,
-            articleSizes: art,
+            articleSizes: articleSizesEffective,
           });
           init[tab][art.id] = seeded ?? [defaultRow(cfg)];
         }
