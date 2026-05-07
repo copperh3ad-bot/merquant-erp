@@ -125,8 +125,10 @@ function allRowsAreExactDups(rows) {
       if (Math.abs(a - b) > 1e-6) return false;
     }
     for (const f of txtFields) {
-      const a = (first[f] ?? "").toString().trim();
-      const b = (r[f] ?? "").toString().trim();
+      // Case-insensitive: Haiku is non-deterministic on capitalisation, so
+      // "Cotton Jersey" vs "COTTON JERSEY" are the same row for dedup.
+      const a = (first[f] ?? "").toString().trim().toLowerCase();
+      const b = (r[f] ?? "").toString().trim().toLowerCase();
       if (a !== b) return false;
     }
   }
