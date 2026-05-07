@@ -71,25 +71,29 @@ function parseInfoSheet(rows) {
     if (mFab && val) {
       const fab = { number: Number(mFab[1]), fabric_type: val };
       for (let j = i + 1; j < Math.min(i + 6, rows.length); j++) {
-        const lj = (rows[j][0] || "").trim();
+        // Normalise the label: lower-case, collapse whitespace. Catches
+        // "Fabric  Construction" (double space), "FABRIC LOCATION", and
+        // "fabric construction:" (trailing colon) which earlier exact
+        // string equality silently dropped.
+        const lj = (rows[j][0] || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/[:\s]+$/, "");
         const vj = (rows[j][2] || "").trim();
-        if (lj === "Fabric Location") fab.location = vj;
-        else if (lj === "Fabric Construction") fab.construction = vj;
-        else if (lj === "Fabric Weight") fab.weight = vj;
-        else if (lj === "Fabric Treatment") fab.treatment = vj;
-        else if (/^FABRICATION|^TRIMS/i.test(lj) || /^Fabrication \(/i.test(lj)) break;
+        if (lj === "fabric location") fab.location = vj;
+        else if (lj === "fabric construction") fab.construction = vj;
+        else if (lj === "fabric weight") fab.weight = vj;
+        else if (lj === "fabric treatment") fab.treatment = vj;
+        else if (/^fabrication|^trims/i.test(lj)) break;
       }
       if (fab.fabric_type) fabrications.push(fab);
     } else if (label === "Fabrication" && val) {
       const tr = { fabric_type: val };
       for (let j = i + 1; j < Math.min(i + 6, rows.length); j++) {
-        const lj = (rows[j][0] || "").trim();
+        const lj = (rows[j][0] || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/[:\s]+$/, "");
         const vj = (rows[j][2] || "").trim();
-        if (lj === "Fabric Location") tr.location = vj;
-        else if (lj === "Fabric Construction") tr.construction = vj;
-        else if (lj === "Fabric Weight") tr.weight = vj;
-        else if (lj === "Fabric Treatment") tr.treatment = vj;
-        else if (/^TRIMS|^PRODUCT/i.test(lj)) break;
+        if (lj === "fabric location") tr.location = vj;
+        else if (lj === "fabric construction") tr.construction = vj;
+        else if (lj === "fabric weight") tr.weight = vj;
+        else if (lj === "fabric treatment") tr.treatment = vj;
+        else if (/^trims|^product/i.test(lj)) break;
       }
       if (tr.fabric_type) trims.push(tr);
     }
@@ -278,7 +282,9 @@ function parseShippingSheet(rows) {
     if (!r) continue;
     const c2 = (r[2] || "").trim();
     const c4 = (r[4] || "").trim();
-    if (c2 === "Size" && c4 === "Units per carton") { inCtn = true; continue; }
+    // Header trigger is case/spacing-insensitive so variants like
+    // "Units Per Carton" / "UNITS PER CARTON" / "Units / Carton" all match.
+    if (/^size$/i.test(c2) && /units?\s*[/]?\s*per\s*carton/i.test(c4)) { inCtn = true; continue; }
     if (inCtn) {
       const size = c2;
       if (size) {
@@ -295,7 +301,7 @@ function parseShippingSheet(rows) {
     if (!r) continue;
     const c2 = (r[2] || "").trim();
     const c3 = (r[3] || "").trim();
-    if (c2 === "SIZE" && /SKU/i.test(c3)) { inUpc = true; continue; }
+    if (/^size$/i.test(c2) && /sku/i.test(c3)) { inUpc = true; continue; }
     if (inUpc && c2) {
       const our = (r[3] || "").trim();
       const bob = (r[4] || "").trim();
@@ -314,24 +320,43 @@ function parseLabellingSheet(rows) {
   const labels = [];
   let current = null;
   let sectionContext = "";
+  // Normalise: lower-case, collapse whitespace, drop trailing punctuation.
+  // Catches "Color " (trailing space), "COLOR", "Colour" (UK spelling),
+  // "Placment" (typo) without a per-typo branch.
+  const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/[:.\s]+$/, "");
+  // Field-key aliases. Add new buyer variants here, no code change required
+  // anywhere else.
+  const FIELD_ALIASES = {
+    label:     ["label", "type", "label type", "tag"],
+    material:  ["material", "fabric", "label material"],
+    size:      ["size", "label size", "dimension", "dimensions"],
+    color:     ["color", "colour", "label color", "label colour"],
+    placement: ["placement", "placment", "position", "location", "placed at"],
+  };
+  const allFieldTokens = new Set(Object.values(FIELD_ALIASES).flat());
+  const keyFor = (n) => {
+    for (const [canonical, list] of Object.entries(FIELD_ALIASES)) {
+      if (list.includes(n)) return canonical;
+    }
+    return null;
+  };
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i] || [];
     const first = (r[0] || "").trim();
+    const firstN = norm(first);
     const val = (r[2] || "").trim();
-    if (first && !val && !/^(Label|Material|Size|Color|Placement|Placment)$/i.test(first)
+    if (first && !val && !allFieldTokens.has(firstN)
         && first.length > 3 && first.length < 80
         && !first.startsWith("(") && !/PRODUCT SPECIFICATION|Labelling Information/i.test(first)) {
       sectionContext = first;
       continue;
     }
-    if (first === "Label" && val) {
+    const k = keyFor(firstN);
+    if (k === "label" && val) {
       if (current) labels.push(current);
       current = { section: sectionContext, type: val };
-    } else if (current) {
-      if (first === "Material") current.material = val;
-      else if (first === "Size") current.size = val;
-      else if (first === "Color") current.color = val;
-      else if (first === "Placement" || first === "Placment") current.placement = val;
+    } else if (current && k && k !== "label") {
+      current[k] = val;
     }
   }
   if (current) labels.push(current);
@@ -344,20 +369,58 @@ function parseLabellingSheet(rows) {
 function parsePackagingSheet(rows) {
   const items = [];
   let variant = "Main";
-  const KEYS = {
-    "Packaging type": "Packaging",
-    "Bag material": "PVC Bag",
-    "Color paper insert material": "Insert Card",
-    "Cardboard material(Stiffener)": "Stiffener",
-    "Size Sticker": "Size Sticker",
-    "Barcode sticker": "Barcode Sticker",
-    "Barcode Sticker /Size": "Barcode Sticker Size",
-    "Cardboard": "Stiffener (Cardboard)",
-    "cardboard size": "Stiffener Size",
+  // Normalise label keys: lower-case, collapse whitespace, drop trailing
+  // punctuation, drop spaces inside parens. So "Bag Material",
+  // "BAG MATERIAL", "bag material:", "Cardboard Material (Stiffener)"
+  // all collapse to a single canonical lookup.
+  const norm = (s) => (s || "").trim().toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[:.\s]+$/, "")
+    .replace(/\s*\(\s*/g, "(")
+    .replace(/\s*\)\s*/g, ")");
+  const KEYS_NORM = {
+    "packaging type":               "Packaging",
+    "bag material":                 "PVC Bag",
+    "color paper insert material":  "Insert Card",
+    "colour paper insert material": "Insert Card",       // UK spelling
+    "insert material":              "Insert Card",       // shortened
+    "cardboard material(stiffener)": "Stiffener",
+    "stiffener":                    "Stiffener",         // shortened
+    "stiffener material":           "Stiffener",
+    "cardboard":                    "Stiffener (Cardboard)",
+    "cardboard size":               "Stiffener Size",
+    "stiffener size":               "Stiffener Size",
+    "size sticker":                 "Size Sticker",
+    "barcode sticker":              "Barcode Sticker",
+    "barcode sticker/size":         "Barcode Sticker Size",
+    "barcode size":                 "Barcode Sticker Size",
+    // Retail printed box rows — Bamboo, Box-Spring, Encasement SKUs ship
+    // one-per-unit in a branded printed box. Source labels in the wild:
+    "color box":                    "Printed Box",
+    "color box material":           "Printed Box",
+    "colour box":                   "Printed Box",
+    "colour box material":          "Printed Box",
+    "printed box":                  "Printed Box",
+    "printed box material":         "Printed Box",
+    "outer box":                    "Printed Box",
+    "outer box material":           "Printed Box",
+    "display box":                  "Printed Box",
+    "gift box":                     "Printed Box",
+    "retail box":                   "Printed Box",
+    "individual box":               "Printed Box",
+    "inner box":                    "Printed Box",
+    "box material":                 "Printed Box",
+    "box":                          "Printed Box",
+    "color box size":               "Printed Box Size",
+    "colour box size":              "Printed Box Size",
+    "printed box size":             "Printed Box Size",
+    "outer box size":               "Printed Box Size",
+    "box size":                     "Printed Box Size",
   };
   for (const r of rows) {
     if (!r) continue;
     const lbl = (r[0] || "").trim();
+    const lblN = norm(lbl);
     const val = (r[2] || "").trim();
     if (lbl && !val) {
       if (/mattress protector|encasement/i.test(lbl) && !/^PRODUCT|Artwork/i.test(lbl)) {
@@ -369,10 +432,10 @@ function parsePackagingSheet(rows) {
         continue;
       }
     }
-    if (KEYS[lbl] && val) {
+    if (KEYS_NORM[lblN] && val) {
       items.push({
         variant,
-        category: KEYS[lbl],
+        category: KEYS_NORM[lblN],
         label: lbl,
         value: val,
       });
@@ -447,9 +510,15 @@ function parseZipperInfo(infoRows, sizeRows) {
 }
 
 function extractGsm(text) {
-  const m = /(\d+)(?:\-(\d+))?\s*gsm/i.exec(text || "");
-  if (!m) return null;
-  return m[2] ? Math.round((Number(m[1]) + Number(m[2])) / 2) : Number(m[1]);
+  if (!text) return null;
+  // Direct gsm/g/m²/g/sqm/gr/m² metric forms.
+  // Range like "180-200 gsm" averages.
+  const m = /(\d+)(?:\s*[-–—]\s*(\d+))?\s*(?:gsm|gr?\.?\s*\/?\s*(?:m²|m2|sqm|sq\.?\s*m))/i.exec(text);
+  if (m) return m[2] ? Math.round((Number(m[1]) + Number(m[2])) / 2) : Number(m[1]);
+  // Imperial: "6 oz/sq.yd" or "6 oz/yd²" → ~ozsqyd × 33.906 = gsm.
+  const oz = /(\d+(?:\.\d+)?)\s*oz\s*\/?\s*(?:sq\.?\s*yd|yd²|yd2)/i.exec(text);
+  if (oz) return Math.round(Number(oz[1]) * 33.906);
+  return null;
 }
 
 // Convert our structured data into tech_packs.extracted_fabric_specs format.
