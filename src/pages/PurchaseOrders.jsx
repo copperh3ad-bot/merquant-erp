@@ -240,10 +240,57 @@ export default function PurchaseOrders() {
         // user-facing error below.)
 
         if (stillMissing.length) {
+          // For each missing SKU compute the closest match in master data
+          // (normalized Levenshtein on the canonical-code set). Show only
+          // suggestions within edit distance ≤ 3 — anything further is too
+          // ambiguous to act on. The operator either fixes the file
+          // upstream or hand-edits the SKU and re-imports.
+          //
+          // ADVISORY ONLY — never auto-applied. The §4 spec mandates
+          // normalize-only matching; this Levenshtein pass exists purely
+          // to enrich the error message with "did you mean…?" hints.
+          // Aligned with MAS PurchaseOrders.jsx.
+          const lev = (a, b) => {
+            if (a === b) return 0;
+            const m = a.length, n = b.length;
+            if (!m) return n; if (!n) return m;
+            const prev = Array(n + 1).fill(0).map((_, i) => i);
+            for (let i = 1; i <= m; i++) {
+              let cur = i;
+              for (let j = 1; j <= n; j++) {
+                const ins = prev[j] + 1;
+                const del = cur + 1;
+                const sub = prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1);
+                prev[j - 1] = cur;
+                cur = Math.min(ins, del, sub);
+              }
+              prev[n] = cur;
+            }
+            return prev[n];
+          };
+          const candidates = [...canonicalFor.entries()]; // [[norm, raw], ...]
+          const suggestions = stillMissing.map(missing => {
+            const mn = normalizeCode(missing);
+            let bestRaw = null, bestDist = Infinity;
+            for (const [norm, raw] of candidates) {
+              const d = lev(mn, norm);
+              if (d < bestDist) { bestDist = d; bestRaw = raw; }
+            }
+            // Threshold: 3 absolute, OR 30% of length, whichever is smaller.
+            const thresh = Math.min(3, Math.floor(mn.length * 0.3));
+            return { missing, suggestion: bestDist <= thresh ? bestRaw : null, dist: bestDist };
+          });
+          const lines = suggestions.slice(0, 10).map(s =>
+            s.suggestion
+              ? `  • "${s.missing}" — did you mean "${s.suggestion}"? (edit distance ${s.dist})`
+              : `  • "${s.missing}" — no close match in master data`
+          ).join("\n");
+          const more = suggestions.length > 10 ? `\n  …and ${suggestions.length - 10} more.` : "";
           throw new Error(
-            `Missing SKU(s) in Master Data: ${stillMissing.slice(0, 10).join(", ")}` +
-            `${stillMissing.length > 10 ? ` (+${stillMissing.length - 10} more)` : ""}. ` +
-            `Add these to the Consumption Library before importing this PO.`
+            `Missing SKU(s) in Master Data:\n${lines}${more}\n\n` +
+            `To fix:\n` +
+            `  1) If a suggestion is correct, update the source file (or rename in master data) so the codes match exactly, then re-import.\n` +
+            `  2) Otherwise, add the missing SKU to the Consumption Library before importing this PO.`
           );
         }
 
