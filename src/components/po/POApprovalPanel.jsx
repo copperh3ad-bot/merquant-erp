@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/AuthContext";
 import { db } from "@/api/supabaseClient";
+import { formatApprovalSummary } from "@/lib/approvalSummary";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -101,10 +102,17 @@ export default function POApprovalPanel({ po, compact = false }) {
       // Force a fresh read of the list to undo the optimistic patch.
       qc.invalidateQueries({ queryKey: ["purchaseOrders"] });
     },
-    onSuccess: () => {
+    onSuccess: (data, vars) => {
       setShowNotes(false);
       setNotes("");
       setActionType(null);
+      // Approve goes through fn_approve_po_with_automation (migration 0029)
+      // which returns a structured JSONB summary. Surface it so the user
+      // sees what costing/T&A side-effects happened.
+      if (vars?.action === "approve" && data && typeof data === "object" && "approval_status" in data) {
+        // eslint-disable-next-line no-alert
+        alert(formatApprovalSummary(data));
+      }
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["po", po.id] });

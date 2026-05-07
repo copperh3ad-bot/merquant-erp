@@ -83,9 +83,15 @@ export const db = {
       return data;
     },
     approve: async (id, approvedBy, notes) => {
-      const { data, error } = await supabase.from('purchase_orders')
-        .update({ approval_status: 'approved', approved_by: approvedBy, approved_at: new Date().toISOString(), approval_notes: notes || null })
-        .eq('id', id).select().single();
+      // Calls fn_approve_po_with_automation (migration 0029) which flips
+      // the approval columns + best-effort auto-fills costing sheets and
+      // the T&A calendar in one transaction. Returns a structured summary
+      // the caller renders to the user. See migrations/up/0029.
+      const { data, error } = await supabase.rpc('fn_approve_po_with_automation', {
+        p_po_id: id,
+        p_approved_by: approvedBy,
+        p_notes: notes || null,
+      });
       if (error) throw error;
       return data;
     },
