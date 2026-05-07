@@ -287,10 +287,18 @@ function pickTypeFromDescription(elem, cfg) {
 }
 
 // Find the UPC/EAN entry matching a given article_code. Returns "" when no
-// match exists. Used by the Sticker / Insert Card tabs (cfg.showEAN === true)
-// to fill pc_ean_code regardless of whether a tech-pack spec element matched
-// the tab category — the EAN can surface even when no Sticker / Insert Card
-// trim/accessory entry exists in the tech pack.
+// match exists. Used by the Sticker / Insert Card / Printed Box tabs
+// (cfg.showEAN === true) to fill pc_ean_code regardless of whether a
+// tech-pack spec element matched the tab category — the EAN can surface
+// even when no spec entry exists in the tech pack.
+//
+// 2026-05-07 fix: previously returned `match.bob_sku || match.our_sku`
+// blindly, which surfaced SKU codes (e.g. "GPFRIOMP36") in the EAN column
+// when the entry came from the BOB shipping-sheet text parser (which
+// stores SKUs in bob_sku, not barcodes — barcodes are only populated
+// after vision-OCR via buildUpcUpdate). Now validates the candidate is
+// barcode-shaped (8-14 digits) before returning, falling back to "" if
+// no candidate looks like a real barcode. Better empty than misleading.
 function lookupUpcEan(upc, articleCode) {
   if (!Array.isArray(upc) || upc.length === 0 || !articleCode) return "";
   const code = String(articleCode).trim().toUpperCase();
@@ -298,7 +306,18 @@ function lookupUpcEan(upc, articleCode) {
     (u.our_sku && String(u.our_sku).trim().toUpperCase() === code) ||
     (u.bob_sku && String(u.bob_sku).trim().toUpperCase() === code)
   );
-  return match ? (match.bob_sku || match.our_sku || "") : "";
+  if (!match) return "";
+  // Field-name precedence: explicit barcode/ean/upc fields win. bob_sku
+  // is the OCR-merge convention (buildUpcUpdate writes the digits there)
+  // but in legacy rows it can hold a SKU — so it's the LAST candidate
+  // and must still pass the digit-shape check.
+  const candidates = [match.barcode, match.ean, match.upc, match.bob_sku];
+  for (const c of candidates) {
+    if (!c) continue;
+    const s = String(c).trim();
+    if (/^\d{8,14}$/.test(s)) return s;
+  }
+  return "";
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────
@@ -445,12 +464,22 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
   };
 
   // Description: try several field names because the BOB and AI shapes differ.
+  //   AI-extracted shape:  { description, material, size_spec, color, ... }
+  //   BOB packaging sheet: { variant, category, label, value }
+  //   BOB labelling sheet: { section, type, material, size, color, placement }
+  // 2026-05-07 fix: added `elem.value` to the fallback chain so BOB
+  // packaging-sheet items (Printed Box / Stiffener / Polybag material
+  // rows) surface their content in the Description input. Previously
+  // these rows rendered empty because the parser writes content into
+  // `value` while the resolver only read `description / material /
+  // section`.
   // Then filter combined-product descriptions like
   //   "76mmx23mm (mattress protector) / 64mmX23mm (Pillow Protector)"
   // down to only the segments relevant to THIS SKU's product family.
   const rawDescText =
     elem.description ||
     elem.material ||
+    elem.value ||
     elem.section ||
     "";
   const descText = extractSkuRelevantPortion(rawDescText, articleCode);
@@ -513,7 +542,12 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
 // Returns true when a tech-pack JSONB element has no usable description.
 function isTechPackElementEmpty(elem) {
   if (!elem) return true;
-  const candidates = [elem.description, elem.material, elem.dimensions, elem.size_spec, elem.section];
+  // Includes `value` for BOB packaging-sheet items (parsePackagingSheet
+  // shape: { variant, category, label, value }). Without it, Printed
+  // Box / Stiffener / Polybag items from BOB packaging would be
+  // filtered out as "empty" even though their material spec lives in
+  // `value`. 2026-05-07 production fix.
+  const candidates = [elem.description, elem.material, elem.dimensions, elem.size_spec, elem.section, elem.value];
   return !candidates.some((v) => v != null && String(v).trim() !== "");
 }
 

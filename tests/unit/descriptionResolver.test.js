@@ -1302,3 +1302,237 @@ describe("extractSkuRelevantPortion", () => {
     expect(extractSkuRelevantPortion(desc, "ABCCOMF1")).not.toContain("pillow case");
   });
 });
+
+// ─── 2026-05-07 production bug fixes ────────────────────────────────
+// Issue 1: EAN column populated with SKU strings (e.g. "GPFRIOMP36")
+// instead of barcode digits when only the BOB shipping-sheet text
+// parser ran (no vision-OCR yet). Issue 2: Printed Box Material/Quality
+// description empty because BOB packaging-sheet items use `elem.value`
+// while the resolver only read `description / material / section`.
+
+describe("resolveDescription — Issue 1: EAN must be a real barcode", () => {
+  const CFG_STICKER_EAN = {
+    category: "Sticker",
+    typeOptions: ["UPC Sticker", "Custom Sticker"],
+    qualityLabel: "Size / Description",
+    defaultWastage: 5,
+    showEAN: true,
+  };
+
+  const baseTp = {
+    id: "tp-ean-bug",
+    article_code: "FRIOMP36",
+    extracted_accessory_specs: [],
+    extracted_trim_specs: [],
+    extracted_label_specs: [],
+    extracted_measurements: {},
+  };
+
+  it("does NOT surface bob_sku when it's an alphanumeric SKU code", () => {
+    // Pre-OCR state: BOB shipping-sheet parser stuffs bob_sku with the
+    // BOB-prefix-extended SKU. Old behaviour emitted "GPFRIOMP36" in
+    // the EAN column. Now: must be empty.
+    const tp = { ...baseTp, extracted_data: {
+      upc: [{ size: "TWIN", our_sku: "FRIOMP36", bob_sku: "GPFRIOMP36" }],
+    }};
+    const r = resolveDescription({
+      articleCode: "FRIOMP36",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER_EAN,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    if (r && r.length > 0) {
+      expect(r[0].pc_ean_code).toBe("");
+    }
+  });
+
+  it("surfaces bob_sku when it's a 12-13 digit barcode (post-OCR state)", () => {
+    const tp = { ...baseTp, extracted_data: {
+      upc: [{ size: "TWIN", our_sku: "FRIOMP36", bob_sku: "012345678905" }],
+    }};
+    const r = resolveDescription({
+      articleCode: "FRIOMP36",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER_EAN,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(r).not.toBeNull();
+    expect(r[0].pc_ean_code).toBe("012345678905");
+  });
+
+  it("prefers an explicit `barcode` field over bob_sku", () => {
+    const tp = { ...baseTp, extracted_data: {
+      upc: [{ size: "TWIN", our_sku: "FRIOMP36", bob_sku: "GPFRIOMP36", barcode: "012345678905" }],
+    }};
+    const r = resolveDescription({
+      articleCode: "FRIOMP36",
+      tabCategory: "Sticker",
+      cfg: CFG_STICKER_EAN,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(r[0].pc_ean_code).toBe("012345678905");
+  });
+
+  it("honours `ean` and `upc` field names too", () => {
+    const tp1 = { ...baseTp, extracted_data: {
+      upc: [{ size: "TWIN", our_sku: "FRIOMP36", ean: "9876543210123" }],
+    }};
+    const r1 = resolveDescription({
+      articleCode: "FRIOMP36", tabCategory: "Sticker", cfg: CFG_STICKER_EAN,
+      masterSpecs: [], techPack: tp1,
+    });
+    expect(r1[0].pc_ean_code).toBe("9876543210123");
+
+    const tp2 = { ...baseTp, extracted_data: {
+      upc: [{ size: "TWIN", our_sku: "FRIOMP36", upc: "012345678905" }],
+    }};
+    const r2 = resolveDescription({
+      articleCode: "FRIOMP36", tabCategory: "Sticker", cfg: CFG_STICKER_EAN,
+      masterSpecs: [], techPack: tp2,
+    });
+    expect(r2[0].pc_ean_code).toBe("012345678905");
+  });
+
+  it("rejects too-short or too-long candidate strings", () => {
+    // 7 digits — too short to be a real EAN/UPC
+    const tp1 = { ...baseTp, extracted_data: {
+      upc: [{ size: "TWIN", our_sku: "FRIOMP36", bob_sku: "1234567" }],
+    }};
+    const r1 = resolveDescription({
+      articleCode: "FRIOMP36", tabCategory: "Sticker", cfg: CFG_STICKER_EAN,
+      masterSpecs: [], techPack: tp1,
+    });
+    if (r1 && r1.length > 0) expect(r1[0].pc_ean_code).toBe("");
+
+    // 15 digits — too long
+    const tp2 = { ...baseTp, extracted_data: {
+      upc: [{ size: "TWIN", our_sku: "FRIOMP36", bob_sku: "123456789012345" }],
+    }};
+    const r2 = resolveDescription({
+      articleCode: "FRIOMP36", tabCategory: "Sticker", cfg: CFG_STICKER_EAN,
+      masterSpecs: [], techPack: tp2,
+    });
+    if (r2 && r2.length > 0) expect(r2[0].pc_ean_code).toBe("");
+  });
+});
+
+describe("resolveDescription — Issue 2: BOB packaging-sheet value field surfaces in Description", () => {
+  const CFG_PRINTED_BOX = {
+    category: "Printed Box",
+    typeOptions: ["Color Box", "Printed Display Box", "Brown Mailer", "Window Box", "Other"],
+    typeLabel: "Box Type",
+    splitDescSize: true,
+    descLabel: "Quality / Material",
+    descPlaceholder: "e.g. 350gsm coated FBB",
+    sizeLabel: "Size (LxWxH cm)",
+    sizePlaceholder: "e.g. 30x22x10",
+    defaultWastage: 2,
+    showEAN: true,
+  };
+  const CFG_STIFFENER = {
+    category: "Stiffener",
+    typeOptions: ["Cardboard", "Foam"],
+    splitDescSize: true,
+    descLabel: "Description",
+    sizeLabel: "Size",
+    defaultWastage: 3,
+  };
+
+  it("Printed Box: BOB packaging-sheet item with `value` populates Description", () => {
+    const tp = {
+      id: "tp-bug2-1",
+      article_code: "BAMBOO-Q",
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [
+        // BOB packaging-sheet shape — the parsePackagingSheet output
+        // shape from bobTechPackParser.js
+        { variant: "Bamboo", category: "Printed Box", label: "Color box material", value: "350gsm coated FBB, 4-color print, full UV" },
+      ],
+      extracted_label_specs: [],
+      extracted_measurements: {},
+      extracted_data: {},
+    };
+    const r = resolveDescription({
+      articleCode: "BAMBOO-Q",
+      tabCategory: "Printed Box",
+      cfg: CFG_PRINTED_BOX,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(r).not.toBeNull();
+    expect(r.length).toBeGreaterThan(0);
+    expect(r[0].description).toContain("350gsm");
+  });
+
+  it("Stiffener: BOB packaging-sheet 'cardboard material' value surfaces", () => {
+    const tp = {
+      id: "tp-bug2-2",
+      article_code: "MP-QUEEN",
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [
+        { variant: "Mattress Protector", category: "Stiffener", label: "Cardboard material(Stiffener)", value: "2mm thick white cardboard" },
+      ],
+      extracted_label_specs: [],
+      extracted_measurements: {},
+      extracted_data: {},
+    };
+    const r = resolveDescription({
+      articleCode: "MP-QUEEN",
+      tabCategory: "Stiffener",
+      cfg: CFG_STIFFENER,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(r).not.toBeNull();
+    expect(r[0].description).toContain("2mm");
+  });
+
+  it("AI-extracted shape (description / material) still works — no regression", () => {
+    const tp = {
+      id: "tp-bug2-3",
+      article_code: "BAMBOO-Q",
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [
+        // AI extraction shape — has explicit description field
+        { category: "Printed Box", description: "350gsm coated FBB", material: "FBB cardboard" },
+      ],
+      extracted_label_specs: [],
+      extracted_measurements: {},
+      extracted_data: {},
+    };
+    const r = resolveDescription({
+      articleCode: "BAMBOO-Q",
+      tabCategory: "Printed Box",
+      cfg: CFG_PRINTED_BOX,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(r[0].description).toContain("350gsm");
+  });
+
+  it("description field still wins when both description and value are present", () => {
+    const tp = {
+      id: "tp-bug2-4",
+      article_code: "BAMBOO-Q",
+      extracted_accessory_specs: [],
+      extracted_trim_specs: [
+        { category: "Printed Box", description: "AI desc", value: "BOB val" },
+      ],
+      extracted_label_specs: [],
+      extracted_measurements: {},
+      extracted_data: {},
+    };
+    const r = resolveDescription({
+      articleCode: "BAMBOO-Q",
+      tabCategory: "Printed Box",
+      cfg: CFG_PRINTED_BOX,
+      masterSpecs: [],
+      techPack: tp,
+    });
+    expect(r[0].description).toContain("AI desc");
+    expect(r[0].description).not.toContain("BOB val");
+  });
+});
