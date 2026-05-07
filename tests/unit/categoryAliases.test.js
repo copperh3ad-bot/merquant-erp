@@ -9,17 +9,27 @@ const { matchesCategory, CATEGORY_ALIASES, CATEGORY_EXCLUSIONS } = _internals;
 // regress the spec-mandated routing.
 
 describe("§5 — CATEGORY_ALIASES (Trim)", () => {
-  // Spec list: thread, sewing thread, stopper, cord lock, cord stopper,
-  // elastic, cord, metal stopper.
+  // MAS-aligned alias list (13 items): legacy 7 + hardware/thread 6.
+  // The architecture spec text mentioned bare "cord" and "metal stopper"
+  // but MAS's actual implementation doesn't include those — MAS treats
+  // them as too broad / unused. These tests assert the MAS reality.
   it.each([
+    // Legacy (kept from before the §5 spec rewrite, restored from MAS)
+    "trim",
+    "binding",
+    "piping",
+    "elastic",
+    "drawcord",
+    "ribbon",
+    "velcro",
+    // Hardware / thread additions per MAS
     "thread",
     "sewing thread",
     "stopper",
     "cord lock",
     "cord stopper",
-    "elastic",
-    "cord",
-    "metal stopper",
+    "drawstring stopper",
+    "drawcord stopper",
   ])("'%s' classifies as Trim", (alias) => {
     expect(matchesCategory(alias, "Trim")).toBe(true);
   });
@@ -28,9 +38,23 @@ describe("§5 — CATEGORY_ALIASES (Trim)", () => {
     expect(matchesCategory("Trim Detail", "Trim")).toBe(true);
   });
 
-  it("the spec list does not match Trim for unrelated elements", () => {
+  it("the alias list does not match Trim for unrelated elements", () => {
     expect(matchesCategory("polybag", "Trim")).toBe(false);
     expect(matchesCategory("carton box", "Trim")).toBe(false);
+  });
+
+  it("bare 'cord' is NOT a Trim alias on its own (per MAS)", () => {
+    // The spec text mentioned bare "cord" but MAS treats it as too
+    // broad and omits it. "drawcord", "cord lock", "cord stopper"
+    // catch the legitimate cases.
+    expect(matchesCategory("cord", "Trim")).toBe(false);
+  });
+
+  it("'metal stopper' classifies via the 'stopper' substring alias", () => {
+    // The spec text lists "metal stopper" as a separate alias but
+    // MAS doesn't need it — the bare "stopper" alias already catches
+    // "metal stopper" via substring match.
+    expect(matchesCategory("metal stopper", "Trim")).toBe(true);
   });
 });
 

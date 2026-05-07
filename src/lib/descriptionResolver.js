@@ -38,7 +38,15 @@ const CATEGORY_ALIASES = {
   "Carton":      ["carton", "carton box", "outer carton", "shipping carton", "carton size"],
   "Sticker":     ["sticker", "barcode sticker", "size sticker", "upc sticker", "barcode label", "qr code"],
   "Zipper":      ["zipper", "zip", "zipper end piecing"],
-  "Trim":        ["thread", "sewing thread", "stopper", "cord lock", "cord stopper", "elastic", "cord", "metal stopper"],
+  // Match MAS — union of legacy aliases (binding/piping/drawcord/ribbon/
+  // velcro) AND the spec's hardware/thread additions (thread, sewing
+  // thread, stopper, cord lock, cord stopper, drawstring stopper,
+  // drawcord stopper). Net 13 items. The earlier §5 commit dropped the
+  // legacy 5 in favour of replacing with the spec's 8; MAS keeps both
+  // and that's the intended state.
+  "Trim":        ["trim", "binding", "piping", "elastic", "drawcord", "ribbon", "velcro",
+                  "thread", "sewing thread", "stopper", "cord lock", "cord stopper",
+                  "drawstring stopper", "drawcord stopper"],
 };
 
 // Per docs/architecture.md §5 — overlap suppression. Without these,
