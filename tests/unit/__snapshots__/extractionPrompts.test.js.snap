@@ -57,7 +57,7 @@ COLUMN MAPPING RULES (read carefully)
 
 4. component_type MUST be one of these (or a customer-specific variant
    of a part name — short noun phrase describing a physical garment part):
-     "Back", "Binding", "Bottom", "Evalon Membrane", "Fabric Bag", "Filling", "Fitted Sheet", "Flat Sheet", "Front", "Inner", "Lamination", "Outer", "Pillow Case", "Pillow Compression", "Piping", "Platform", "Quilting", "Sham", "Skirt", "Sleeper Flap", "Top Fabric", "Window"
+     "Back", "Binding", "Bottom", "Evalon Membrane", "Fabric Bag", "Filling", "Fitted Sheet", "Flat Sheet", "Front", "Inner", "Lamination", "Outer", "Pillow Case", "Pillow Compression", "Piping", "Platform", "Quilting", "Sham", "Skirt", "Sleeper Flap", "Top Fabric", "Triangle", "Window"
 
 5. A single SKU often has multiple fabric_consumption rows — one per
    part. They typically share the same fabric_type but have different

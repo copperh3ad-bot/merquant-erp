@@ -40,7 +40,7 @@ const CATEGORY_ALIASES = {
   "Insert Card": ["insert card", "color paper insert", "art card", "bleach card"],
   "Polybag":     ["polybag", "poly bag", "pvc bag", "pvc", "pe bag", "opp bag", "ldpe bag", "bag material"],
   "Stiffener":   ["stiffener", "cardboard", "card stiffener", "stiffener size"],
-  "Carton":      ["carton", "carton box", "outer carton", "shipping carton", "carton size"],
+  "Carton":      ["carton", "carton box", "outer carton", "shipping carton", "carton size", "master carton", "shipper"],
   "Sticker":     ["sticker", "barcode sticker", "size sticker", "upc sticker", "barcode label", "qr code"],
   "Zipper":      ["zipper", "zip", "zipper end piecing"],
   // Match MAS — union of legacy aliases (binding/piping/drawcord/ribbon/
@@ -51,8 +51,24 @@ const CATEGORY_ALIASES = {
   // and that's the intended state.
   "Trim":        ["trim", "binding", "piping", "elastic", "drawcord", "ribbon", "velcro",
                   "thread", "sewing thread", "stopper", "cord lock", "cord stopper",
-                  "drawstring stopper", "drawcord stopper"],
+                  "drawstring stopper", "drawcord stopper",
+                  // 2026-05-07 audit — BOB tech-packs emit overlocking
+                  // and bound-seam construction with their own category
+                  // strings; without these, ~80 such rows are unrouted.
+                  "overlocking", "overlock", "bound seam", "seam binding"],
 };
+
+// Polybag and Carton aliases — extended to absorb BOB's "Primary Packaging"
+// (one-per-unit retail bag) and "Secondary Packaging" (master shipper) terms.
+// These were emitted as accessory_items.category strings by explode_po_bom
+// but didn't match any tab via matchesCategory.
+//
+// Note: bare "packaging" is intentionally NOT added — BOB tech-packs use it
+// as a catch-all umbrella row that often duplicates content already split
+// across PVC Bag / Stiffener / Insert Card. Adding "packaging" routes that
+// row to Polybag tab and pre-empts the more specific PVC Bag row.
+CATEGORY_ALIASES["Polybag"].push("primary packaging", "primary pack", "individual packaging");
+CATEGORY_ALIASES["Carton"].push("secondary packaging", "secondary pack", "shipping pack");
 
 // Per docs/architecture.md §5 — overlap suppression. Without these,
 // alias substring-matching can route the same element to two tabs:
@@ -440,6 +456,9 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
     else if (cfg.category === "Insert Card") sizeText = sku.insert_dimensions || "";
     else if (cfg.category === "Zipper")    sizeText = sku.zipper_length || "";
   }
+  // Reject AI multi-size blobs ("Varies by size: 33X33X32 (Twin XL); ...")
+  // — those would seed every article with the same blob.
+  if (isMultiSizeBlob(sizeText)) sizeText = "";
   if (!sizeText) sizeText = articleSizeForTab(cfg, articleSizes);
 
   // Type: for Label tab, derive from section/label_type. For other tabs,
@@ -457,10 +476,25 @@ function techPackElementToSeedRow(elem, cfg, ctx = {}) {
   // the per-size UPC entry by matching on article_code.
   const pcEan = cfg.showEAN ? lookupUpcEan(upc, articleCode) : "";
 
+  // Procurement / floor-supervisor fields. AI extraction pulls these
+  // alongside description/material; surface them on the seeded row so
+  // the user doesn't have to retype.
+  const colorText     = String(elem.color     || "").trim();
+  const placementText = String(elem.placement || "").trim();
+  const supplierText  = String(elem.supplier  || "").trim();
+
   if (cfg.splitDescSize) {
-    return { ...base, type: typeText, quality: "", description: descText, size: sizeText, pc_ean_code: pcEan };
+    return {
+      ...base, type: typeText, quality: "", description: descText, size: sizeText,
+      color: colorText, placement: placementText, supplier: supplierText,
+      pc_ean_code: pcEan,
+    };
   }
-  return { ...base, type: typeText, quality: descText, description: "", size: sizeText, pc_ean_code: pcEan };
+  return {
+    ...base, type: typeText, quality: descText, description: "", size: sizeText,
+    color: colorText, placement: placementText, supplier: supplierText,
+    pc_ean_code: pcEan,
+  };
 }
 
 // Returns true when a tech-pack JSONB element has no usable description.
@@ -516,11 +550,46 @@ export function findTechPackForArticle({ articleCode, poId, techPacks }) {
   const byCode = techPacks.find((tp) => (tp.article_code || "").trim().toUpperCase() === normalised);
   if (byCode) return byCode;
 
+  // Brand-prefix-stripped fallback. Buyers often add a 2-char brand prefix
+  // (e.g. "GP" for Goofproof) to the same base SKU that exists un-prefixed
+  // in master data. Try the base-code lookup before falling through to the
+  // PO match — the PO match is broad and would return the WRONG tech-pack
+  // when several articles share one PO.
+  for (const base of baseSKUVariants(normalised)) {
+    const byBase = techPacks.find((tp) => (tp.article_code || "").trim().toUpperCase() === base);
+    if (byBase) return byBase;
+  }
+
+  // PO-fallback: only safe when there's exactly ONE tech-pack for this PO.
+  // Multi-article POs with several tech packs (one per article_code) used
+  // to silently inherit the FIRST tech-pack for every article that didn't
+  // have its own — every tab seed wrong from article #2 onwards. Now we
+  // refuse to guess: if the PO has multiple tech-packs, return null and
+  // let the caller fall through to articleSizes / master-data sources.
   if (poId) {
-    const byPo = techPacks.find((tp) => tp.po_id === poId);
-    if (byPo) return byPo;
+    const matchesForPo = techPacks.filter((tp) => tp.po_id === poId);
+    if (matchesForPo.length === 1) return matchesForPo[0];
   }
   return null;
+}
+
+/**
+ * Yield progressively-shorter base-SKU variants of `code` to try as a
+ * fallback when the exact code doesn't match. We strip well-known leading
+ * brand prefixes (1-3 chars). This lets `GPFRIOMP46` (Goofproof) match
+ * master data stored as `FRIOMP46`. Only emits variants with at least
+ * 4 chars left so we don't false-match very short codes.
+ */
+function baseSKUVariants(code) {
+  if (!code || code.length < 6) return [];
+  const KNOWN_PREFIXES = ["GP", "JF", "FT", "SLP", "SGS"];
+  const out = [];
+  for (const p of KNOWN_PREFIXES) {
+    if (code.startsWith(p) && code.length - p.length >= 4) {
+      out.push(code.slice(p.length));
+    }
+  }
+  return out;
 }
 
 /**
@@ -563,11 +632,27 @@ export function resolveDescription({
   const normalised = articleCode.trim().toUpperCase();
 
   // ── Tier 1: consumption_library ──────────────────────────────────────
-  const masterRows = (masterSpecs || []).filter(
+  // Try the exact item_code first.
+  let masterRows = (masterSpecs || []).filter(
     (m) =>
       (m.item_code || "").trim().toUpperCase() === normalised &&
       m.component_type === tabCategory
   );
+
+  // Brand-prefix fallback. If the exact code has nothing, try base
+  // variants ("GPFRIOMP46" → "FRIOMP46") so a Goofproof PO finds the
+  // un-prefixed master data row.
+  if (shouldFallThrough(masterRows)) {
+    for (const base of baseSKUVariants(normalised)) {
+      const baseRows = (masterSpecs || []).filter(
+        (m) => (m.item_code || "").trim().toUpperCase() === base && m.component_type === tabCategory
+      );
+      if (!shouldFallThrough(baseRows)) {
+        masterRows = baseRows;
+        break;
+      }
+    }
+  }
 
   if (!shouldFallThrough(masterRows)) {
     return masterRows.map((m) => masterRowToSeedRow(m, cfg, articleSizes));
@@ -678,6 +763,8 @@ export function resolveDescription({
     else if (cfg.category === "Insert Card") fallbackSize = sku.insert_dimensions   || null;
     else if (cfg.category === "Zipper")      fallbackSize = sku.zipper_length        || null;
   }
+  // Reject multi-size blobs at this fallback layer too.
+  if (isMultiSizeBlob(fallbackSize)) fallbackSize = null;
   if (!fallbackSize) {
     const articleOnly = articleSizeForTab(cfg, articleSizes);
     if (articleOnly) fallbackSize = articleOnly;
