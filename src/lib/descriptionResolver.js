@@ -32,7 +32,12 @@ import { isMultiSizeBlob } from "@/lib/dimensionNormalizer";
 // Trim tab), so dropping it from the alias list does not regress.
 const CATEGORY_ALIASES = {
   "Label":       ["label", "law tag", "care label", "size label", "brand label", "hang tag", "wash label"],
-  "Insert Card": ["insert card", "insert", "color paper insert", "art card", "bleach card"],
+  // Bare "insert" was too broad — it substring-matched into items like
+  // "Sewing Insert Label", making a single label appear in BOTH the
+  // Label tab and the Insert Card tab. Insert-card phrasing always
+  // includes a qualifier (card / color paper insert / art card / bleach
+  // card), so the bare token isn't needed. Removed per MAS alignment.
+  "Insert Card": ["insert card", "color paper insert", "art card", "bleach card"],
   "Polybag":     ["polybag", "poly bag", "pvc bag", "pvc", "pe bag", "opp bag", "ldpe bag", "bag material"],
   "Stiffener":   ["stiffener", "cardboard", "card stiffener", "stiffener size"],
   "Carton":      ["carton", "carton box", "outer carton", "shipping carton", "carton size"],
