@@ -683,57 +683,6 @@ export default function PackagingPlanning() {
     }
   };
 
-  // ── Sewing Thread banner (Trim tab only) ────────────────────────────
-  // Per docs/architecture.md §7. Aggregates sewing-thread-flavoured
-  // entries from tech_packs.extracted_trim_specs across the active PO's
-  // articles. Surfaces distinct colors / counts / suppliers so the
-  // procurement team sees a thread-only roll-up at the top of the Trim
-  // tab without having to hunt through the per-article rows below.
-  //
-  // A trim spec counts as "sewing thread" when any of these contain
-  // the word "thread" (case-insensitive): trim_type, category,
-  // material, description, item_name. We don't gate on a single field
-  // because AI extractions and BOB extractions disagree on which one
-  // carries the intent.
-  const sewingThreadSummary = useMemo(() => {
-    if (!activePo) return null;
-    const articleCodesInPo = new Set(poArticles.map(a => (a.article_code || "").trim().toUpperCase()).filter(Boolean));
-    if (articleCodesInPo.size === 0) return null;
-
-    const isThread = (s) => /thread/i.test(String(s || ""));
-    const rows = [];
-    const colors    = new Set();
-    const counts    = new Set(); // tex / count / Nm / etc.
-    const suppliers = new Set();
-    const articles  = new Set();
-
-    for (const tp of techPacks) {
-      const code = (tp.article_code || "").trim().toUpperCase();
-      if (!code || !articleCodesInPo.has(code)) continue;
-      const trims = Array.isArray(tp.extracted_trim_specs) ? tp.extracted_trim_specs : [];
-      for (const t of trims) {
-        const matches = isThread(t.trim_type) || isThread(t.category) || isThread(t.material)
-          || isThread(t.description) || isThread(t.item_name);
-        if (!matches) continue;
-        rows.push({ article_code: code, ...t });
-        articles.add(code);
-        if (t.color) colors.add(String(t.color));
-        if (t.size_spec) counts.add(String(t.size_spec));
-        else if (t.count) counts.add(String(t.count));
-        if (t.supplier) suppliers.add(String(t.supplier));
-      }
-    }
-
-    if (rows.length === 0) return null;
-    return {
-      total:        rows.length,
-      articles:     Array.from(articles).sort(),
-      colors:       Array.from(colors).sort(),
-      counts:       Array.from(counts).sort(),
-      suppliers:    Array.from(suppliers).sort(),
-    };
-  }, [activePo?.id, poArticles, techPacks]);
-
   // Tab summary counts.
   // Per docs/architecture.md §7 — tabs filter by matchesCategory()
   // (loose substring + alias + exclusion) rather than strict equality.
@@ -758,26 +707,36 @@ export default function PackagingPlanning() {
   //   (category, item_description, size_spec, color, placement,
   //    supplier, garment_size)
   //
-  // Two of those (placement, garment_size) are reserved per the spec
-  // but not yet present as columns on accessory_items in this DB —
-  // they're keyed in as empty strings here, so behaviour collapses to
-  // a 5-tuple key today and will lift to the full 7-tuple
-  // automatically when those columns are added (no further code
-  // change required at that time, just include them in the destructure
-  // and select clause when the columns ship).
-  //
-  // The previous 3-tuple key over-aggregated: items differing only on
-  // color or supplier rolled into a single misleading total. Procurement
-  // would issue one PO at the merged total to "some" supplier when in
-  // fact the items needed to be split.
+  // Cartons and size-specific labels need to roll up per garment size
+  // (Twin, Full, King, etc.) rather than collapsing across the whole PO.
+  // articleSizeByCode maps article_code → the garment size on the
+  // articles row. This is what gets keyed for the rollup; the
+  // accessory_items row itself doesn't (yet) carry garment_size, so we
+  // resolve it from the linked article.
+  const articleSizeByCode = useMemo(() => {
+    const m = new Map();
+    for (const a of poArticles) {
+      if (a.article_code) {
+        m.set(a.article_code.trim().toUpperCase(), a.size || "");
+      }
+    }
+    return m;
+  }, [poArticles]);
+
   const itemSummary = useMemo(() => {
     if (!activePo) return [];
     const map = new Map();
     for (const it of existingItems) {
       if (it.po_id !== activePo.id) continue;
       if (!it.quantity_required || it.quantity_required <= 0) continue;
-      const placement    = it.placement    || "";  // reserved per §7
-      const garment_size = it.garment_size || "";  // reserved per §7
+      // Drop summary rows that carry no descriptive content (legacy
+      // empty placeholder rows from before today's empty-row guard).
+      if (!String(it.item_description || "").trim() && !String(it.size_spec || "").trim()) continue;
+      // Resolve the garment size for this row from the article_code.
+      // Falls back to "" if the article isn't in the lookup (shouldn't
+      // happen, but defensive).
+      const garmentSize = articleSizeByCode.get((it.article_code || "").trim().toUpperCase()) || "";
+      const placement = it.placement || "";
       const key = [
         it.category || "",
         it.item_description || "",
@@ -785,7 +744,7 @@ export default function PackagingPlanning() {
         it.color || "",
         placement,
         it.supplier || "",
-        garment_size,
+        garmentSize,
       ].join("||");
       if (!map.has(key)) {
         map.set(key, {
@@ -795,7 +754,7 @@ export default function PackagingPlanning() {
           color:            it.color || "",
           placement,
           supplier:         it.supplier || "",
-          garment_size,
+          garment_size:     garmentSize,
           unit:             it.unit || "Pcs",
           total_qty:        0,
           articles:         new Set(),
@@ -817,17 +776,30 @@ export default function PackagingPlanning() {
         pc_ean_code:      Array.from(r.pc_ean_codes).join(", "),
         carton_ean_code:  Array.from(r.carton_ean_codes).join(", "),
       }))
-      .sort((a, b) => a.category.localeCompare(b.category) || a.item_description.localeCompare(b.item_description));
-  }, [existingItems, activePo?.id]);
+      .sort((a, b) =>
+        a.category.localeCompare(b.category)
+        || a.item_description.localeCompare(b.item_description)
+        || (a.garment_size || "").localeCompare(b.garment_size || "")
+      );
+  }, [existingItems, activePo?.id, articleSizeByCode]);
 
   // CSV export of the bottom summary. Format is what the procurement team
   // sends to suppliers — flat row-per-item with rolled-up totals.
   const handleExportCSV = () => {
     if (!activePo || itemSummary.length === 0) return;
-    const headers = ["Category", "Item / Type", "Size / Description", "Total Qty (incl wastage)", "Unit", "Articles", "Articles count", "PC EAN", "Carton EAN"];
+    const headers = [
+      "Category", "Item / Type", "Garment Size", "Size / Description",
+      "Color", "Placement", "Supplier",
+      "Total Qty (incl wastage)", "Unit",
+      "Articles", "Articles count",
+      "PC EAN", "Carton EAN",
+    ];
     const rows = itemSummary.map(r => [
-      r.category, r.item_description, r.size_spec, r.total_qty, r.unit,
-      r.articles_list, r.articles_count, r.pc_ean_code, r.carton_ean_code,
+      r.category, r.item_description, r.garment_size, r.size_spec,
+      r.color, r.placement, r.supplier,
+      r.total_qty, r.unit,
+      r.articles_list, r.articles_count,
+      r.pc_ean_code, r.carton_ean_code,
     ]);
     const csv = [headers, ...rows]
       .map(row => row.map(cell => {
@@ -909,27 +881,62 @@ export default function PackagingPlanning() {
         ))}
       </div>
 
-      {/* Sewing Thread banner — Trim tab only, when tech_packs have
-          thread-tagged entries for any article in this PO. Per
-          docs/architecture.md §7. */}
-      {subTab === "Trim" && sewingThreadSummary && (
-        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          <div className="font-semibold mb-1">
-            Sewing Thread (from tech packs) — {sewingThreadSummary.total} entr{sewingThreadSummary.total === 1 ? "y" : "ies"} across {sewingThreadSummary.articles.length} article{sewingThreadSummary.articles.length === 1 ? "" : "s"}
+      {/* Trim tab — surface Sewing Thread prominently. Threads
+          are easy to overlook because they're one entry among many
+          on the Trim tab; floor supervisors and procurement both
+          need to see the spec at a glance. The banner aggregates
+          thread descriptions across techPacks for THIS PO's articles
+          and shows them in one read-only block above the per-article
+          editing tables. Aligned with MAS — per-spec list with
+          color / placement / supplier and article-count. */}
+      {subTab === "Trim" && activePo && (() => {
+        const threads = new Map(); // key: description+color → { description, color, articles[] }
+        for (const art of poArticles) {
+          const tp = findTechPackForArticle({
+            articleCode: art.article_code,
+            poId: activePo.id,
+            techPacks,
+          });
+          const trims = tp?.extracted_trim_specs ?? [];
+          for (const t of trims) {
+            const looksLikeThread =
+              /thread/i.test(t?.trim_type || "") ||
+              /thread/i.test(t?.description || "") ||
+              /thread/i.test(t?.material || "");
+            if (!looksLikeThread) continue;
+            const key = `${t.description || t.material || ""}||${t.color || ""}`;
+            if (!threads.has(key)) {
+              threads.set(key, {
+                description: t.description || t.material || "Sewing Thread",
+                color: t.color || "",
+                placement: t.placement || "",
+                supplier: t.supplier || "",
+                articles: new Set(),
+              });
+            }
+            if (art.article_code) threads.get(key).articles.add(art.article_code);
+          }
+        }
+        if (threads.size === 0) return null;
+        return (
+          <div className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs">
+            <div className="font-semibold text-amber-900 mb-1.5">
+              🧵 Sewing thread spec — read carefully before issuing the trim PO
+            </div>
+            <ul className="space-y-1 text-amber-900/90">
+              {Array.from(threads.values()).map((t, i) => (
+                <li key={i}>
+                  <span className="font-medium">{t.description}</span>
+                  {t.color && <span> · color: <strong>{t.color}</strong></span>}
+                  {t.placement && <span> · use: {t.placement}</span>}
+                  {t.supplier && <span> · supplier: {t.supplier}</span>}
+                  <span className="text-amber-700/70"> ({t.articles.size} article{t.articles.size === 1 ? "" : "s"})</span>
+                </li>
+              ))}
+            </ul>
           </div>
-          <div className="space-y-0.5">
-            {sewingThreadSummary.colors.length > 0 && (
-              <div><span className="font-medium">Colors:</span> {sewingThreadSummary.colors.join(", ")}</div>
-            )}
-            {sewingThreadSummary.counts.length > 0 && (
-              <div><span className="font-medium">Counts / sizes:</span> {sewingThreadSummary.counts.join(", ")}</div>
-            )}
-            {sewingThreadSummary.suppliers.length > 0 && (
-              <div><span className="font-medium">Suppliers:</span> {sewingThreadSummary.suppliers.join(", ")}</div>
-            )}
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Articles */}
       {!activePo ? (
