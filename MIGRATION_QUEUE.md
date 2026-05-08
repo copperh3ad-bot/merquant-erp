@@ -25,8 +25,12 @@ Numbering follows the repo convention of 4-digit zero-padded sequential IDs.
 | 0031 | `0031_imap_credentials.sql`                    | imap_credentials + Vault encryption RPCs (mega-prompt Phase 5) | No                |
 | 0032 | `0032_tna_risk_agent.sql`                      | TNA risk thresholds + risk drafts + tna_milestones risk cols (mega-prompt Phase 6) | No |
 | 0033 | `0033_agent_memory_layer.sql`                  | Agent memory store + 2 retrieval RPCs (mega-prompt Phase 1) | No                   |
+| 0037 | `0037_bom_consumption_schema.sql`              | BOM consumption engine: size_masters + article_components + bom_results + bom_set_totals + tech_pack_construction_specs + wastage_memory (mega-prompt Phase 8) | No |
+| 0038 | `0038_thread_consumption_schema.sql`           | Thread consumption: stitch_library (16 ISO stitches seeded) + article_seams + thread_bom_results + thread_bom_totals (mega-prompt Phase 8) | No |
+| 0039 | `0039_po_fabric_requirements.sql`              | PO fabric requirement aggregation table + RPC `calculate_po_fabric_requirements` (ERP-adapted RPC body fans out per po_items.size_breakdown jsonb key) (mega-prompt Phase 8) | No |
+| 0040 | `0040_fabric_order_generation.sql`             | facility_capabilities + fabric_order_drafts + ALTERs to fabric_orders (9 cols) + RPC `match_facility_for_material` + 3 facility seeds (mega-prompt Phase 8) | No |
 
-All 18 migrations (0016 → 0033, including 0032) have been applied to the production DB
+All 22 migrations (0016 → 0033, plus 0037-0040; including 0032) have been applied to the production DB
 (`MerQuant ERP` Supabase project) as of 2026-05-04. They are tagged on
 the live `supabase_migrations.schema_migrations` table by the
 `mcp__supabase__apply_migration` calls that ran during the
