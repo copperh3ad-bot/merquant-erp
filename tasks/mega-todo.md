@@ -28,7 +28,7 @@ Resume contract: read this file → first `[ ]` is next; `[x]` are done.
 - [x] Phase 16 — EventStreamPanel realtime feed (commit pending)
 - [x] Phase 17 — full E2E integration test (commit pending) — pipeline verified end-to-end, 8.5s latency
 - [x] Phase 18 — deploy all new edge functions to live (commit pending) — 12 deployed, all ACTIVE
-- [ ] Phase 19 — Netlify env vars checklist
+- [x] Phase 19 — Netlify env vars checklist (commit pending) — see tasks/NETLIFY_ENV.md
 - [ ] Phase 20 — final summary + cleanup
 
 ## Notes captured during run
