@@ -26,8 +26,8 @@ Resume contract: read this file → first `[ ]` is next; `[x]` are done.
 - [x] Phase 2 — mig 0034 realtime triggers (Vault-adapted) (commit pending)
 - [x] Phase 3 — migs 0035 + 0036 + orchestrator + memory-consolidation + email-crawler-agent (commit pending)
 - [x] Phase 16 — EventStreamPanel realtime feed (commit pending)
-- [ ] Phase 17 — full E2E integration test
-- [ ] Phase 18 — deploy all new edge functions to live
+- [x] Phase 17 — full E2E integration test (commit pending) — pipeline verified end-to-end, 8.5s latency
+- [x] Phase 18 — deploy all new edge functions to live (commit pending) — 12 deployed, all ACTIVE
 - [ ] Phase 19 — Netlify env vars checklist
 - [ ] Phase 20 — final summary + cleanup
 

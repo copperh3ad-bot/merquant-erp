@@ -215,6 +215,19 @@ async function runTargetedTnaRisk(ctx: OrchestratorContext) {
 // Action: Write a memory record via memory-writer edge fn
 // ---------------------------------------------------------------------------
 
+// agent_memories.entity_type CHECK constraint allows only:
+//   'buyer','supplier','article','agent','po'.
+// Translate event-trigger entity_types (which are richer) to the closest
+// allowed memory entity_type before calling memory-writer.
+const ENTITY_TYPE_MAP: Record<string, string> = {
+  purchase_order: 'po',
+  tna_milestone:  'po',
+  email_po_draft: 'po',
+  shipment:       'po',
+  qc_inspection:  'po',
+  tna_risk_draft: 'po',
+};
+
 async function writeMemoryEvent(
   ctx: OrchestratorContext,
   override?: {
@@ -227,24 +240,36 @@ async function writeMemoryEvent(
   },
 ) {
   const payload = ctx.event.payload;
+  const mappedEntityType =
+    ENTITY_TYPE_MAP[ctx.event.entity_type] ?? ctx.event.entity_type;
   const data = override ?? {
     event_type:   ctx.event.event_type,
-    entity_type:  ctx.event.entity_type,
+    entity_type:  mappedEntityType,
     entity_id:    String(ctx.event.entity_id),
     entity_label: (payload.buyer_name ?? payload.supplier_name ?? ctx.event.entity_id) as string,
     context:      JSON.stringify(payload).substring(0, 1000),
     source_id:    ctx.event.entity_id,
   };
 
-  // Fire-and-forget; never block the orchestrator on memory writes.
-  fetch(`${ctx.supabaseUrl}/functions/v1/memory-writer`, {
-    method:  "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization:  `Bearer ${ctx.serviceKey}`,
-    },
-    body: JSON.stringify({ ...data, agent_name: "orchestrator" }),
-  }).catch(() => {});
+  // We can't truly fire-and-forget across edge functions on Supabase: when
+  // the orchestrator's Deno isolate exits, in-flight outbound requests are
+  // terminated. Await the call instead so memory-writer's Claude work
+  // actually completes. Errors are logged but don't fail the orchestrator.
+  try {
+    const res = await fetch(`${ctx.supabaseUrl}/functions/v1/memory-writer`, {
+      method:  "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization:  `Bearer ${ctx.serviceKey}`,
+      },
+      body: JSON.stringify({ ...data, agent_name: "orchestrator" }),
+    });
+    if (!res.ok) {
+      console.warn(`[orchestrator] memory-writer ${res.status}: ${await res.text()}`);
+    }
+  } catch (err) {
+    console.warn("[orchestrator] memory-writer failed:", err);
+  }
 }
 
 // ---------------------------------------------------------------------------
