@@ -8,6 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Card, CardContent } from "@/components/ui/card";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import FabricOrderDrafts from "@/components/fabric/FabricOrderDrafts";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { Shirt, Plus, Pencil, Trash2, Search, AlertCircle, CheckCircle2, Clock, TrendingDown, RefreshCw } from "lucide-react";
@@ -190,6 +192,12 @@ export default function FabricOrdersPage() {
           <Button size="sm" onClick={()=>{setEditing(null);setShowForm(true);}}><Plus className="h-4 w-4 mr-1.5"/>New Fabric Order</Button>
         </div>
       </div>
+      <Tabs defaultValue="orders" className="w-full">
+        <TabsList className="grid grid-cols-2 w-full max-w-md">
+          <TabsTrigger value="orders" className="text-xs">Active Orders</TabsTrigger>
+          <TabsTrigger value="drafts" className="text-xs">Generated Drafts</TabsTrigger>
+        </TabsList>
+        <TabsContent value="orders" className="mt-3 space-y-4">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard title="Active Orders" value={stats.active} icon={Clock} iconBg="bg-blue-100"/>
         <StatCard title="Overdue Delivery" value={stats.overdue} icon={AlertCircle} iconBg="bg-red-100"/>
@@ -240,6 +248,11 @@ export default function FabricOrdersPage() {
           </div>
         </CardContent></Card>
       )}
+        </TabsContent>
+        <TabsContent value="drafts" className="mt-3">
+          <FabricOrderDrafts />
+        </TabsContent>
+      </Tabs>
       <FabricOrderForm open={showForm} onOpenChange={v=>{setShowForm(v);if(!v)setEditing(null);}} onSave={handleSave} initialData={editing} pos={pos}/>
     </div>
   );
