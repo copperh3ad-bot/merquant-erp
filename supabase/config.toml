@@ -39,6 +39,16 @@ verify_jwt = true
 [functions.ai-assistant-v2]
 verify_jwt = true
 
+# Email PO agent (Phase 5).
+[functions.email-po-agent]
+verify_jwt = true
+
+[functions.imap-test-connection]
+verify_jwt = true
+
+[functions.imap-credentials-save]
+verify_jwt = true
+
 # Cron / scheduled functions are invoked by Supabase's internal scheduler
 # with a service-role key, not by user JWTs. They run with verify_jwt off
 # but their handlers must check that the secret cron header matches.

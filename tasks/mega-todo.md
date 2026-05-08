@@ -11,7 +11,7 @@ Resume contract: read this file → first `[ ]` is next; `[x]` are done.
 
 - [x] Phase 1 — agent_memory_layer (mig 0033) + memory-reader + memory-writer (commit pending)
 - [x] Phase 4 — ai-assistant-v2 + AIAssistant flag wiring (commit pending)
-- [ ] Phase 5 partial — migs 0029/0030/0031 + email-po-agent + imap fns (no email-crawler-agent yet)
+- [x] Phase 5 partial — migs 0029/0030/0031 + email-po-agent + imap fns (no email-crawler-agent yet) (commit pending)
 - [ ] Phase 6 — mig 0032 + tna-risk-agent
 - [ ] Phase 7 — 4 pages + sidebar wiring
 - [ ] Phase 8 — BOM migs 0037–0040
