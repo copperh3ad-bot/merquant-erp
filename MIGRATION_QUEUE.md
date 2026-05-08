@@ -23,9 +23,10 @@ Numbering follows the repo convention of 4-digit zero-padded sequential IDs.
 | 0029 | `0029_email_po_drafts.sql`                     | Email-to-PO draft staging table (mega-prompt Phase 5)     | No                     |
 | 0030 | `0030_email_crawler_agent.sql`                 | gmail_tokens, agent_run_log + email_crawl_log ALTERs (mega-prompt Phase 5; cron section deferred to Phase 3 PAUSE) | No |
 | 0031 | `0031_imap_credentials.sql`                    | imap_credentials + Vault encryption RPCs (mega-prompt Phase 5) | No                |
+| 0032 | `0032_tna_risk_agent.sql`                      | TNA risk thresholds + risk drafts + tna_milestones risk cols (mega-prompt Phase 6) | No |
 | 0033 | `0033_agent_memory_layer.sql`                  | Agent memory store + 2 retrieval RPCs (mega-prompt Phase 1) | No                   |
 
-All 17 migrations (0016 → 0033) have been applied to the production DB
+All 18 migrations (0016 → 0033, including 0032) have been applied to the production DB
 (`MerQuant ERP` Supabase project) as of 2026-05-04. They are tagged on
 the live `supabase_migrations.schema_migrations` table by the
 `mcp__supabase__apply_migration` calls that ran during the
