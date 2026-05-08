@@ -13,7 +13,7 @@ Resume contract: read this file → first `[ ]` is next; `[x]` are done.
 - [x] Phase 4 — ai-assistant-v2 + AIAssistant flag wiring (commit pending)
 - [x] Phase 5 partial — migs 0029/0030/0031 + email-po-agent + imap fns (no email-crawler-agent yet) (commit pending)
 - [x] Phase 6 — mig 0032 + tna-risk-agent (commit pending)
-- [ ] Phase 7 — 4 pages + sidebar wiring
+- [x] Phase 7 — 4 pages + sidebar wiring (commit pending)
 - [ ] Phase 8 — BOM migs 0037–0040
 - [ ] Phase 9 — formula engines + 10 self-tests
 - [ ] Phase 10 — bom-calculator edge fn
