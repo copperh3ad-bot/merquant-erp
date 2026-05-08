@@ -16,9 +16,9 @@ Resume contract: read this file → first `[ ]` is next; `[x]` are done.
 - [x] Phase 7 — 4 pages + sidebar wiring (commit pending)
 - [x] Phase 8 — BOM migs 0037–0040 (commit pending)
 - [x] Phase 9 — formula engines + 10 self-tests (commit pending) — 10/10 passed
-- [ ] Phase 10 — bom-calculator edge fn
-- [ ] Phase 11 — po-fabric-calculator edge fn
-- [ ] Phase 12 — fabric-order-generator edge fn
+- [x] Phase 10 — bom-calculator edge fn (commit pending)
+- [x] Phase 11 — po-fabric-calculator edge fn (commit pending)
+- [x] Phase 12 — fabric-order-generator edge fn (commit pending)
 - [ ] Phase 13 — BOMCalculator page + SeamEditor
 - [ ] Phase 14 — POFabricRequirements wired into PODetail (Case A)
 - [ ] Phase 15 — FabricOrderDrafts wired into FabricOrders (Case B — add tabs)
