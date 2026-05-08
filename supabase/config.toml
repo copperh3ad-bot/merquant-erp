@@ -79,3 +79,18 @@ verify_jwt = false
 
 [functions.notify-pricing-pending]
 verify_jwt = false
+
+# Phase 2/3 — agentic background jobs.
+# agent-orchestrator: invoked by mig 0034 DB triggers via pg_net with
+# Authorization: Bearer <service_role_key>. memory-consolidation-agent +
+# email-crawler-agent: invoked by pg_cron via pg_net (mig 0036). Same auth
+# pattern. verify_jwt = true is fine — service-role keys are valid JWTs and
+# pass the check, while blocking unauthenticated callers.
+[functions.agent-orchestrator]
+verify_jwt = true
+
+[functions.memory-consolidation-agent]
+verify_jwt = true
+
+[functions.email-crawler-agent]
+verify_jwt = true

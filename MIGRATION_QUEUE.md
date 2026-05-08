@@ -30,8 +30,10 @@ Numbering follows the repo convention of 4-digit zero-padded sequential IDs.
 | 0039 | `0039_po_fabric_requirements.sql`              | PO fabric requirement aggregation table + RPC `calculate_po_fabric_requirements` (ERP-adapted RPC body fans out per po_items.size_breakdown jsonb key) (mega-prompt Phase 8) | No |
 | 0040 | `0040_fabric_order_generation.sql`             | facility_capabilities + fabric_order_drafts + ALTERs to fabric_orders (9 cols) + RPC `match_facility_for_material` + 3 facility seeds (mega-prompt Phase 8) | No |
 | 0034 | `0034_realtime_event_triggers.sql`             | agent_events table + 6 triggers (purchase_orders, tna_milestones, email_po_drafts, shipments, qc_inspections, tna_risk_drafts) + `fire_agent_event` SECURITY DEFINER fn that calls agent-orchestrator via pg_net. Supabase-adapted: reads service-role key from `vault.decrypted_secrets` (name=`service_role_key`); project ref hardcoded. (mega-prompt Phase 2) | No (but needs pg_cron+pg_net+vault secret) |
+| 0035 | `0035_agent_action_policy.sql`                 | agent_action_policy (16-row seed) + agent_action_queue + `execute_agent_action` RPC + hourly pg_cron `expire-agent-actions`. ERP-adapted: tna_milestones uses target_date / tna_id. (mega-prompt Phase 3) | No |
+| 0036 | `0036_full_agentic_schedules.sql`              | 6 pg_cron jobs (memory-consolidation weekly, tna-risk-agent daily, email-crawler 15 min, expire-agent-actions hourly, cleanup-agent-events daily, cleanup-pg-net-responses daily). All read service-role key from `vault.decrypted_secrets`. (mega-prompt Phase 3) | No |
 
-All 23 migrations (0016 → 0034, plus 0037-0040; including 0032) have been applied to the production DB
+All 25 migrations (0016 → 0036, plus 0037-0040; including 0032) have been applied to the production DB
 (`MerQuant ERP` Supabase project) as of 2026-05-04. They are tagged on
 the live `supabase_migrations.schema_migrations` table by the
 `mcp__supabase__apply_migration` calls that ran during the
