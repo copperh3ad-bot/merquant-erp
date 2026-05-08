@@ -36,6 +36,17 @@ import BulkActionsBar from "@/components/techpack/BulkActionsBar";
 
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM yy") : "—"; } catch { return "—"; } };
 
+// Client-side cap on tech-pack file size. Bumped from 10 MB → 100 MB on
+// 2026-05-08 to accommodate large multi-SKU BOB Excel workbooks (e.g.
+// Purecare Modal Jersey Knitted Sheet Sets at ~80 MB). The XLSX path
+// parses files in-browser so the bottleneck is browser memory, not an
+// edge-function payload limit. If the Supabase Storage upload of the
+// raw file fails (project file_size_limit defaults to 50 MB on free
+// tier), the upload still succeeds — TechPacks falls back to a blob:
+// URL so parse + extract still works.
+const TECH_PACK_MAX_FILE_SIZE_MB    = 100;
+const TECH_PACK_MAX_FILE_SIZE_BYTES = TECH_PACK_MAX_FILE_SIZE_MB * 1024 * 1024;
+
 const EXTRACT_STATUS_STYLES = {
   pending:     "bg-gray-100 text-gray-600 border-gray-200",
   processing:  "bg-blue-100 text-blue-700 border-blue-200",
@@ -770,14 +781,14 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
   const addFiles = (fileList) => {
     const incoming = Array.from(fileList || []);
     if (!incoming.length) return;
-    const oversized = incoming.filter(f => f.size > 10 * 1024 * 1024);
+    const oversized = incoming.filter(f => f.size > TECH_PACK_MAX_FILE_SIZE_BYTES);
     if (oversized.length) {
       alert(
-        `Skipped ${oversized.length} file${oversized.length > 1 ? "s" : ""} larger than 10 MB:\n` +
+        `Skipped ${oversized.length} file${oversized.length > 1 ? "s" : ""} larger than ${TECH_PACK_MAX_FILE_SIZE_MB} MB:\n` +
         oversized.map(f => `• ${f.name} (${(f.size / (1024 * 1024)).toFixed(1)} MB)`).join("\n")
       );
     }
-    const accepted = incoming.filter(f => f.size <= 10 * 1024 * 1024);
+    const accepted = incoming.filter(f => f.size <= TECH_PACK_MAX_FILE_SIZE_BYTES);
     if (!accepted.length) return;
     setFiles(prev => {
       const keys = new Set(prev.map(f => `${f.name}-${f.size}`));
