@@ -25,7 +25,7 @@ Resume contract: read this file → first `[ ]` is next; `[x]` are done.
 - [ ] **PAUSE** for `pg_cron` + `pg_net` + `app.service_role_key` (manual)
 - [x] Phase 2 — mig 0034 realtime triggers (Vault-adapted) (commit pending)
 - [x] Phase 3 — migs 0035 + 0036 + orchestrator + memory-consolidation + email-crawler-agent (commit pending)
-- [ ] Phase 16 — EventStreamPanel realtime feed
+- [x] Phase 16 — EventStreamPanel realtime feed (commit pending)
 - [ ] Phase 17 — full E2E integration test
 - [ ] Phase 18 — deploy all new edge functions to live
 - [ ] Phase 19 — Netlify env vars checklist

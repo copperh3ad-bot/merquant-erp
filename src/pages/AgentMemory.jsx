@@ -13,6 +13,7 @@ import {
   Truck, Package, Bot, ThumbsUp, ThumbsDown
 } from 'lucide-react';
 import { supabase } from '@/api/supabaseClient';
+import EventStreamPanel from '@/components/agent/EventStreamPanel';
 
 // ---------------------------------------------------------------------------
 // Memory type config
@@ -193,6 +194,7 @@ function MemoryStats({ memories }) {
 // Main page
 // ---------------------------------------------------------------------------
 export default function AgentMemory() {
+  const [view, setView]             = useState('memories'); // 'memories' | 'events'
   const [memories, setMemories]     = useState([]);
   const [loading, setLoading]       = useState(true);
   const [search, setSearch]         = useState('');
@@ -295,6 +297,28 @@ export default function AgentMemory() {
       </div>
 
       <div className="max-w-screen-xl mx-auto px-6 py-6 space-y-5">
+        {/* View tabs (Phase 16) */}
+        <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit">
+          {[
+            { id: 'memories', label: 'Memories' },
+            { id: 'events',   label: 'Live Events' },
+          ].map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setView(t.id)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                view === t.id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {view === 'events' && <EventStreamPanel />}
+
+        {view === 'memories' && (
+          <>
         {/* Stats */}
         <MemoryStats memories={activeMemories} />
 
@@ -382,6 +406,8 @@ export default function AgentMemory() {
               />
             ))}
           </div>
+        )}
+          </>
         )}
       </div>
     </div>
