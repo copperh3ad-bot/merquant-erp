@@ -15,7 +15,7 @@ Resume contract: read this file → first `[ ]` is next; `[x]` are done.
 - [x] Phase 6 — mig 0032 + tna-risk-agent (commit pending)
 - [x] Phase 7 — 4 pages + sidebar wiring (commit pending)
 - [x] Phase 8 — BOM migs 0037–0040 (commit pending)
-- [ ] Phase 9 — formula engines + 10 self-tests
+- [x] Phase 9 — formula engines + 10 self-tests (commit pending) — 10/10 passed
 - [ ] Phase 10 — bom-calculator edge fn
 - [ ] Phase 11 — po-fabric-calculator edge fn
 - [ ] Phase 12 — fabric-order-generator edge fn
