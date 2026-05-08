@@ -194,6 +194,9 @@ export const PAGE_VISIBILITY = {
   AgentActions:               ["Owner", "Manager", "Merchandiser"],
   EmailPOAgent:               ["Owner", "Manager", "Merchandiser"],
   TNARiskAgent:               ["Owner", "Manager", "Merchandiser"],
+
+  // Phase 13 — BOM calculator
+  BOMCalculator:              ["Owner", "Manager", "Merchandiser"],
 };
 
 export function canSeePage(userRole, pageName) {

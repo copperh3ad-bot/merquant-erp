@@ -58,6 +58,8 @@ import AgentMemory from './pages/AgentMemory';
 import AgentActions from './pages/AgentActions';
 import EmailPOAgent from './pages/EmailPOAgent';
 import TNARiskAgent from './pages/TNARiskAgent';
+// Phase 13 — BOM calculator page.
+import BOMCalculator from './pages/BOMCalculator';
 import Layout from './Layout.jsx';
 
 export const PAGES = {
@@ -117,6 +119,7 @@ export const PAGES = {
   AgentActions,
   EmailPOAgent,
   TNARiskAgent,
+  BOMCalculator,
   "auth/gmail-callback":     GmailCallback,
   PendingApproval,
   AuditDashboard,

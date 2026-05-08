@@ -19,7 +19,7 @@ Resume contract: read this file → first `[ ]` is next; `[x]` are done.
 - [x] Phase 10 — bom-calculator edge fn (commit pending)
 - [x] Phase 11 — po-fabric-calculator edge fn (commit pending)
 - [x] Phase 12 — fabric-order-generator edge fn (commit pending)
-- [ ] Phase 13 — BOMCalculator page + SeamEditor
+- [x] Phase 13 — BOMCalculator page + SeamEditor (commit pending)
 - [ ] Phase 14 — POFabricRequirements wired into PODetail (Case A)
 - [ ] Phase 15 — FabricOrderDrafts wired into FabricOrders (Case B — add tabs)
 - [ ] **PAUSE** for `pg_cron` + `pg_net` + `app.service_role_key` (manual)

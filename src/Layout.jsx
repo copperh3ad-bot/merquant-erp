@@ -7,7 +7,7 @@ import {
   DollarSign, CreditCard, ShieldAlert, Shirt, Sun, Users,
   ClipboardCheck, FileSearch, FileBox, BookOpen, FileImage,
   Briefcase, MessageSquare, TrendingUp, PackageCheck, Settings, Warehouse, ChevronDown, ChevronRight, Star, Upload,
-  Brain, Zap, Mail, Flag
+  Brain, Zap, Mail, Flag, Calculator
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import UserMenu from "@/components/shared/UserMenu";
@@ -42,6 +42,7 @@ const ALL_NAV = [
   { group: "Agents",          name: "TNA Risk Agent",           icon: Flag,             page: "TNARiskAgent" },
   // ── Materials & Production ─────────────────────────────────────
   { group: "Materials",       name: "Articles",                 icon: BookOpen,         page: "Articles",               permission: "FABRIC_SPEC_EDIT" },
+  { group: "Materials",       name: "BOM Calculator",           icon: Calculator,       page: "BOMCalculator" },
   { group: "Materials",       name: "Fabric Working",           icon: Layers,           page: "FabricWorking",          permission: "FABRIC_SPEC_EDIT" },
   { group: "Materials",       name: "Fabric Orders",            icon: Shirt,            page: "FabricOrders",           permission: "FABRIC_SPEC_EDIT" },
     { group: "Materials",       name: "RM Coverage",              icon: Warehouse,        page: "RMCoverage" },
