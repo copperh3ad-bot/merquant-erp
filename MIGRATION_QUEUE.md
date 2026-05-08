@@ -29,8 +29,9 @@ Numbering follows the repo convention of 4-digit zero-padded sequential IDs.
 | 0038 | `0038_thread_consumption_schema.sql`           | Thread consumption: stitch_library (16 ISO stitches seeded) + article_seams + thread_bom_results + thread_bom_totals (mega-prompt Phase 8) | No |
 | 0039 | `0039_po_fabric_requirements.sql`              | PO fabric requirement aggregation table + RPC `calculate_po_fabric_requirements` (ERP-adapted RPC body fans out per po_items.size_breakdown jsonb key) (mega-prompt Phase 8) | No |
 | 0040 | `0040_fabric_order_generation.sql`             | facility_capabilities + fabric_order_drafts + ALTERs to fabric_orders (9 cols) + RPC `match_facility_for_material` + 3 facility seeds (mega-prompt Phase 8) | No |
+| 0034 | `0034_realtime_event_triggers.sql`             | agent_events table + 6 triggers (purchase_orders, tna_milestones, email_po_drafts, shipments, qc_inspections, tna_risk_drafts) + `fire_agent_event` SECURITY DEFINER fn that calls agent-orchestrator via pg_net. Supabase-adapted: reads service-role key from `vault.decrypted_secrets` (name=`service_role_key`); project ref hardcoded. (mega-prompt Phase 2) | No (but needs pg_cron+pg_net+vault secret) |
 
-All 22 migrations (0016 → 0033, plus 0037-0040; including 0032) have been applied to the production DB
+All 23 migrations (0016 → 0034, plus 0037-0040; including 0032) have been applied to the production DB
 (`MerQuant ERP` Supabase project) as of 2026-05-04. They are tagged on
 the live `supabase_migrations.schema_migrations` table by the
 `mcp__supabase__apply_migration` calls that ran during the

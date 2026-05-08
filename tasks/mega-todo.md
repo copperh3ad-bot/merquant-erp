@@ -23,7 +23,7 @@ Resume contract: read this file → first `[ ]` is next; `[x]` are done.
 - [x] Phase 14 — POFabricRequirements wired into PODetail (Case A) (commit pending)
 - [x] Phase 15 — FabricOrderDrafts wired into FabricOrders (Case B — add tabs) (commit pending)
 - [ ] **PAUSE** for `pg_cron` + `pg_net` + `app.service_role_key` (manual)
-- [ ] Phase 2 — mig 0034 realtime triggers (needs pg_net)
+- [x] Phase 2 — mig 0034 realtime triggers (Vault-adapted) (commit pending)
 - [ ] Phase 3 — migs 0035 + 0036 + orchestrator + memory-consolidation
 - [ ] Phase 16 — EventStreamPanel realtime feed
 - [ ] Phase 17 — full E2E integration test
