@@ -21,6 +21,7 @@ import CBMSummary from "@/components/po/CBMSummary";
 import PriceVerification from "@/components/po/PriceVerification";
 import POBatches from "@/components/po/POBatches";
 import POApprovalPanel from "@/components/po/POApprovalPanel";
+import POFabricRequirements from "@/components/po/POFabricRequirements";
 import PriceOverrideCell from "@/components/po/PriceOverrideCell";
 
 // CSV bulk upload helper
@@ -523,9 +524,10 @@ export default function PODetail() {
 
       {/* Shipment Batch Manager */}
       <Tabs defaultValue="shipments" className="w-full">
-        <TabsList className="grid grid-cols-4 w-full max-w-2xl">
+        <TabsList className="grid grid-cols-5 w-full max-w-3xl">
           <TabsTrigger value="shipments" className="text-xs">Shipments</TabsTrigger>
           <TabsTrigger value="pricing" className="text-xs">Pricing & CBM</TabsTrigger>
+          <TabsTrigger value="fabric" className="text-xs">Fabric Reqs</TabsTrigger>
           <TabsTrigger value="payments" className="text-xs">Payments</TabsTrigger>
           <TabsTrigger value="changes" className="text-xs">Change Log</TabsTrigger>
         </TabsList>
@@ -535,6 +537,9 @@ export default function PODetail() {
         <TabsContent value="pricing" className="mt-3 space-y-4">
           <PriceVerification poId={poId} items={items} onEditItem={(item) => { setEditingItem(item); setShowItemForm(true); }} />
           <CBMSummary items={items} />
+        </TabsContent>
+        <TabsContent value="fabric" className="mt-3">
+          <POFabricRequirements poId={poId} poNumber={po.po_number} />
         </TabsContent>
         <TabsContent value="payments" className="mt-3">
           <PaymentSchedulePanel po={po} onPoUpdate={(updated) => qc.setQueryData(["po", poId], updated)} />

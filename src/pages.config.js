@@ -53,6 +53,13 @@ import ShortageAlerts from './pages/ShortageAlerts';
 import MasterDataImport from './pages/MasterDataImport';
 import AIExtractionReview from './pages/AIExtractionReview';
 import FileFeeder from './pages/FileFeeder';
+// Phase 7 — agent ops pages.
+import AgentMemory from './pages/AgentMemory';
+import AgentActions from './pages/AgentActions';
+import EmailPOAgent from './pages/EmailPOAgent';
+import TNARiskAgent from './pages/TNARiskAgent';
+// Phase 13 — BOM calculator page.
+import BOMCalculator from './pages/BOMCalculator';
 import Layout from './Layout.jsx';
 
 export const PAGES = {
@@ -108,6 +115,11 @@ export const PAGES = {
   MasterDataImport,
   AIExtractionReview,
   FileFeeder,
+  AgentMemory,
+  AgentActions,
+  EmailPOAgent,
+  TNARiskAgent,
+  BOMCalculator,
   "auth/gmail-callback":     GmailCallback,
   PendingApproval,
   AuditDashboard,

@@ -6,7 +6,8 @@ import {
   Inbox, ClipboardList, Calendar, Droplets, Package2, Shield, ShieldCheck,
   DollarSign, CreditCard, ShieldAlert, Shirt, Sun, Users,
   ClipboardCheck, FileSearch, FileBox, BookOpen, FileImage,
-  Briefcase, MessageSquare, TrendingUp, PackageCheck, Settings, Warehouse, ChevronDown, ChevronRight, Star, Upload
+  Briefcase, MessageSquare, TrendingUp, PackageCheck, Settings, Warehouse, ChevronDown, ChevronRight, Star, Upload,
+  Brain, Zap, Mail, Flag, Calculator
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import UserMenu from "@/components/shared/UserMenu";
@@ -34,8 +35,14 @@ const ALL_NAV = [
   { group: "Tracking",        name: "Samples",                  icon: Package2,         page: "Samples" },
   { group: "Tracking",        name: "QC Inspections",           icon: ShieldCheck,      page: "QCInspections",          permission: "QC_CREATE" },
   { group: "Tracking",        name: "Job Cards",                icon: ClipboardCheck,   page: "JobCards" },
+  // ── Agents (Phase 7) ───────────────────────────────────────────
+  { group: "Agents",          name: "Agent Memory",             icon: Brain,            page: "AgentMemory" },
+  { group: "Agents",          name: "Agent Actions",            icon: Zap,              page: "AgentActions" },
+  { group: "Agents",          name: "Email-to-PO Agent",        icon: Mail,             page: "EmailPOAgent" },
+  { group: "Agents",          name: "TNA Risk Agent",           icon: Flag,             page: "TNARiskAgent" },
   // ── Materials & Production ─────────────────────────────────────
   { group: "Materials",       name: "Articles",                 icon: BookOpen,         page: "Articles",               permission: "FABRIC_SPEC_EDIT" },
+  { group: "Materials",       name: "BOM Calculator",           icon: Calculator,       page: "BOMCalculator" },
   { group: "Materials",       name: "Fabric Working",           icon: Layers,           page: "FabricWorking",          permission: "FABRIC_SPEC_EDIT" },
   { group: "Materials",       name: "Fabric Orders",            icon: Shirt,            page: "FabricOrders",           permission: "FABRIC_SPEC_EDIT" },
     { group: "Materials",       name: "RM Coverage",              icon: Warehouse,        page: "RMCoverage" },
@@ -79,7 +86,7 @@ const ALL_NAV = [
   { group: "Admin",           name: "Audit & Health",           icon: Shield,           page: "AuditDashboard",         permission: "ADMIN_AUDIT" },
 ];
 
-const GROUP_ORDER = ["","Orders","Tracking","Materials","Logistics","Finance","CRM","Admin"];
+const GROUP_ORDER = ["","Orders","Tracking","Agents","Materials","Logistics","Finance","CRM","Admin"];
 
 export default function Layout({ children, currentPageName }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);

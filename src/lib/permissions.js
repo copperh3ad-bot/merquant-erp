@@ -188,6 +188,15 @@ export const PAGE_VISIBILITY = {
   ShopFloor:                  ["Owner", "Manager", "Merchandiser"],
   FabricInventory:            ["Owner", "Manager", "Merchandiser"],
   JobWork:                    ["Owner", "Manager", "Merchandiser"],
+
+  // Phase 7 — agent-ops pages
+  AgentMemory:                ["Owner", "Manager"],
+  AgentActions:               ["Owner", "Manager", "Merchandiser"],
+  EmailPOAgent:               ["Owner", "Manager", "Merchandiser"],
+  TNARiskAgent:               ["Owner", "Manager", "Merchandiser"],
+
+  // Phase 13 — BOM calculator
+  BOMCalculator:              ["Owner", "Manager", "Merchandiser"],
 };
 
 export function canSeePage(userRole, pageName) {

@@ -28,6 +28,7 @@ import { runFullAudit, applyFix, AUDIT_STEPS } from "@/lib/techPackAudit";
 import { parseBobTechPack } from "@/lib/bobTechPackParser";
 import { classifyArticle, componentApplies, applies as appliesToProductType } from "@/lib/articleTypes";
 import { computeBarcodeUpdates } from "@/lib/barcodeOcrMerge";
+import { extractImagesFromXlsx, chunkImagesForBatching } from "@/lib/xlsxChunker";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { classifyComponent } from "@/lib/componentClassifier";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
@@ -35,6 +36,17 @@ import SelectionCheckbox from "@/components/shared/SelectionCheckbox";
 import BulkActionsBar from "@/components/techpack/BulkActionsBar";
 
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM yy") : "—"; } catch { return "—"; } };
+
+// Client-side cap on tech-pack file size. Bumped from 10 MB → 100 MB on
+// 2026-05-08 to accommodate large multi-SKU BOB Excel workbooks (e.g.
+// Purecare Modal Jersey Knitted Sheet Sets at ~80 MB). The XLSX path
+// parses files in-browser so the bottleneck is browser memory, not an
+// edge-function payload limit. If the Supabase Storage upload of the
+// raw file fails (project file_size_limit defaults to 50 MB on free
+// tier), the upload still succeeds — TechPacks falls back to a blob:
+// URL so parse + extract still works.
+const TECH_PACK_MAX_FILE_SIZE_MB    = 100;
+const TECH_PACK_MAX_FILE_SIZE_BYTES = TECH_PACK_MAX_FILE_SIZE_MB * 1024 * 1024;
 
 const EXTRACT_STATUS_STYLES = {
   pending:     "bg-gray-100 text-gray-600 border-gray-200",
@@ -770,14 +782,14 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
   const addFiles = (fileList) => {
     const incoming = Array.from(fileList || []);
     if (!incoming.length) return;
-    const oversized = incoming.filter(f => f.size > 10 * 1024 * 1024);
+    const oversized = incoming.filter(f => f.size > TECH_PACK_MAX_FILE_SIZE_BYTES);
     if (oversized.length) {
       alert(
-        `Skipped ${oversized.length} file${oversized.length > 1 ? "s" : ""} larger than 10 MB:\n` +
+        `Skipped ${oversized.length} file${oversized.length > 1 ? "s" : ""} larger than ${TECH_PACK_MAX_FILE_SIZE_MB} MB:\n` +
         oversized.map(f => `• ${f.name} (${(f.size / (1024 * 1024)).toFixed(1)} MB)`).join("\n")
       );
     }
-    const accepted = incoming.filter(f => f.size <= 10 * 1024 * 1024);
+    const accepted = incoming.filter(f => f.size <= TECH_PACK_MAX_FILE_SIZE_BYTES);
     if (!accepted.length) return;
     setFiles(prev => {
       const keys = new Set(prev.map(f => `${f.name}-${f.size}`));
@@ -1183,37 +1195,70 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
 
             // ── Barcode OCR enrichment ──
             // BOB tech packs render the UPC table as a barcode IMAGE, not as
-            // text cells, so the BOB parser can't read the digits. Send the
-            // raw file to the extract-barcodes edge function which uses
-            // Claude vision to OCR each embedded barcode + its size label,
-            // then write the matched (size, EAN) onto each tech_packs row's
-            // extracted_data.upc array. Synchronous so the user gets a
-            // progress message; any failure here is non-blocking — the
-            // tech_packs rows are already saved, just without UPC data.
+            // text cells, so the BOB parser can't read the digits. Extract
+            // the embedded images client-side (XLSX is a zip), batch them
+            // under the Supabase 6 MB edge-fn payload cap, and send each
+            // batch to extract-barcodes (Claude vision). Results are merged
+            // into each tech_packs row's extracted_data.upc array.
+            //
+            // Why client-side image extraction (vs. shipping the whole .xlsx
+            // to the server like before): Supabase edge functions reject
+            // payloads >6 MB. An 81.5 MB Purecare-style tech pack with 90
+            // embedded images base64-encodes to ~109 MB and gets dropped at
+            // the gateway. Pulling images out in the browser and sending
+            // only the images keeps each call under the cap regardless of
+            // workbook size. Whole-file mode is still supported by the
+            // edge fn for backward compatibility.
+            //
+            // Non-blocking: if any batch fails, the tech_packs rows are
+            // already saved — they just won't have UPC data on the failed
+            // images. Re-extraction button on the row covers retry.
             try {
-              updateProg(idx, { status: "extracting", message: "Reading barcode images…" });
-
-              const arrayBuf = await file.arrayBuffer();
-              const fileBytes = new Uint8Array(arrayBuf);
-              const CHUNK = 0x8000;
-              let binary = "";
-              for (let i = 0; i < fileBytes.length; i += CHUNK) {
-                binary += String.fromCharCode.apply(null, Array.from(fileBytes.subarray(i, i + CHUNK)));
-              }
-              const fileBase64 = btoa(binary);
-
-              const { data: ocrData, error: ocrErr } = await supabase.functions.invoke(
-                "extract-barcodes",
-                { body: { file_base64: fileBase64, file_name: file.name } }
-              );
-
-              if (!ocrErr && ocrData?.ok && Array.isArray(ocrData.results) && ocrData.results.length > 0) {
-                const updates = computeBarcodeUpdates(ocrData.results, createdTps);
-                for (const u of updates) {
-                  await supabase.from("tech_packs").update({ extracted_data: u.extracted_data }).eq("id", u.id);
-                  // Mutate the in-memory copy too so downstream cross-check uses fresh data
-                  const tp = createdTps.find((t) => t.id === u.id);
-                  if (tp) tp.extracted_data = u.extracted_data;
+              updateProg(idx, { status: "extracting", message: "Pulling embedded images…" });
+              const allImages = await extractImagesFromXlsx(file);
+              if (allImages.length === 0) {
+                console.info("[barcode OCR] no embedded images found, skipping");
+              } else {
+                const batches = chunkImagesForBatching(allImages);
+                console.info(
+                  `[barcode OCR] ${allImages.length} images → ${batches.length} batch${batches.length > 1 ? "es" : ""}`
+                );
+                const allResults = [];
+                for (let b = 0; b < batches.length; b++) {
+                  const batch = batches[b];
+                  updateProg(idx, {
+                    status:  "extracting",
+                    message: `Reading barcodes — batch ${b + 1}/${batches.length} (${batch.length} images)…`,
+                  });
+                  const { data: ocrData, error: ocrErr } = await supabase.functions.invoke(
+                    "extract-barcodes",
+                    {
+                      body: {
+                        file_name: file.name,
+                        images: batch.map((img) => ({
+                          media_type: img.mediaType,
+                          base64:     img.base64,
+                          path:       img.path,
+                        })),
+                      },
+                    }
+                  );
+                  if (ocrErr) {
+                    console.warn(`[barcode OCR] batch ${b + 1} failed:`, ocrErr?.message || ocrErr);
+                    continue;
+                  }
+                  if (ocrData?.ok && Array.isArray(ocrData.results)) {
+                    allResults.push(...ocrData.results);
+                  }
+                }
+                if (allResults.length > 0) {
+                  const updates = computeBarcodeUpdates(allResults, createdTps);
+                  for (const u of updates) {
+                    await supabase.from("tech_packs").update({ extracted_data: u.extracted_data }).eq("id", u.id);
+                    // Mutate the in-memory copy too so downstream cross-check uses fresh data
+                    const tp = createdTps.find((t) => t.id === u.id);
+                    if (tp) tp.extracted_data = u.extracted_data;
+                  }
                 }
               }
             } catch (ocrErr) {
@@ -1723,16 +1768,25 @@ export default function TechPacks() {
                       Barcodes
                     </Button>
                   )}
-                  {/* Re-upload button on legacy blob: rows so the user can
-                      replace this stale tech-pack with a storage-persisted
-                      copy (which will get OCR'd, populate EANs, and replace
-                      the blob: row automatically via post-upload cleanup). */}
-                  {tp.extraction_status==="extracted" && (tp.file_url||"").startsWith("blob:") && (
+                  {/* Re-upload button — shown only when:
+                      (a) the row's file_url is a blob: URL (browser-memory
+                          only, doesn't survive refresh), AND
+                      (b) the row has NO barcodes extracted yet.
+                      Condition (b) avoids nagging the user on rows where the
+                      OCR pipeline already ran successfully — the source file
+                      is only needed for FUTURE re-extraction. Common cause of
+                      blob: URLs: source XLSX exceeded the Supabase Storage
+                      project file_size_limit (50 MB on free tier) so the
+                      storage upload silently fell back to URL.createObjectURL.
+                      Fix: bump the storage cap in Project Settings → Storage. */}
+                  {tp.extraction_status === "extracted"
+                   && (tp.file_url || "").startsWith("blob:")
+                   && !(tp.extracted_data?.upc?.length > 0) && (
                     <Button
                       size="sm"
                       variant="outline"
                       className="text-xs gap-1 h-7 border-amber-300 text-amber-700 hover:bg-amber-50"
-                      title="This tech-pack file is no longer reachable (legacy upload). Re-upload the source XLSX to enable barcode extraction."
+                      title="Source file is browser-memory only (Storage upload was too large). Re-upload to persist it so 'Re-extract Barcodes' works later."
                       onClick={() => { setReuploadDefaultPoId(tp.po_id || ""); setShowUpload(true); }}
                     >
                       <Upload className="h-3.5 w-3.5" />

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/api/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -370,6 +371,19 @@ function MessageBubble({ msg }) {
             ))}
           </ol>
         )}
+
+        {/* v2 queued-action banner — shown when ai-assistant-v2 has
+            queued a write action that needs human approval (per
+            agent_action_policy). Links to /agent-actions where the
+            queue lives. */}
+        {r.queuedActionId && (
+          <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <span className="font-semibold">Action queued for your approval. </span>
+            <Link to="/agent-actions" className="text-amber-900 underline hover:text-amber-950">
+              Review &amp; approve →
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -420,18 +434,26 @@ export default function AIAssistant() {
       if (!token) throw new Error("Not logged in — please refresh and sign in again.");
 
       const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/ai-proxy`, {
+      // Phase 4 of MEGA_PROMPT: VITE_USE_AI_V2=true switches to the
+      // multi-tool agentic ai-assistant-v2 edge fn. Default false →
+      // legacy ai-proxy path is unchanged.
+      const useV2 = import.meta.env.VITE_USE_AI_V2 === "true";
+      const endpoint = useV2 ? "ai-assistant-v2" : "ai-proxy";
+
+      // v2 has its own system prompt + tool catalogue; we only pass
+      // messages + a context hint. Legacy ai-proxy keeps the full
+      // ROLE_SYSTEM + messages payload.
+      const requestBody = useV2
+        ? { messages: history, context: { page: "ai-assistant" } }
+        : { model: "claude-sonnet-4-5", max_tokens: 4000, system: ROLE_SYSTEM, messages: history };
+
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/${endpoint}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-5",
-          max_tokens: 4000,
-          system: ROLE_SYSTEM,
-          messages: history,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
@@ -443,7 +465,13 @@ export default function AIAssistant() {
 
       if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
 
-      const rawContent = data.content?.[0]?.text || "";
+      // Response shape diverges between the two endpoints:
+      //   ai-proxy   → Anthropic-shape: data.content[0].text
+      //   v2         → { success, response: "<text>", queued_action_id? }
+      const rawContent = useV2
+        ? (data.response || "")
+        : (data.content?.[0]?.text || "");
+      const queuedActionId = useV2 ? (data.queued_action_id || null) : null;
 
       let parsed = null;
       try {
@@ -458,6 +486,12 @@ export default function AIAssistant() {
       } catch {
         // Not JSON — display as plain answer
         parsed = { type: "answer", title: "Response", answer: rawContent };
+      }
+
+      // v2-only: surface a queued-action banner so the user knows where
+      // to go to approve a write the agent just queued.
+      if (queuedActionId) {
+        parsed.queuedActionId = queuedActionId;
       }
 
       setMessages(prev => [...prev, { role: "assistant", content: rawContent, rawContent, parsed }]);

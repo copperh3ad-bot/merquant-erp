@@ -32,6 +32,45 @@ verify_jwt = true
 [functions.user-approval]
 verify_jwt = true
 
+# Agent layer (mig 0033+).
+[functions.memory-writer]
+verify_jwt = true
+
+[functions.ai-assistant-v2]
+verify_jwt = true
+
+# Email PO agent (Phase 5).
+[functions.email-po-agent]
+verify_jwt = true
+
+[functions.imap-test-connection]
+verify_jwt = true
+
+[functions.imap-credentials-save]
+verify_jwt = true
+
+# TNA risk agent (Phase 6).
+# Invoked via the UI by Owner/Manager — JWT-gated. Will be hooked to a daily
+# cron (pg_cron) post-PAUSE, at which point a separate cron-only entry may be
+# added with verify_jwt = false + secret-header guard.
+[functions.tna-risk-agent]
+verify_jwt = true
+
+# BOM calculator (Phase 10) — fabric + thread consumption, formula engine
+# driven. Modes: parse | calculate | full | suggest_seams. JWT-gated.
+[functions.bom-calculator]
+verify_jwt = true
+
+# PO fabric calculator (Phase 11) — wraps mig 0039's
+# `calculate_po_fabric_requirements` RPC. Modes: calculate | preview.
+[functions.po-fabric-calculator]
+verify_jwt = true
+
+# Fabric order generator (Phase 12) — auto-generates fabric_order_drafts
+# from po_fabric_requirements with capacity-first inhouse routing.
+[functions.fabric-order-generator]
+verify_jwt = true
+
 # Cron / scheduled functions are invoked by Supabase's internal scheduler
 # with a service-role key, not by user JWTs. They run with verify_jwt off
 # but their handlers must check that the secret cron header matches.
@@ -40,3 +79,18 @@ verify_jwt = false
 
 [functions.notify-pricing-pending]
 verify_jwt = false
+
+# Phase 2/3 — agentic background jobs.
+# agent-orchestrator: invoked by mig 0034 DB triggers via pg_net with
+# Authorization: Bearer <service_role_key>. memory-consolidation-agent +
+# email-crawler-agent: invoked by pg_cron via pg_net (mig 0036). Same auth
+# pattern. verify_jwt = true is fine — service-role keys are valid JWTs and
+# pass the check, while blocking unauthenticated callers.
+[functions.agent-orchestrator]
+verify_jwt = true
+
+[functions.memory-consolidation-agent]
+verify_jwt = true
+
+[functions.email-crawler-agent]
+verify_jwt = true

@@ -35,6 +35,14 @@ import { Sparkles, Upload, Paperclip, FileText, Image as ImageIcon, AlertTriangl
 import { dedupeMasterData } from "@/lib/masterDataDedup";
 import { detectAndAutoFix } from "@/lib/extractionAnomalyDetector";
 import * as XLSX from "xlsx";
+// Lifted to shared lib so TechPacks can reuse the same chunker without
+// keeping a divergent copy. Local helpers below are kept as private
+// re-exports for code readers; they delegate to xlsxChunker.
+import {
+  splitXlsxBySheet as splitXlsxBySheetShared,
+  uint8ToBase64    as uint8ToBase64Shared,
+  slugify          as slugifyShared,
+} from "@/lib/xlsxChunker";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB — matches extract-document's server limit
 const ACCEPTED_EXTS = [".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png", ".webp"];
@@ -79,105 +87,20 @@ function isXlsxFile(file) {
 // deterministic and free; whole-file context matters).
 const AUTO_SPLIT_THRESHOLD_CHARS = 60_000;
 
-function uint8ToBase64(bytes) {
-  let s = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
-  }
-  return btoa(s);
-}
+// Local aliases — implementations now live in @/lib/xlsxChunker so TechPacks
+// can use the same code path. Renamed-not-removed so existing call sites in
+// this file (and any future copy/paste from this file) keep working.
+const uint8ToBase64 = uint8ToBase64Shared;
+const slugify       = slugifyShared;
 
-// Sanitise a sheet name into a filename-safe slug. Sheet names can
-// contain spaces, slashes, parens — keep alphanumerics + hyphens.
-function slugify(s) {
-  return String(s ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 60) || "sheet";
-}
-
-// Split an XLSX into N per-sheet sub-uploads. Each sub-upload has a
-// fresh single-sheet workbook so its bytes (and SHA-256) differ from
-// every other sub-upload — required for the edge function's dedup
-// path to NOT block siblings of the same batch.
+// Split an XLSX into N per-sheet sub-uploads. Implementation now lives
+// in @/lib/xlsxChunker so TechPacks can reuse the same algorithm.
+//
+// Defaults preserved (CHUNK_THRESHOLD=50_000, ROWS_PER_CHUNK=80,
+// HEADER_ROWS=1) — same behaviour as the old in-file copy.
 //
 // Returns: [{ sheetName, syntheticFileName, base64, sizeBytes, preParsedText }, ...]
-async function splitXlsxBySheet(file) {
-  const buf = new Uint8Array(await file.arrayBuffer());
-  const wb = XLSX.read(buf, { type: "array" });
-  const baseName = (file.name || "upload.xlsx").replace(/\.xlsx?$/i, "");
-  // A single accessory_consumption sheet with 200+ SKU-rows produces ~30k+
-  // output tokens from Haiku and trips EXTRACTION_LLM_TRUNCATED. We
-  // pre-emptively chunk a sheet whose CSV exceeds CHUNK_THRESHOLD chars
-  // into row-sized sub-sheets (HEADER_ROWS preserved per chunk so each
-  // sub-sheet is self-describing). Empty / small sheets pass through as one.
-  const CHUNK_THRESHOLD = 50_000;     // ~50KB CSV → ~one Haiku 32k-token completion
-  const ROWS_PER_CHUNK  = 80;          // typical master-data row → ~250 chars CSV → ~20k chars / chunk
-  const HEADER_ROWS     = 1;           // assume the first row is the header
-  const out = [];
-  for (const sheetName of wb.SheetNames) {
-    const sheet = wb.Sheets[sheetName];
-    if (!sheet) continue;
-    const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false }).trim();
-    if (!csv) continue;
-
-    // Try the single-shot path first. If the CSV is small enough, emit
-    // the sheet as one part (existing behaviour).
-    if (csv.length <= CHUNK_THRESHOLD) {
-      const subWb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(subWb, sheet, sheetName);
-      const subBytes = new Uint8Array(XLSX.write(subWb, { type: "array", bookType: "xlsx" }));
-      out.push({
-        sheetName,
-        syntheticFileName: `${baseName}__${slugify(sheetName)}.xlsx`,
-        base64: uint8ToBase64(subBytes),
-        sizeBytes: subBytes.length,
-        preParsedText: `=== Sheet: "${sheetName}" ===\n${csv}`,
-      });
-      continue;
-    }
-
-    // Row-level chunking. Read the sheet as a 2D array, peel off the
-    // header rows, then slice the data rows into chunks of ROWS_PER_CHUNK.
-    const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" });
-    if (aoa.length <= HEADER_ROWS) {
-      // Header-only sheet — emit as one part (likely template).
-      const subWb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(subWb, sheet, sheetName);
-      const subBytes = new Uint8Array(XLSX.write(subWb, { type: "array", bookType: "xlsx" }));
-      out.push({
-        sheetName,
-        syntheticFileName: `${baseName}__${slugify(sheetName)}.xlsx`,
-        base64: uint8ToBase64(subBytes),
-        sizeBytes: subBytes.length,
-        preParsedText: `=== Sheet: "${sheetName}" ===\n${csv}`,
-      });
-      continue;
-    }
-    const header = aoa.slice(0, HEADER_ROWS);
-    const body   = aoa.slice(HEADER_ROWS);
-    const totalChunks = Math.ceil(body.length / ROWS_PER_CHUNK);
-    for (let i = 0; i < totalChunks; i++) {
-      const slice = body.slice(i * ROWS_PER_CHUNK, (i + 1) * ROWS_PER_CHUNK);
-      const chunkAoa = [...header, ...slice];
-      const chunkSheet = XLSX.utils.aoa_to_sheet(chunkAoa);
-      const chunkCsv = XLSX.utils.sheet_to_csv(chunkSheet, { blankrows: false }).trim();
-      const subWb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(subWb, chunkSheet, sheetName);
-      const subBytes = new Uint8Array(XLSX.write(subWb, { type: "array", bookType: "xlsx" }));
-      out.push({
-        sheetName: `${sheetName} (part ${i + 1}/${totalChunks})`,
-        syntheticFileName: `${baseName}__${slugify(sheetName)}_part${i + 1}of${totalChunks}.xlsx`,
-        base64: uint8ToBase64(subBytes),
-        sizeBytes: subBytes.length,
-        preParsedText: `=== Sheet: "${sheetName}" (rows ${i * ROWS_PER_CHUNK + 1}–${i * ROWS_PER_CHUNK + slice.length} of ${body.length}) ===\n${chunkCsv}`,
-      });
-    }
-  }
-  return out;
-}
+const splitXlsxBySheet = (file) => splitXlsxBySheetShared(file);
 
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {

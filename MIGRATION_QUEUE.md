@@ -20,8 +20,20 @@ Numbering follows the repo convention of 4-digit zero-padded sequential IDs.
 | 0026 | `0026_ai_proxy_rate_limit.sql`                 | `ai_proxy_calls` table + `check_ai_proxy_rate_limit` RPC  | No                     |
 | 0027 | `0027_consumption_library_item_name.sql`       | Add `item_name` col + bump `upsert_key` UNIQUE to 6 cols  | No                     |
 | 0028 | `0028_accessory_items_placement.sql`           | Add `placement` text col on `accessory_items` (MAS align) | No                     |
+| 0029 | `0029_email_po_drafts.sql`                     | Email-to-PO draft staging table (mega-prompt Phase 5)     | No                     |
+| 0030 | `0030_email_crawler_agent.sql`                 | gmail_tokens, agent_run_log + email_crawl_log ALTERs (mega-prompt Phase 5; cron section deferred to Phase 3 PAUSE) | No |
+| 0031 | `0031_imap_credentials.sql`                    | imap_credentials + Vault encryption RPCs (mega-prompt Phase 5) | No                |
+| 0032 | `0032_tna_risk_agent.sql`                      | TNA risk thresholds + risk drafts + tna_milestones risk cols (mega-prompt Phase 6) | No |
+| 0033 | `0033_agent_memory_layer.sql`                  | Agent memory store + 2 retrieval RPCs (mega-prompt Phase 1) | No                   |
+| 0037 | `0037_bom_consumption_schema.sql`              | BOM consumption engine: size_masters + article_components + bom_results + bom_set_totals + tech_pack_construction_specs + wastage_memory (mega-prompt Phase 8) | No |
+| 0038 | `0038_thread_consumption_schema.sql`           | Thread consumption: stitch_library (16 ISO stitches seeded) + article_seams + thread_bom_results + thread_bom_totals (mega-prompt Phase 8) | No |
+| 0039 | `0039_po_fabric_requirements.sql`              | PO fabric requirement aggregation table + RPC `calculate_po_fabric_requirements` (ERP-adapted RPC body fans out per po_items.size_breakdown jsonb key) (mega-prompt Phase 8) | No |
+| 0040 | `0040_fabric_order_generation.sql`             | facility_capabilities + fabric_order_drafts + ALTERs to fabric_orders (9 cols) + RPC `match_facility_for_material` + 3 facility seeds (mega-prompt Phase 8) | No |
+| 0034 | `0034_realtime_event_triggers.sql`             | agent_events table + 6 triggers (purchase_orders, tna_milestones, email_po_drafts, shipments, qc_inspections, tna_risk_drafts) + `fire_agent_event` SECURITY DEFINER fn that calls agent-orchestrator via pg_net. Supabase-adapted: reads service-role key from `vault.decrypted_secrets` (name=`service_role_key`); project ref hardcoded. (mega-prompt Phase 2) | No (but needs pg_cron+pg_net+vault secret) |
+| 0035 | `0035_agent_action_policy.sql`                 | agent_action_policy (16-row seed) + agent_action_queue + `execute_agent_action` RPC + hourly pg_cron `expire-agent-actions`. ERP-adapted: tna_milestones uses target_date / tna_id. (mega-prompt Phase 3) | No |
+| 0036 | `0036_full_agentic_schedules.sql`              | 6 pg_cron jobs (memory-consolidation weekly, tna-risk-agent daily, email-crawler 15 min, expire-agent-actions hourly, cleanup-agent-events daily, cleanup-pg-net-responses daily). All read service-role key from `vault.decrypted_secrets`. (mega-prompt Phase 3) | No |
 
-All 13 migrations (0016 → 0028) have been applied to the production DB
+All 25 migrations (0016 → 0036, plus 0037-0040; including 0032) have been applied to the production DB
 (`MerQuant ERP` Supabase project) as of 2026-05-04. They are tagged on
 the live `supabase_migrations.schema_migrations` table by the
 `mcp__supabase__apply_migration` calls that ran during the
