@@ -28,6 +28,7 @@ import { runFullAudit, applyFix, AUDIT_STEPS } from "@/lib/techPackAudit";
 import { parseBobTechPack } from "@/lib/bobTechPackParser";
 import { classifyArticle, componentApplies, applies as appliesToProductType } from "@/lib/articleTypes";
 import { computeBarcodeUpdates } from "@/lib/barcodeOcrMerge";
+import { extractImagesFromXlsx, chunkImagesForBatching } from "@/lib/xlsxChunker";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { classifyComponent } from "@/lib/componentClassifier";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
@@ -1194,37 +1195,70 @@ function UploadDialog({ open, onOpenChange, pos, onSuccess, defaultPoId }) {
 
             // ── Barcode OCR enrichment ──
             // BOB tech packs render the UPC table as a barcode IMAGE, not as
-            // text cells, so the BOB parser can't read the digits. Send the
-            // raw file to the extract-barcodes edge function which uses
-            // Claude vision to OCR each embedded barcode + its size label,
-            // then write the matched (size, EAN) onto each tech_packs row's
-            // extracted_data.upc array. Synchronous so the user gets a
-            // progress message; any failure here is non-blocking — the
-            // tech_packs rows are already saved, just without UPC data.
+            // text cells, so the BOB parser can't read the digits. Extract
+            // the embedded images client-side (XLSX is a zip), batch them
+            // under the Supabase 6 MB edge-fn payload cap, and send each
+            // batch to extract-barcodes (Claude vision). Results are merged
+            // into each tech_packs row's extracted_data.upc array.
+            //
+            // Why client-side image extraction (vs. shipping the whole .xlsx
+            // to the server like before): Supabase edge functions reject
+            // payloads >6 MB. An 81.5 MB Purecare-style tech pack with 90
+            // embedded images base64-encodes to ~109 MB and gets dropped at
+            // the gateway. Pulling images out in the browser and sending
+            // only the images keeps each call under the cap regardless of
+            // workbook size. Whole-file mode is still supported by the
+            // edge fn for backward compatibility.
+            //
+            // Non-blocking: if any batch fails, the tech_packs rows are
+            // already saved — they just won't have UPC data on the failed
+            // images. Re-extraction button on the row covers retry.
             try {
-              updateProg(idx, { status: "extracting", message: "Reading barcode images…" });
-
-              const arrayBuf = await file.arrayBuffer();
-              const fileBytes = new Uint8Array(arrayBuf);
-              const CHUNK = 0x8000;
-              let binary = "";
-              for (let i = 0; i < fileBytes.length; i += CHUNK) {
-                binary += String.fromCharCode.apply(null, Array.from(fileBytes.subarray(i, i + CHUNK)));
-              }
-              const fileBase64 = btoa(binary);
-
-              const { data: ocrData, error: ocrErr } = await supabase.functions.invoke(
-                "extract-barcodes",
-                { body: { file_base64: fileBase64, file_name: file.name } }
-              );
-
-              if (!ocrErr && ocrData?.ok && Array.isArray(ocrData.results) && ocrData.results.length > 0) {
-                const updates = computeBarcodeUpdates(ocrData.results, createdTps);
-                for (const u of updates) {
-                  await supabase.from("tech_packs").update({ extracted_data: u.extracted_data }).eq("id", u.id);
-                  // Mutate the in-memory copy too so downstream cross-check uses fresh data
-                  const tp = createdTps.find((t) => t.id === u.id);
-                  if (tp) tp.extracted_data = u.extracted_data;
+              updateProg(idx, { status: "extracting", message: "Pulling embedded images…" });
+              const allImages = await extractImagesFromXlsx(file);
+              if (allImages.length === 0) {
+                console.info("[barcode OCR] no embedded images found, skipping");
+              } else {
+                const batches = chunkImagesForBatching(allImages);
+                console.info(
+                  `[barcode OCR] ${allImages.length} images → ${batches.length} batch${batches.length > 1 ? "es" : ""}`
+                );
+                const allResults = [];
+                for (let b = 0; b < batches.length; b++) {
+                  const batch = batches[b];
+                  updateProg(idx, {
+                    status:  "extracting",
+                    message: `Reading barcodes — batch ${b + 1}/${batches.length} (${batch.length} images)…`,
+                  });
+                  const { data: ocrData, error: ocrErr } = await supabase.functions.invoke(
+                    "extract-barcodes",
+                    {
+                      body: {
+                        file_name: file.name,
+                        images: batch.map((img) => ({
+                          media_type: img.mediaType,
+                          base64:     img.base64,
+                          path:       img.path,
+                        })),
+                      },
+                    }
+                  );
+                  if (ocrErr) {
+                    console.warn(`[barcode OCR] batch ${b + 1} failed:`, ocrErr?.message || ocrErr);
+                    continue;
+                  }
+                  if (ocrData?.ok && Array.isArray(ocrData.results)) {
+                    allResults.push(...ocrData.results);
+                  }
+                }
+                if (allResults.length > 0) {
+                  const updates = computeBarcodeUpdates(allResults, createdTps);
+                  for (const u of updates) {
+                    await supabase.from("tech_packs").update({ extracted_data: u.extracted_data }).eq("id", u.id);
+                    // Mutate the in-memory copy too so downstream cross-check uses fresh data
+                    const tp = createdTps.find((t) => t.id === u.id);
+                    if (tp) tp.extracted_data = u.extracted_data;
+                  }
                 }
               }
             } catch (ocrErr) {

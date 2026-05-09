@@ -223,25 +223,51 @@ Deno.serve(async (req) => {
     return err("UNAUTHORISED", "Invalid or expired session. Please sign in again.", userErr?.message ?? "no user", 401);
   }
 
-  let body: { file_base64?: string; file_name?: string };
+  // Two input modes:
+  //   A. Legacy / small files — caller sends `file_base64` (whole .xlsx).
+  //      Server unzips and extracts images. Limited by Supabase's ~6 MB
+  //      edge-fn payload cap (~4.5 MB raw .xlsx file size).
+  //   B. New chunked path — caller sends pre-extracted images directly
+  //      (`images: [{ media_type, base64 }, ...]`). Lets the frontend
+  //      handle arbitrarily large XLSX (it does the JSZip work in-browser
+  //      and batches images under the payload cap before each call).
+  type IncomingImage = { media_type?: string; mediaType?: string; base64: string; path?: string };
+  let body: { file_base64?: string; file_name?: string; images?: IncomingImage[] };
   try { body = await req.json(); }
   catch (e) { return err("INVALID_JSON", "We couldn't read the request.", String(e), 400); }
 
-  if (!body.file_base64 || typeof body.file_base64 !== "string") {
-    return err("EXTRACTION_NO_FILE", "No file payload.", "file_base64 missing", 400);
-  }
-
-  let bytes: Uint8Array;
-  try { bytes = decodeBase64(body.file_base64); }
-  catch (e) { return err("EXTRACTION_NO_FILE", "Could not decode the file.", String(e), 400); }
-  if (bytes.length === 0) return err("EXTRACTION_NO_FILE", "Empty file.", "decoded zero bytes", 400);
-
   let images: ExtractedImage[];
-  try {
-    images = await extractImagesFromXlsx(bytes);
-  } catch (e) {
-    const msg = (e as Error).message ?? String(e);
-    return err("UNZIP_FAILED", "Could not read images from the file.", msg, 422);
+
+  if (Array.isArray(body.images) && body.images.length > 0) {
+    // Mode B — pre-extracted images from the client.
+    images = body.images.map((img, i) => {
+      const mt = img.media_type ?? img.mediaType ?? "image/png";
+      const b64 = (img.base64 ?? "").replace(/^data:[^;]+;base64,/, "").replace(/\s+/g, "");
+      return {
+        path: img.path ?? `client-${i}`,
+        mediaType: mt,
+        base64: b64,
+        sizeBytes: Math.floor(b64.length * 0.75),
+      };
+    }).filter((img) => img.base64.length > 0);
+    if (images.length === 0) {
+      return err("EXTRACTION_NO_FILE", "All images were empty.", "every image.base64 was empty after stripping", 400);
+    }
+  } else if (body.file_base64 && typeof body.file_base64 === "string") {
+    // Mode A — legacy whole-file upload, server unzips.
+    let bytes: Uint8Array;
+    try { bytes = decodeBase64(body.file_base64); }
+    catch (e) { return err("EXTRACTION_NO_FILE", "Could not decode the file.", String(e), 400); }
+    if (bytes.length === 0) return err("EXTRACTION_NO_FILE", "Empty file.", "decoded zero bytes", 400);
+
+    try {
+      images = await extractImagesFromXlsx(bytes);
+    } catch (e) {
+      const msg = (e as Error).message ?? String(e);
+      return err("UNZIP_FAILED", "Could not read images from the file.", msg, 422);
+    }
+  } else {
+    return err("EXTRACTION_NO_FILE", "No file payload.", "neither file_base64 nor images[] provided", 400);
   }
 
   if (images.length === 0) {
