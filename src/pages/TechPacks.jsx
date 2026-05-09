@@ -1768,16 +1768,25 @@ export default function TechPacks() {
                       Barcodes
                     </Button>
                   )}
-                  {/* Re-upload button on legacy blob: rows so the user can
-                      replace this stale tech-pack with a storage-persisted
-                      copy (which will get OCR'd, populate EANs, and replace
-                      the blob: row automatically via post-upload cleanup). */}
-                  {tp.extraction_status==="extracted" && (tp.file_url||"").startsWith("blob:") && (
+                  {/* Re-upload button — shown only when:
+                      (a) the row's file_url is a blob: URL (browser-memory
+                          only, doesn't survive refresh), AND
+                      (b) the row has NO barcodes extracted yet.
+                      Condition (b) avoids nagging the user on rows where the
+                      OCR pipeline already ran successfully — the source file
+                      is only needed for FUTURE re-extraction. Common cause of
+                      blob: URLs: source XLSX exceeded the Supabase Storage
+                      project file_size_limit (50 MB on free tier) so the
+                      storage upload silently fell back to URL.createObjectURL.
+                      Fix: bump the storage cap in Project Settings → Storage. */}
+                  {tp.extraction_status === "extracted"
+                   && (tp.file_url || "").startsWith("blob:")
+                   && !(tp.extracted_data?.upc?.length > 0) && (
                     <Button
                       size="sm"
                       variant="outline"
                       className="text-xs gap-1 h-7 border-amber-300 text-amber-700 hover:bg-amber-50"
-                      title="This tech-pack file is no longer reachable (legacy upload). Re-upload the source XLSX to enable barcode extraction."
+                      title="Source file is browser-memory only (Storage upload was too large). Re-upload to persist it so 'Re-extract Barcodes' works later."
                       onClick={() => { setReuploadDefaultPoId(tp.po_id || ""); setShowUpload(true); }}
                     >
                       <Upload className="h-3.5 w-3.5" />
