@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 const statuses = ["Planned","Booked","Booking Confirmed","Loaded","In Transit","At Port","Customs Clearance","Delivered","Cancelled"];
 const incoterms = ["FOB","CIF","CFR","EXW","DDP","FCA","CPT"];
-const empty = { shipment_number:"", po_number:"", carrier:"", vessel_name:"", voyage_number:"", bl_number:"", container_number:"", container_type:"20GP", port_of_loading:"Karachi", port_of_destination:"", etd:"", eta:"", total_cbm:"", total_cartons:"", freight_cost:"", currency:"USD", status:"Planned", incoterms:"FOB", notes:"" };
+const TRANSPORT_MODES = ["Sea","Air","Road","Rail","Courier"];
+const empty = { shipment_number:"", po_number:"", carrier:"", vessel_name:"", voyage_number:"", bl_number:"", container_number:"", container_type:"20GP", mode_of_transport:"Sea", port_of_loading:"Karachi", port_of_destination:"", etd:"", eta:"", total_cbm:"", total_cartons:"", net_weight_kg:"", gross_weight_kg:"", freight_cost:"", currency:"USD", status:"Planned", incoterms:"FOB", notes:"" };
 
 export default function ShipmentFormDialog({ open, onOpenChange, onSave, initialData }) {
   const [form, setForm] = useState(empty);
@@ -20,7 +21,14 @@ export default function ShipmentFormDialog({ open, onOpenChange, onSave, initial
   const handleSave = async () => {
     setSaving(true);
     try {
-      await onSave({ ...form, total_cbm: form.total_cbm ? Number(form.total_cbm) : null, total_cartons: form.total_cartons ? Number(form.total_cartons) : null, freight_cost: form.freight_cost ? Number(form.freight_cost) : null });
+      await onSave({
+        ...form,
+        total_cbm:       form.total_cbm       ? Number(form.total_cbm)       : null,
+        total_cartons:   form.total_cartons   ? Number(form.total_cartons)   : null,
+        freight_cost:    form.freight_cost    ? Number(form.freight_cost)    : null,
+        net_weight_kg:   form.net_weight_kg   ? Number(form.net_weight_kg)   : null,
+        gross_weight_kg: form.gross_weight_kg ? Number(form.gross_weight_kg) : null,
+      });
     } finally { setSaving(false); }
   };
 
@@ -76,6 +84,13 @@ export default function ShipmentFormDialog({ open, onOpenChange, onSave, initial
             <Input value={form.port_of_destination} onChange={e => update("port_of_destination", e.target.value)} placeholder="Hamburg" />
           </div>
           <div className="space-y-1.5">
+            <Label className="text-xs">Mode of Transport</Label>
+            <Select value={form.mode_of_transport} onValueChange={v => update("mode_of_transport", v)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{TRANSPORT_MODES.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
             <Label className="text-xs">ETD</Label>
             <Input type="date" value={form.etd} onChange={e => update("etd", e.target.value)} />
           </div>
@@ -90,6 +105,14 @@ export default function ShipmentFormDialog({ open, onOpenChange, onSave, initial
           <div className="space-y-1.5">
             <Label className="text-xs">Total Cartons</Label>
             <Input type="number" value={form.total_cartons} onChange={e => update("total_cartons", e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Net Weight (kg)</Label>
+            <Input type="number" step="0.01" value={form.net_weight_kg} onChange={e => update("net_weight_kg", e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Gross Weight (kg)</Label>
+            <Input type="number" step="0.01" value={form.gross_weight_kg} onChange={e => update("gross_weight_kg", e.target.value)} />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Freight Cost</Label>

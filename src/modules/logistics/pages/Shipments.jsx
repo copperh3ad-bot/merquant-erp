@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { db } from "@/api/supabaseClient";
+import { db, supabase } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -31,9 +31,47 @@ export default function Shipments() {
     queryFn: () => db.shipments.list(),
   });
 
+  const REQUIRED_DOCS = ["Bill of Lading","Commercial Invoice","Packing List","Certificate of Origin"];
+
   const handleSave = async (data) => {
+    // Pre-dispatch checklist: block "Loaded" / "In Transit" if required docs are missing
+    if (editingShipment && ["Loaded","In Transit"].includes(data.status) && !["Loaded","In Transit"].includes(editingShipment.status)) {
+      const { data: docs } = await supabase
+        .from("shipping_documents")
+        .select("document_type")
+        .eq("shipment_id", editingShipment.id);
+      const present = new Set((docs || []).map(d => d.document_type));
+      const missing = REQUIRED_DOCS.filter(r => !present.has(r));
+      if (missing.length > 0) {
+        if (!confirm(`Pre-dispatch checklist — missing required documents:\n\n${missing.map(m => `• ${m}`).join("\n")}\n\nProceed anyway?`)) return;
+      }
+    }
+
+    // Delivery confirmation: auto-set actual_arrival when marked Delivered
+    if (data.status === "Delivered" && !data.actual_arrival) {
+      data = { ...data, actual_arrival: new Date().toISOString().split("T")[0] };
+    }
+
     if (editingShipment) {
       await db.shipments.update(editingShipment.id, data);
+
+      // Delay notification: if actual_departure is later than etd, notify team
+      if (data.actual_departure && editingShipment.etd) {
+        const etd = new Date(editingShipment.etd);
+        const dep = new Date(data.actual_departure);
+        if (dep > etd) {
+          const days = Math.round((dep - etd) / 86400000);
+          await supabase.from("notifications").insert({
+            title: `Shipment Delay — ${editingShipment.shipment_number || data.po_number}`,
+            message: `Shipment ${editingShipment.shipment_number} for PO ${data.po_number} departed ${days} day(s) late (ETD: ${editingShipment.etd}, Actual: ${data.actual_departure}). Buyer should be notified.`,
+            type: "warning",
+            category: "shipment_delay",
+            entity_type: "shipment",
+            entity_id: editingShipment.id,
+            link_page: "Shipments",
+          });
+        }
+      }
     } else {
       await db.shipments.create(data);
     }

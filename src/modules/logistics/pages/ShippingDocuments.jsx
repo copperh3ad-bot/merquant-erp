@@ -15,7 +15,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import StatCard from "@/components/shared/StatCard";
 import { cn } from "@/lib/utils";
 
-const DOC_TYPES = ["Bill of Lading","Commercial Invoice","Packing List","Certificate of Origin","Inspection Certificate","Insurance Certificate","Phytosanitary Certificate","GOTS Certificate","Test Report","Letter of Credit","Other"];
+const DOC_TYPES = ["Bill of Lading","Commercial Invoice","Customs Invoice","Packing List","Certificate of Origin","Certificate of Fumigation","Transaction Certificate (COC)","Inspection Certificate","Insurance Certificate","Phytosanitary Certificate","GOTS Certificate","Test Report","Letter of Credit","Other"];
 const PHASES = ["Before Shipment","After Shipment"];
 const PHASE_STYLES = { "Before Shipment": "bg-amber-50 text-amber-700 border-amber-200", "After Shipment": "bg-emerald-50 text-emerald-700 border-emerald-200" };
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM yy") : "—"; } catch { return "—"; } };
