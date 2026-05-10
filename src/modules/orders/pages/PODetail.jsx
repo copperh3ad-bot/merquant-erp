@@ -218,8 +218,40 @@ export default function PODetail() {
   }, [poId, qc]);
 
   const handleStatusChange = async (newStatus) => {
+    // LC payment gate: block material booking until LC is confirmed open
+    const MATERIAL_STAGES = ["Yarn Planned", "Accessories Planned", "Packaging Planned", "In Production"];
+    const isLcOrder = /\bLC\b/i.test(po?.payment_terms || "");
+    if (isLcOrder && MATERIAL_STAGES.includes(newStatus)) {
+      if (!confirm(`This PO is on LC payment terms.\n\nHas the Letter of Credit been opened by the buyer before proceeding to "${newStatus}"?`)) return;
+    }
+
     await db.statusLogs.log("purchase_order", poId, po?.status, newStatus);
     await db.purchaseOrders.update(poId, { status: newStatus });
+
+    // Auto-create job card when order moves into production
+    if (newStatus === "In Production") {
+      const { data: existing } = await supabase
+        .from("job_cards")
+        .select("id")
+        .eq("po_id", poId)
+        .limit(1);
+      if (!existing?.length) {
+        const jcNumber = `JC-${po?.po_number || poId.slice(0, 8).toUpperCase()}`;
+        await supabase.from("job_cards").insert({
+          po_id: poId,
+          po_number: po?.po_number || "",
+          job_card_number: jcNumber,
+          article_name: po?.customer_name || "",
+          quantity: po?.total_quantity || null,
+          start_date: new Date().toISOString().split("T")[0],
+          due_date: po?.ex_factory_date || null,
+          status: "Pending",
+          notes: `Auto-created when PO moved to In Production`,
+        });
+        qc.invalidateQueries({ queryKey: ["jobCards"] });
+      }
+    }
+
     qc.invalidateQueries({ queryKey: ["po", poId] });
     qc.invalidateQueries({ queryKey: ["purchaseOrders"] });
   };

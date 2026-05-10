@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { db, labDips } from "@/api/supabaseClient";
+import { db, labDips, supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -137,6 +137,29 @@ export default function LabDipsPage() {
   const handleSave = async (data) => {
     const po = pos.find(p => p.id === data.po_id);
     const payload = { ...data, po_number: po?.po_number || "" };
+
+    if (!editing) {
+      // 3-round rule: count existing rounds for same PO + type + article
+      const priorRounds = dips.filter(
+        d => d.po_id === data.po_id && d.type === data.type && d.article_code === data.article_code
+      );
+      if (priorRounds.length >= 3) {
+        const msg = `3 rounds already submitted for ${data.type} on ${data.article_code} (PO ${po?.po_number}).\n\nThis requires escalation to Production HODs and COO before proceeding.\n\nAn escalation notification has been logged. Contact management to authorise round ${priorRounds.length + 1}.`;
+        alert(msg);
+        // Log escalation notification for management visibility
+        await supabase.from("notifications").insert({
+          title: `Escalation: ${data.type} — ${data.article_code}`,
+          message: `${data.type} for article ${data.article_code} on PO ${po?.po_number} has reached ${priorRounds.length} rounds without buyer approval. Round ${priorRounds.length + 1} attempted — Production HOD and COO sign-off required.`,
+          type: "warning",
+          category: "lab_dip_escalation",
+          entity_type: "purchase_order",
+          entity_id: data.po_id,
+          link_page: "LabDips",
+        });
+        return;
+      }
+    }
+
     if (editing) { await labDips.update(editing.id, payload); } else { await labDips.create(payload); }
     qc.invalidateQueries({ queryKey: ["labDips"] });
     setShowForm(false); setEditing(null);

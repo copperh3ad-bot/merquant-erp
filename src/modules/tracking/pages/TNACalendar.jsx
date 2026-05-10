@@ -221,6 +221,28 @@ export default function TNACalendar() {
   const handleUpdate = async (id, payload) => {
     if (!can("TNA_EDIT")) return;
     await tna.milestones.update(id, payload);
+
+    // Auto-cascade: when a milestone is completed late, offer to push all
+    // downstream milestones for the same PO forward by the same delay.
+    if (payload.actual_date) {
+      const ms = allMilestones.find(m => m.id === id);
+      if (ms?.target_date && ms?.po_id != null) {
+        const delay = differenceInDays(new Date(payload.actual_date), new Date(ms.target_date));
+        if (delay > 0) {
+          const downstream = allMilestones.filter(
+            m => m.po_id === ms.po_id && m.id !== id && m.sort_order > ms.sort_order && m.status !== "completed"
+          );
+          if (downstream.length > 0 && confirm(`"${ms.name}" is ${delay} day(s) late.\n\nPush ${downstream.length} downstream milestone(s) forward by ${delay} day(s)?`)) {
+            await Promise.all(
+              downstream.map(m =>
+                tna.milestones.update(m.id, { target_date: format(addDays(new Date(m.target_date), delay), "yyyy-MM-dd") })
+              )
+            );
+          }
+        }
+      }
+    }
+
     qc.invalidateQueries({ queryKey: ["tnaMilestones"] });
   };
 
