@@ -19,8 +19,8 @@ import { format } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import StatusBadge from "@/components/shared/StatusBadge";
 import EmptyState from "@/components/shared/EmptyState";
-import POFormDialog from "@/components/po/POFormDialog";
-import EmailImportDialog from "@/components/po/EmailImportDialog";
+import POFormDialog from "@/modules/orders/components/po/POFormDialog";
+import EmailImportDialog from "@/modules/orders/components/po/EmailImportDialog";
 import RedactedValue from "@/components/shared/RedactedValue";
 
 const STATUSES = ["All","PO Received","Items Entered","Price Verification","Price Approved","CBM Calculated","FWS Prepared","Yarn Planned","Accessories Planned","Packaging Planned","In Production","QC Inspection","Ready to Ship","Completed","Shipped","At Port","Delivered","Cancelled"];

@@ -13,7 +13,7 @@ import {
   Sparkles, RefreshCw, Download, Info
 } from 'lucide-react';
 import { supabase } from '@/api/supabaseClient';
-import { SeamEditorTab, ThreadBOMResultsPanel } from '@/components/po/SeamEditor';
+import { SeamEditorTab, ThreadBOMResultsPanel } from '@/modules/orders/components/po/SeamEditor';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const ANON_KEY     = import.meta.env.VITE_SUPABASE_ANON_KEY;

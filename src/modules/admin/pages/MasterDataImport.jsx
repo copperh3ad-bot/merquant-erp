@@ -9,7 +9,7 @@ import { validateMasterData } from "@/lib/validators/masterDataValidator";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { classifyComponent, detectAnySkuMismatch, classifyWithAiFallback } from "@/lib/componentClassifier";
 import { normalizeRowKeys } from "@/lib/headerNormalizer";
-import ValidationReport from "@/components/masterdata/ValidationReport";
+import ValidationReport from "@/modules/admin/components/masterdata/ValidationReport";
 import { callClaude } from "@/lib/aiProxy";
 import TryAIExtractionButton from "@/components/shared/TryAIExtractionButton";
 import { buildBulkTemplate, buildPerProgramTemplate } from "@/lib/masterDataTemplates";
@@ -645,7 +645,7 @@ export default function MasterData() {
 
       const { data: { session } } = await supabase.auth.getSession();
 
-      const worker = new Worker(new URL("../workers/masterDataWorker.js", import.meta.url), { type: "module" });
+      const worker = new Worker(new URL("../../../workers/masterDataWorker.js", import.meta.url), { type: "module" });
 
       const result = await new Promise((resolve, reject) => {
         worker.onmessage = (ev) => {

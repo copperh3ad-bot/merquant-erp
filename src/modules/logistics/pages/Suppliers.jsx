@@ -9,7 +9,7 @@ import { Plus, Search, Building2, Pencil, Trash2, Mail, Phone, MapPin } from "lu
 import { Skeleton } from "@/components/ui/skeleton";
 import StatusBadge from "@/components/shared/StatusBadge";
 import EmptyState from "@/components/shared/EmptyState";
-import SupplierFormDialog from "@/components/suppliers/SupplierFormDialog";
+import SupplierFormDialog from "@/modules/logistics/components/suppliers/SupplierFormDialog";
 
 export default function Suppliers() {
   const [showForm, setShowForm] = useState(false);

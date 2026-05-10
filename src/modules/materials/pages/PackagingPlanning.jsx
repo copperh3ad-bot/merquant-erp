@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Save, Plus, Trash2, Upload, Download, Printer, Package, Settings, FileSpreadsheet } from "lucide-react";
-import UploadPackagingSheet from "@/components/packaging/UploadPackagingSheet";
+import UploadPackagingSheet from "@/modules/materials/components/packaging/UploadPackagingSheet";
 import { db, mfg, accessoryTemplates, supabase } from "@/api/supabaseClient";
 import { resolveDescription, findTechPackForArticle, matchesCategory } from "@/lib/descriptionResolver";
 import { allCanonicals } from "@/lib/textileVocabulary";

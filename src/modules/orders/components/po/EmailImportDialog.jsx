@@ -304,7 +304,7 @@ export default function EmailImportDialog({ open, onOpenChange, onExtracted }) {
     const results = [...initial];
 
     try {
-      const worker = new Worker(new URL("../../workers/poExtractWorker.js", import.meta.url), { type: "module" });
+      const worker = new Worker(new URL("../../../../workers/poExtractWorker.js", import.meta.url), { type: "module" });
 
       await new Promise((resolve, reject) => {
         worker.onmessage = (ev) => {

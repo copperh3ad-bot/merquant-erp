@@ -12,17 +12,17 @@ import { ArrowLeft, Pencil, Plus, Trash2, Package, AlertTriangle, Upload, Downlo
 import { format } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import StatusBadge from "@/components/shared/StatusBadge";
-import POWorkflowSteps from "@/components/po/POWorkflowSteps";
-import POFormDialog from "@/components/po/POFormDialog";
-import POItemFormDialog from "@/components/po/POItemFormDialog";
-import POChangeLog from "@/components/po/POChangeLog";
-import PaymentSchedulePanel from "@/components/po/PaymentSchedulePanel";
-import CBMSummary from "@/components/po/CBMSummary";
-import PriceVerification from "@/components/po/PriceVerification";
-import POBatches from "@/components/po/POBatches";
-import POApprovalPanel from "@/components/po/POApprovalPanel";
-import POFabricRequirements from "@/components/po/POFabricRequirements";
-import PriceOverrideCell from "@/components/po/PriceOverrideCell";
+import POWorkflowSteps from "@/modules/orders/components/po/POWorkflowSteps";
+import POFormDialog from "@/modules/orders/components/po/POFormDialog";
+import POItemFormDialog from "@/modules/orders/components/po/POItemFormDialog";
+import POChangeLog from "@/modules/orders/components/po/POChangeLog";
+import PaymentSchedulePanel from "@/modules/orders/components/po/PaymentSchedulePanel";
+import CBMSummary from "@/modules/orders/components/po/CBMSummary";
+import PriceVerification from "@/modules/orders/components/po/PriceVerification";
+import POBatches from "@/modules/orders/components/po/POBatches";
+import POApprovalPanel from "@/modules/orders/components/po/POApprovalPanel";
+import POFabricRequirements from "@/modules/orders/components/po/POFabricRequirements";
+import PriceOverrideCell from "@/modules/orders/components/po/PriceOverrideCell";
 
 // CSV bulk upload helper
 async function parsePOItemsCSV(text, poId, poNumber) {
