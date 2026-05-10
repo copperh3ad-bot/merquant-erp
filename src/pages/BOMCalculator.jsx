@@ -378,7 +378,7 @@ export default function BOMCalculator() {
   const [selectedTechPack, setSelectedTechPack] = useState('');
 
   useEffect(() => {
-    supabase.from('articles').select('id, sku, description').order('sku').limit(200)
+    supabase.from('articles').select('id, article_code, article_name').order('article_code').limit(200)
       .then(({ data }) => setArticles(data ?? []));
   }, []);
 
@@ -532,7 +532,7 @@ export default function BOMCalculator() {
                 <option value="">— Choose an article —</option>
                 {articles.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.sku} {a.description ? `— ${a.description}` : ''}
+                    {a.article_code} {a.article_name ? `— ${a.article_name}` : ''}
                   </option>
                 ))}
               </select>
