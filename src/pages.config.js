@@ -68,6 +68,7 @@ import UserManagement from './modules/admin/pages/UserManagement';
 import MasterDataImport from './modules/admin/pages/MasterDataImport';
 import Settings from './modules/admin/pages/Settings';
 import AuditDashboard from './modules/admin/pages/AuditDashboard';
+import ErrorLogs from './modules/admin/pages/ErrorLogs';
 import Templates from './modules/admin/pages/Templates';
 
 // ai
@@ -141,6 +142,7 @@ export const PAGES = {
   "auth/gmail-callback":     GmailCallback,
   PendingApproval,
   AuditDashboard,
+  ErrorLogs,
 };
 
 export const pagesConfig = {

@@ -11,6 +11,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import { ArrowLeft, CheckCircle2, XCircle, AlertTriangle, Clock, FileText, FileImage, FileSpreadsheet, Sparkles, Trash2, ChevronRight, ChevronDown, Layers, Pencil, Save, X as XIcon, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { validateExtraction } from "@/lib/validators/extractionValidator";
+import { logMLFeedback } from "@/lib/logger";
 
 /* =========================================================================
  * AI Extraction Review
@@ -545,6 +546,7 @@ function buildAllRowsFilter(extracted) {
 function DetailView({ extractionId }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { user, role } = useAuth();
   const [selectedSkus, setSelectedSkus] = useState(new Set());
   const [selectedMaster, setSelectedMaster] = useState({}); // section → Set of keys (string for single-key, JSON.stringify for composite)
   const [conflicts, setConflicts] = useState([]);
@@ -926,6 +928,20 @@ function DetailView({ extractionId }) {
       arr[rowIndex] = { ...arr[rowIndex], [fieldKey]: newValue };
       return { ...d, [section]: arr };
     }, `${section}[${rowIndex}].${fieldKey} = ${JSON.stringify(newValue)}`);
+
+    // Log correction as ML training data — fire-and-forget.
+    logMLFeedback({
+      feedbackType:   "cell_edit",
+      sourceModule:   "po_extraction",
+      fieldName:      `${section}.${fieldKey}`,
+      originalValue:  oldRow[fieldKey],
+      correctedValue: newValue,
+      context:        { section, rowIndex, kind: ext?.kind },
+      extractionId,
+      userEmail:      user?.email,
+      userRole:       role,
+      wasCorrect:     false,
+    });
 
     // If the extraction has been applied, also push the change to live tables.
     if (ext.applied_at) {
