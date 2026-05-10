@@ -12,7 +12,7 @@ import { format } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import StatusBadge from "@/components/shared/StatusBadge";
 import EmptyState from "@/components/shared/EmptyState";
-import ShipmentFormDialog from "@/components/shipments/ShipmentFormDialog";
+import ShipmentFormDialog from "@/modules/logistics/components/shipments/ShipmentFormDialog";
 
 const statuses = ["All","Planned","Booked","Booking Confirmed","Loaded","In Transit","At Port","Customs Clearance","Delivered","Cancelled"];
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM yy") : "—"; } catch { return "—"; } };

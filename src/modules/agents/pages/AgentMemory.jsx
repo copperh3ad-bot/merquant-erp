@@ -13,7 +13,7 @@ import {
   Truck, Package, Bot, ThumbsUp, ThumbsDown
 } from 'lucide-react';
 import { supabase } from '@/api/supabaseClient';
-import EventStreamPanel from '@/components/agent/EventStreamPanel';
+import EventStreamPanel from '@/modules/agents/components/agent/EventStreamPanel';
 
 // ---------------------------------------------------------------------------
 // Memory type config

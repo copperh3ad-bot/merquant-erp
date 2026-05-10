@@ -13,8 +13,8 @@ import { useAuth } from "@/lib/AuthContext";
 import StatusBadge from "@/components/shared/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import DashboardCharts from "@/components/dashboard/DashboardCharts";
-import RecentPOTable from "@/components/dashboard/RecentPOTable";
+import DashboardCharts from "@/modules/orders/components/dashboard/DashboardCharts";
+import RecentPOTable from "@/modules/orders/components/dashboard/RecentPOTable";
 import RedactedValue from "@/components/shared/RedactedValue";
 import {
   articleHasFabricBag,

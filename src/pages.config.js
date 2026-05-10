@@ -1,65 +1,83 @@
-import Dashboard from './pages/Dashboard';
-import PurchaseOrders from './pages/PurchaseOrders';
-import PODetail from './pages/PODetail';
-import Suppliers from './pages/Suppliers';
-import Shipments from './pages/Shipments';
-import ShippingDocuments from './pages/ShippingDocuments';
-import Production from './pages/Production';
-import Reports from './pages/Reports';
-import AIAssistant from './pages/AIAssistant';
-import FabricWorking from './pages/FabricWorking';
-import Articles from './pages/Articles';
-import YarnPlanning from './pages/YarnPlanning';
-import PackagingPlanning from './pages/PackagingPlanning';
-import AccessoryPurchaseOrders from './pages/AccessoryPurchaseOrders';
-import ProformaInvoice from './pages/ProformaInvoice';
-import EmailCrawler from './pages/EmailCrawler';
-import SKUReviewQueue from './pages/SKUReviewQueue';
-import TNACalendar from './pages/TNACalendar';
-import LabDips from './pages/LabDips';
-import Samples from './pages/Samples';
-import QCInspections from './pages/QCInspections';
-import CostingSheet from './pages/CostingSheet';
-import Payments from './pages/Payments';
-import PackingList from './pages/PackingList';
-import Compliance from './pages/Compliance';
-import FabricOrders from './pages/FabricOrders';
-import SeasonPlanning from './pages/SeasonPlanning';
-import UserManagement from './pages/UserManagement';
-import JobCards from './pages/JobCards';
-import CommercialInvoices from './pages/CommercialInvoices';
-import TechPacks from './pages/TechPacks';
-import AccessoriesTrimsApproval from './pages/AccessoriesTrimsApproval';
-import CRM from './pages/CRM';
-import BuyerContacts from './pages/BuyerContacts';
-import SupplierPerformance from './pages/SupplierPerformance';
-import Templates from './pages/Templates';
-import GmailCallback from './pages/GmailCallback';
-import PendingApproval from './pages/PendingApproval';
-import AuditDashboard from './pages/AuditDashboard';
-import Settings from './pages/Settings';
-import POVariance from './pages/POVariance';
-import RMCoverage from './pages/RMCoverage';
-import ConsumptionLibrary from './pages/ConsumptionLibrary';
-import CapacityPlanning from './pages/CapacityPlanning';
-import WIPTracker from './pages/WIPTracker';
-import ProductionDashboard from './pages/ProductionDashboard';
-import ShopFloor from './pages/ShopFloor';
-import FabricInventory from './pages/FabricInventory';
-import JobWork from './pages/JobWork';
-import BuyerPortal from './pages/BuyerPortal';
-import CustomerOrderStatus from './pages/CustomerOrderStatus';
-import ShortageAlerts from './pages/ShortageAlerts';
-import MasterDataImport from './pages/MasterDataImport';
-import AIExtractionReview from './pages/AIExtractionReview';
-import FileFeeder from './pages/FileFeeder';
-// Phase 7 — agent ops pages.
-import AgentMemory from './pages/AgentMemory';
-import AgentActions from './pages/AgentActions';
-import EmailPOAgent from './pages/EmailPOAgent';
-import TNARiskAgent from './pages/TNARiskAgent';
-// Phase 13 — BOM calculator page.
-import BOMCalculator from './pages/BOMCalculator';
+// orders
+import Dashboard from './modules/orders/pages/Dashboard';
+import PurchaseOrders from './modules/orders/pages/PurchaseOrders';
+import PODetail from './modules/orders/pages/PODetail';
+import SeasonPlanning from './modules/orders/pages/SeasonPlanning';
+import EmailCrawler from './modules/orders/pages/EmailCrawler';
+import AIExtractionReview from './modules/orders/pages/AIExtractionReview';
+import CustomerOrderStatus from './modules/orders/pages/CustomerOrderStatus';
+
+// tracking
+import TechPacks from './modules/tracking/pages/TechPacks';
+import TNACalendar from './modules/tracking/pages/TNACalendar';
+import ShortageAlerts from './modules/tracking/pages/ShortageAlerts';
+import SKUReviewQueue from './modules/tracking/pages/SKUReviewQueue';
+import LabDips from './modules/tracking/pages/LabDips';
+import Samples from './modules/tracking/pages/Samples';
+import QCInspections from './modules/tracking/pages/QCInspections';
+import JobCards from './modules/tracking/pages/JobCards';
+import AccessoriesTrimsApproval from './modules/tracking/pages/AccessoriesTrimsApproval';
+
+// agents
+import AgentMemory from './modules/agents/pages/AgentMemory';
+import AgentActions from './modules/agents/pages/AgentActions';
+import EmailPOAgent from './modules/agents/pages/EmailPOAgent';
+import TNARiskAgent from './modules/agents/pages/TNARiskAgent';
+
+// materials
+import Articles from './modules/materials/pages/Articles';
+import BOMCalculator from './modules/materials/pages/BOMCalculator';
+import FabricWorking from './modules/materials/pages/FabricWorking';
+import FabricOrders from './modules/materials/pages/FabricOrders';
+import RMCoverage from './modules/materials/pages/RMCoverage';
+import ConsumptionLibrary from './modules/materials/pages/ConsumptionLibrary';
+import YarnPlanning from './modules/materials/pages/YarnPlanning';
+import PackagingPlanning from './modules/materials/pages/PackagingPlanning';
+import FabricInventory from './modules/materials/pages/FabricInventory';
+import JobWork from './modules/materials/pages/JobWork';
+import AccessoryPurchaseOrders from './modules/materials/pages/AccessoryPurchaseOrders';
+
+// logistics
+import Suppliers from './modules/logistics/pages/Suppliers';
+import Shipments from './modules/logistics/pages/Shipments';
+import CommercialInvoices from './modules/logistics/pages/CommercialInvoices';
+import ShippingDocuments from './modules/logistics/pages/ShippingDocuments';
+import Production from './modules/logistics/pages/Production';
+import CapacityPlanning from './modules/logistics/pages/CapacityPlanning';
+import WIPTracker from './modules/logistics/pages/WIPTracker';
+import ProductionDashboard from './modules/logistics/pages/ProductionDashboard';
+import ShopFloor from './modules/logistics/pages/ShopFloor';
+import PackingList from './modules/logistics/pages/PackingList';
+import ProformaInvoice from './modules/logistics/pages/ProformaInvoice';
+
+// finance
+import CostingSheet from './modules/finance/pages/CostingSheet';
+import POVariance from './modules/finance/pages/POVariance';
+import Payments from './modules/finance/pages/Payments';
+import Compliance from './modules/finance/pages/Compliance';
+import Reports from './modules/finance/pages/Reports';
+
+// crm
+import BuyerPortal from './modules/crm/pages/BuyerPortal';
+import CRM from './modules/crm/pages/CRM';
+import BuyerContacts from './modules/crm/pages/BuyerContacts';
+import SupplierPerformance from './modules/crm/pages/SupplierPerformance';
+
+// admin
+import UserManagement from './modules/admin/pages/UserManagement';
+import MasterDataImport from './modules/admin/pages/MasterDataImport';
+import Settings from './modules/admin/pages/Settings';
+import AuditDashboard from './modules/admin/pages/AuditDashboard';
+import Templates from './modules/admin/pages/Templates';
+
+// ai
+import AIAssistant from './modules/ai/pages/AIAssistant';
+import FileFeeder from './modules/ai/pages/FileFeeder';
+
+// auth
+import GmailCallback from './auth/pages/GmailCallback';
+import PendingApproval from './auth/pages/PendingApproval';
+
 import Layout from './Layout.jsx';
 
 export const PAGES = {
@@ -130,5 +148,4 @@ export const pagesConfig = {
   Pages: PAGES,
   Layout: Layout,
 };
-
 

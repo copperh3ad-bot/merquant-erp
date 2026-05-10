@@ -17,7 +17,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import StatusBadge from "@/components/shared/StatusBadge";
 import EmptyState from "@/components/shared/EmptyState";
-import SKUReviewDialog from "@/components/po/SKUReviewDialog";
+import SKUReviewDialog from "@/modules/orders/components/po/SKUReviewDialog";
 import { DEFAULT_UNIT_SYSTEM } from "@/lib/unitSystem";
 
 const STATUS_STYLES = {

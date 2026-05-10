@@ -12,7 +12,7 @@ import { format, differenceInDays, addDays, isPast, isToday } from "date-fns";
 import { cn } from "@/lib/utils";
 import EmptyState from "@/components/shared/EmptyState";
 import StatCard from "@/components/shared/StatCard";
-import GCalSync from "@/components/tna/GCalSync";
+import GCalSync from "@/modules/tracking/components/tna/GCalSync";
 
 const CATEGORY_COLORS = {
   PO:         "bg-blue-100 text-blue-700 border-blue-200",

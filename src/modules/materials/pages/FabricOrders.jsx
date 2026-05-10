@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import FabricOrderDrafts from "@/components/fabric/FabricOrderDrafts";
+import FabricOrderDrafts from "@/modules/materials/components/fabric/FabricOrderDrafts";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { Shirt, Plus, Pencil, Trash2, Search, AlertCircle, CheckCircle2, Clock, TrendingDown, RefreshCw } from "lucide-react";

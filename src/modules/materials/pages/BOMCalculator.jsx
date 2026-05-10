@@ -13,7 +13,7 @@ import {
   Sparkles, RefreshCw, Download, Info
 } from 'lucide-react';
 import { supabase } from '@/api/supabaseClient';
-import { SeamEditorTab, ThreadBOMResultsPanel } from '@/components/po/SeamEditor';
+import { SeamEditorTab, ThreadBOMResultsPanel } from '@/modules/orders/components/po/SeamEditor';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const ANON_KEY     = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -378,7 +378,7 @@ export default function BOMCalculator() {
   const [selectedTechPack, setSelectedTechPack] = useState('');
 
   useEffect(() => {
-    supabase.from('articles').select('id, sku, description').order('sku').limit(200)
+    supabase.from('articles').select('id, article_code, article_name').order('article_code').limit(200)
       .then(({ data }) => setArticles(data ?? []));
   }, []);
 
@@ -532,7 +532,7 @@ export default function BOMCalculator() {
                 <option value="">— Choose an article —</option>
                 {articles.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.sku} {a.description ? `— ${a.description}` : ''}
+                    {a.article_code} {a.article_name ? `— ${a.article_name}` : ''}
                   </option>
                 ))}
               </select>

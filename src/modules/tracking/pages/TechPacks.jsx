@@ -33,7 +33,7 @@ import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
 import { classifyComponent } from "@/lib/componentClassifier";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
 import SelectionCheckbox from "@/components/shared/SelectionCheckbox";
-import BulkActionsBar from "@/components/techpack/BulkActionsBar";
+import BulkActionsBar from "@/modules/tracking/components/techpack/BulkActionsBar";
 
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM yy") : "—"; } catch { return "—"; } };
 

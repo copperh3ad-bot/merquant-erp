@@ -3,7 +3,7 @@ import { queryClient } from '@/lib/queryClient';
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import { pagesConfig } from './pages.config';
-import LoginPage from './pages/LoginPage';
+import LoginPage from './auth/pages/LoginPage';
 import PageErrorBoundary from '@/components/shared/PageErrorBoundary';
 
 const { Pages, Layout, mainPage } = pagesConfig;
