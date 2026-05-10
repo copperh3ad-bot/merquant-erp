@@ -39,7 +39,13 @@ export default function ShipmentFormDialog({ open, onOpenChange, onSave, initial
         <div className="grid grid-cols-2 gap-4 py-2">
           <div className="space-y-1.5">
             <Label className="text-xs">Shipment Number</Label>
-            <Input value={form.shipment_number} onChange={e => update("shipment_number", e.target.value)} placeholder="SHP-2025-001" />
+            <Input
+              value={form.shipment_number || ""}
+              readOnly={!initialData}
+              placeholder={initialData ? "" : "Auto-assigned on save"}
+              className={!initialData ? "bg-muted/40 text-muted-foreground" : ""}
+              onChange={e => initialData && update("shipment_number", e.target.value)}
+            />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">PO Number</Label>

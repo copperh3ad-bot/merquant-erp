@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { db, qcInspections } from "@/api/supabaseClient";
+import { db, qcInspections, supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -113,9 +113,31 @@ export default function QCInspectionsPage() {
 
   const handleSave = async (data) => {
     const po = pos.find(p=>p.id===data.po_id);
-    const payload = {...data, po_number:po?.po_number||""};
-    if (editing) { await qcInspections.update(editing.id,payload); } else { await qcInspections.create(payload); }
-    qc.invalidateQueries({queryKey:["qcInspections"]});
+    const payload = { ...data, po_number: po?.po_number || "" };
+    if (editing) { await qcInspections.update(editing.id, payload); } else { await qcInspections.create(payload); }
+
+    // Notify production HODs on Fail or re-inspection required
+    const isFail = data.verdict === "Fail";
+    const needsReinspect = data.re_inspection_required;
+    const wasAlreadyFail = editing?.verdict === "Fail";
+    if ((isFail || needsReinspect) && !wasAlreadyFail) {
+      const defectSummary = [
+        data.critical_defects > 0 ? `${data.critical_defects} critical` : null,
+        data.major_defects > 0 ? `${data.major_defects} major` : null,
+        data.minor_defects > 0 ? `${data.minor_defects} minor` : null,
+      ].filter(Boolean).join(", ") || "defects found";
+      await supabase.from("notifications").insert({
+        title: `QC ${isFail ? "Failed" : "Re-inspection Required"} — ${po?.po_number || ""}`,
+        message: `${data.inspection_type} inspection for PO ${po?.po_number} — ${po?.customer_name} ${isFail ? "FAILED" : "requires re-inspection"} (AQL ${data.aql_level}, ${defectSummary}). Inspector: ${data.inspector_name || data.inspection_company}. Immediate corrective action required.`,
+        type: "warning",
+        category: "qc_fail",
+        entity_type: "purchase_order",
+        entity_id: data.po_id,
+        link_page: "QCInspections",
+      }).then(({ error }) => { if (error) console.warn("[qc-fail-notify]", error.message); });
+    }
+
+    qc.invalidateQueries({ queryKey: ["qcInspections"] });
     setShowForm(false); setEditing(null);
   };
   const handleDelete = async (id) => { if(!confirm("Delete?"))return; await qcInspections.delete(id); qc.invalidateQueries({queryKey:["qcInspections"]}); };

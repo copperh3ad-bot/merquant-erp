@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { db, samples } from "@/api/supabaseClient";
+import { db, samples, supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,11 +32,31 @@ const STATUS_STYLES = {
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM yy") : "—"; } catch { return "—"; } };
 const empty = { po_id:"", style_number:"", article_name:"", sample_type:"Development", round_number:1, dispatch_date:"", courier:"", tracking_number:"", expected_feedback_date:"", actual_feedback_date:"", buyer_comments:"", status:"Pending", internal_notes:"" };
 
-function SampleForm({ open, onOpenChange, onSave, initialData, pos }) {
+function SampleForm({ open, onOpenChange, onSave, initialData, pos, sampleList }) {
   const [form, setForm] = useState(empty);
   const [saving, setSaving] = useState(false);
   const u = (k,v) => setForm(p => ({ ...p, [k]:v }));
-  React.useEffect(() => { if (open) setForm(initialData ? {...empty,...initialData} : empty); }, [open, initialData]);
+
+  const autoRound = (draft) => {
+    if (initialData) return draft;
+    const prior = (sampleList || []).filter(
+      s => s.po_id === draft.po_id && s.sample_type === draft.sample_type
+    );
+    return { ...draft, round_number: prior.length + 1 };
+  };
+
+  React.useEffect(() => {
+    if (open) setForm(initialData ? {...empty,...initialData} : autoRound(empty));
+  }, [open, initialData]);
+
+  const handleFieldChange = (k, v) => {
+    setForm(p => {
+      const next = { ...p, [k]: v };
+      if (!initialData && ["po_id","sample_type"].includes(k)) return autoRound(next);
+      return next;
+    });
+  };
+
   const handleSave = async () => { setSaving(true); try { await onSave({...form, round_number:Number(form.round_number)||1}); } finally { setSaving(false); } };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -45,7 +65,7 @@ function SampleForm({ open, onOpenChange, onSave, initialData, pos }) {
         <div className="grid grid-cols-2 gap-3 py-2">
           <div className="col-span-2 space-y-1.5">
             <Label className="text-xs">PO</Label>
-            <Select value={form.po_id} onValueChange={v => u("po_id",v)}>
+            <Select value={form.po_id} onValueChange={v => handleFieldChange("po_id",v)}>
               <SelectTrigger><SelectValue placeholder="Select PO" /></SelectTrigger>
               <SelectContent>{pos.map(p => <SelectItem key={p.id} value={p.id}>{p.po_number} — {p.customer_name}</SelectItem>)}</SelectContent>
             </Select>
@@ -54,12 +74,12 @@ function SampleForm({ open, onOpenChange, onSave, initialData, pos }) {
             <div key={k} className="space-y-1.5"><Label className="text-xs">{l}</Label><Input value={form[k]} onChange={e=>u(k,e.target.value)} placeholder={ph}/></div>
           ))}
           <div className="space-y-1.5"><Label className="text-xs">Sample Type</Label>
-            <Select value={form.sample_type} onValueChange={v=>u("sample_type",v)}>
+            <Select value={form.sample_type} onValueChange={v=>handleFieldChange("sample_type",v)}>
               <SelectTrigger><SelectValue/></SelectTrigger>
               <SelectContent>{SAMPLE_TYPES.map(t=><SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div className="space-y-1.5"><Label className="text-xs">Round #</Label><Input type="number" min="1" value={form.round_number} onChange={e=>u("round_number",e.target.value)}/></div>
+          <div className="space-y-1.5"><Label className="text-xs">Round # (auto)</Label><Input type="number" min="1" value={form.round_number} readOnly className="bg-muted/40 font-semibold"/></div>
           <div className="space-y-1.5"><Label className="text-xs">Dispatch Date</Label><Input type="date" value={form.dispatch_date} onChange={e=>u("dispatch_date",e.target.value)}/></div>
           <div className="space-y-1.5"><Label className="text-xs">Expected Feedback</Label><Input type="date" value={form.expected_feedback_date} onChange={e=>u("expected_feedback_date",e.target.value)}/></div>
           <div className="space-y-1.5"><Label className="text-xs">Courier</Label><Input value={form.courier} onChange={e=>u("courier",e.target.value)} placeholder="DHL / FedEx"/></div>
@@ -100,6 +120,22 @@ export default function SamplesPage() {
     const po = pos.find(p=>p.id===data.po_id);
     const payload = { ...data, po_number: po?.po_number||"" };
     if (editing) { await samples.update(editing.id, payload); } else { await samples.create(payload); }
+
+    // Overdue notification: expected feedback date passed and sample not resolved
+    const isOverdue = data.expected_feedback_date && new Date(data.expected_feedback_date) < new Date() && !["Approved","Rejected"].includes(data.status);
+    const wasAlreadyOverdue = editing?.expected_feedback_date && new Date(editing.expected_feedback_date) < new Date() && !["Approved","Rejected"].includes(editing?.status);
+    if (isOverdue && !wasAlreadyOverdue) {
+      await supabase.from("notifications").insert({
+        title: `Sample Overdue — ${data.sample_type} R${data.round_number} (${po?.po_number || ""})`,
+        message: `${data.sample_type} sample (round ${data.round_number}) for PO ${po?.po_number} — ${po?.customer_name} was due on ${data.expected_feedback_date}. No buyer response yet. Please follow up.`,
+        type: "warning",
+        category: "sample_overdue",
+        entity_type: "purchase_order",
+        entity_id: data.po_id,
+        link_page: "Samples",
+      }).then(({ error }) => { if (error) console.warn("[sample-overdue]", error.message); });
+    }
+
     qc.invalidateQueries({ queryKey:["samples"] });
     setShowForm(false); setEditing(null);
   };
@@ -187,7 +223,7 @@ export default function SamplesPage() {
           </div>
         </CardContent></Card>
       )}
-      <SampleForm open={showForm} onOpenChange={v=>{setShowForm(v);if(!v)setEditing(null);}} onSave={handleSave} initialData={editing} pos={pos}/>
+      <SampleForm open={showForm} onOpenChange={v=>{setShowForm(v);if(!v)setEditing(null);}} onSave={handleSave} initialData={editing} pos={pos} sampleList={sampleList}/>
     </div>
   );
 }

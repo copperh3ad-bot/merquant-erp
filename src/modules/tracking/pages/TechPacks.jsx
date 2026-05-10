@@ -1720,6 +1720,34 @@ export default function TechPacks() {
         }
       }
 
+      // 4. Auto-seed costing sheet so merchandiser only fills prices, not structure
+      if (tp.po_id && tp.article_code) {
+        try {
+          // Pull PO data for quantity and buyer price
+          const { data: poRow } = await supabase.from("purchase_orders").select("total_quantity, currency").eq("id", tp.po_id).single();
+          const { data: poItem } = await supabase.from("po_items").select("unit_price").eq("po_id", tp.po_id).eq("item_code", tp.article_code).maybeSingle();
+          await supabase.from("costing_sheets").upsert({
+            po_id: tp.po_id,
+            po_number: tp.po_number || "",
+            article_code: tp.article_code,
+            article_name: tp.article_name || "",
+            order_quantity: poRow?.total_quantity || 0,
+            buyer_price: poItem?.unit_price || 0,
+            currency: poRow?.currency || "USD",
+            fabric_cost: 0,
+            trim_cost: 0,
+            accessory_cost: 0,
+            cm_cost: 0,
+            freight_cost: 0,
+            overhead_pct: 12,
+            agent_commission_pct: 5,
+          }, { onConflict: "po_id,article_code", ignoreDuplicates: true });
+          qc.invalidateQueries({ queryKey: ["costingSheets"] });
+        } catch (csErr) {
+          console.warn("[sign-off] costing sheet seed failed (non-blocking):", csErr?.message);
+        }
+      }
+
       qc.invalidateQueries({ queryKey: ["techPacks"] });
       qc.invalidateQueries({ queryKey: ["master_articles"] });
       qc.invalidateQueries({ queryKey: ["articles"] });

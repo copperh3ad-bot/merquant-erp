@@ -2,14 +2,14 @@ import React, { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { db, supabase } from "@/api/supabaseClient";
+import { db, supabase, tna } from "@/api/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ArrowLeft, Pencil, Plus, Trash2, Package, AlertTriangle, Upload, Download, Layers, Scissors, PackageCheck, Tag, FlaskConical, TestTube, ClipboardList, DollarSign, FileText, ShieldCheck, Calendar, Ship, ShieldAlert, Receipt, FileBox, Shirt, ClipboardCheck, Image, Copy, Zap, Loader2 } from "lucide-react";
-import { format } from "date-fns";
+import { format, addDays } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import StatusBadge from "@/components/shared/StatusBadge";
 import POWorkflowSteps from "@/modules/orders/components/po/POWorkflowSteps";
@@ -274,7 +274,49 @@ export default function PODetail() {
       }).then(({ error }) => { if (error) console.warn("[buyer-notify]", error.message); });
     }
 
-    // Auto-create job card when order moves into production
+    // Auto-create TNA milestones on first receipt — replaces manual "Generate" step
+    if (newStatus === "PO Received") {
+      try {
+        const { data: existingMs } = await supabase
+          .from("tna_milestones")
+          .select("id")
+          .eq("po_id", poId)
+          .limit(1);
+        if (!existingMs?.length && po?.ex_factory_date) {
+          const { data: templates } = await supabase
+            .from("tna_templates")
+            .select("*")
+            .order("name")
+            .limit(1);
+          const tmpl = templates?.[0];
+          if (tmpl?.milestones?.length) {
+            const exFactory = new Date(po.ex_factory_date);
+            const calRecord = await tna.calendars.create({
+              po_id: poId,
+              po_number: po.po_number,
+              customer_name: po.customer_name,
+              ex_factory_date: po.ex_factory_date,
+              template_id: tmpl.id,
+            });
+            const rows = tmpl.milestones.map((ms, i) => ({
+              tna_id: calRecord.id,
+              po_id: poId,
+              name: ms.name,
+              category: ms.category,
+              target_date: format(addDays(exFactory, -ms.days_before_exfactory), "yyyy-MM-dd"),
+              status: "pending",
+              sort_order: i,
+            }));
+            await tna.milestones.bulkCreate(rows);
+            qc.invalidateQueries({ queryKey: ["tnaMilestones"] });
+          }
+        }
+      } catch (e) {
+        console.warn("[auto-TNA]", e?.message);
+      }
+    }
+
+    // Auto-create job card when order moves into production (number assigned by DB trigger)
     if (newStatus === "In Production") {
       const { data: existing } = await supabase
         .from("job_cards")
@@ -282,11 +324,10 @@ export default function PODetail() {
         .eq("po_id", poId)
         .limit(1);
       if (!existing?.length) {
-        const jcNumber = `JC-${po?.po_number || poId.slice(0, 8).toUpperCase()}`;
         await supabase.from("job_cards").insert({
           po_id: poId,
           po_number: po?.po_number || "",
-          job_card_number: jcNumber,
+          job_card_number: null,
           article_name: po?.customer_name || "",
           quantity: po?.total_quantity || null,
           start_date: new Date().toISOString().split("T")[0],

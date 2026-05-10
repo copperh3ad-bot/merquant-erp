@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { db, compliance } from "@/api/supabaseClient";
+import { db, compliance, supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -88,9 +88,54 @@ export default function CompliancePage() {
 
   const handleSave = async(data) => {
     const po = pos.find(p=>p.id===data.po_id);
-    if (editing) { await compliance.update(editing.id,{...data,po_number:po?.po_number||""}); }
-    else { await compliance.create({...data,po_number:po?.po_number||""}); }
-    qc.invalidateQueries({queryKey:["compliance"]});
+    let finalData = { ...data };
+
+    // Auto-flip status based on expiry date
+    if (finalData.expiry_date) {
+      const expiry = new Date(finalData.expiry_date);
+      if (isPast(expiry)) {
+        finalData.status = "Expired";
+      }
+    }
+
+    const wasExpired = editing?.status === "Expired";
+    const wasExpiringSoon = editing?.expiry_date && isPast(addDays(new Date(editing.expiry_date), -30)) && !isPast(new Date(editing.expiry_date));
+
+    const payload = { ...finalData, po_number: po?.po_number || "" };
+    if (editing) { await compliance.update(editing.id, payload); }
+    else { await compliance.create(payload); }
+
+    // Notify when newly expired
+    if (finalData.status === "Expired" && !wasExpired) {
+      await supabase.from("notifications").insert({
+        title: `Compliance Doc Expired — ${finalData.doc_type}`,
+        message: `${finalData.doc_type} (${finalData.doc_number || "no number"}) for article ${finalData.article_code || "—"} expired on ${finalData.expiry_date}. Please renew before next shipment.`,
+        type: "warning",
+        category: "compliance_expired",
+        entity_type: "purchase_order",
+        entity_id: data.po_id || null,
+        link_page: "Compliance",
+      }).then(({ error }) => { if (error) console.warn("[compliance-expired]", error.message); });
+    }
+
+    // 30-day advance warning (only on new records or when expiry newly enters the window)
+    if (finalData.expiry_date && finalData.status !== "Expired") {
+      const expiry = new Date(finalData.expiry_date);
+      const isExpiringSoon = isPast(addDays(expiry, -30)) && !isPast(expiry);
+      if (isExpiringSoon && !wasExpiringSoon) {
+        await supabase.from("notifications").insert({
+          title: `Compliance Expiry Warning — ${finalData.doc_type}`,
+          message: `${finalData.doc_type} (${finalData.doc_number || "no number"}) expires on ${finalData.expiry_date}. Renew within 30 days.`,
+          type: "info",
+          category: "compliance_expiry_warning",
+          entity_type: "purchase_order",
+          entity_id: data.po_id || null,
+          link_page: "Compliance",
+        }).then(({ error }) => { if (error) console.warn("[compliance-expiry-warning]", error.message); });
+      }
+    }
+
+    qc.invalidateQueries({ queryKey: ["compliance"] });
     setShowForm(false); setEditing(null);
   };
   const handleDelete = async(id)=>{ if(!confirm("Delete?"))return; await compliance.delete(id); qc.invalidateQueries({queryKey:["compliance"]}); };

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { db, accessoryPOs, mfg } from "@/api/supabaseClient";
+import { db, accessoryPOs, mfg, supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -254,12 +254,26 @@ export default function AccessoryPurchaseOrders() {
 
   const handleStatus = async (id, status) => {
     await accessoryPOs.update(id, { status });
-    // Keep source items in sync with the new APO status
     const apo = apos.find(a => a.id === id);
     const ids = itemIdsFor(apo);
     if (ids.length) {
       await mfg.accessories.bulkUpdateStatus(ids, apoStatusToItemStatus(status));
     }
+
+    // Notify store when accessories arrive — replaces manual email/phone call
+    if (status === "Received" && apo?.status !== "Received") {
+      const itemCount = (apo?.items || []).length;
+      await supabase.from("notifications").insert({
+        title: `Accessories In House — ${apo?.apo_number || ""}`,
+        message: `Accessory PO ${apo?.apo_number} (supplier: ${apo?.supplier || "—"}, PO ref: ${apo?.po_ref || "—"}) has been received. ${itemCount > 0 ? `${itemCount} item type(s).` : ""} Please update store records and count.`,
+        type: "success",
+        category: "accessories_received",
+        entity_type: "accessory_po",
+        entity_id: id,
+        link_page: "AccessoryPurchaseOrders",
+      }).then(({ error }) => { if (error) console.warn("[accessories-received]", error.message); });
+    }
+
     qc.invalidateQueries({ queryKey: ["accessoryPOs"] });
     qc.invalidateQueries({ queryKey: ["accessoryItems"] });
   };

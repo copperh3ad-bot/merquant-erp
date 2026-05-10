@@ -52,6 +52,29 @@ export default function Shipments() {
       data = { ...data, actual_arrival: new Date().toISOString().split("T")[0] };
     }
 
+    // Auto-advance linked PO to Delivered when shipment is marked Delivered
+    if (data.status === "Delivered" && editingShipment?.status !== "Delivered") {
+      const linkedPoId = editingShipment?.po_id || data.po_id;
+      if (linkedPoId) {
+        const { data: linkedPo } = await supabase
+          .from("purchase_orders")
+          .select("id, status, po_number")
+          .eq("id", linkedPoId)
+          .single();
+        if (linkedPo && linkedPo.status === "Shipped") {
+          await supabase.from("purchase_orders").update({ status: "Delivered" }).eq("id", linkedPoId);
+          await supabase.from("po_status_logs").insert({
+            entity_type: "purchase_order",
+            entity_id: linkedPoId,
+            from_status: "Shipped",
+            to_status: "Delivered",
+            changed_by: "system",
+            notes: `Auto-advanced when shipment ${editingShipment?.shipment_number || ""} marked Delivered`,
+          }).then(({ error }) => { if (error) console.warn("[po-delivery-sync]", error.message); });
+        }
+      }
+    }
+
     if (editingShipment) {
       await db.shipments.update(editingShipment.id, data);
 

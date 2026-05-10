@@ -34,11 +34,31 @@ const STATUS_STYLES = {
 
 const empty = { po_id:"", type:"Lab Dip", shade_name:"", shade_number:"", round_number:1, submission_date:"", expected_response_date:"", buyer_response_date:"", status:"Not Submitted", buyer_comments:"", internal_notes:"", article_name:"", article_code:"" };
 
-function LabDipForm({ open, onOpenChange, onSave, initialData, pos }) {
+function LabDipForm({ open, onOpenChange, onSave, initialData, pos, dips }) {
   const [form, setForm] = useState(empty);
   const [saving, setSaving] = useState(false);
   const u = (k,v) => setForm(p => ({ ...p, [k]: v }));
-  React.useEffect(() => { if (open) setForm(initialData ? { ...empty, ...initialData } : empty); }, [open, initialData]);
+
+  // Auto-increment round number whenever PO, type, or article changes on a new form
+  const autoRound = (draft) => {
+    if (initialData) return draft;
+    const prior = (dips || []).filter(
+      d => d.po_id === draft.po_id && d.type === draft.type && d.article_code === draft.article_code
+    );
+    return { ...draft, round_number: prior.length + 1 };
+  };
+
+  React.useEffect(() => {
+    if (open) setForm(initialData ? { ...empty, ...initialData } : autoRound(empty));
+  }, [open, initialData]);
+
+  const handleFieldChange = (k, v) => {
+    setForm(p => {
+      const next = { ...p, [k]: v };
+      if (!initialData && ["po_id","type","article_code"].includes(k)) return autoRound(next);
+      return next;
+    });
+  };
   const handleSave = async () => {
     setSaving(true);
     try { await onSave({ ...form, round_number: Number(form.round_number) || 1 }); } finally { setSaving(false); }
@@ -52,21 +72,21 @@ function LabDipForm({ open, onOpenChange, onSave, initialData, pos }) {
         <div className="grid grid-cols-2 gap-3 py-2">
           <div className="col-span-2 space-y-1.5">
             <Label className="text-xs">PO</Label>
-            <Select value={form.po_id} onValueChange={v => u("po_id", v)}>
+            <Select value={form.po_id} onValueChange={v => handleFieldChange("po_id", v)}>
               <SelectTrigger><SelectValue placeholder="Select PO" /></SelectTrigger>
               <SelectContent>{pos.map(p => <SelectItem key={p.id} value={p.id}>{p.po_number} — {p.customer_name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Type</Label>
-            <Select value={form.type} onValueChange={v => u("type", v)}>
+            <Select value={form.type} onValueChange={v => handleFieldChange("type", v)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>{TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">Round #</Label>
-            <Input type="number" min="1" value={form.round_number} onChange={e => u("round_number", e.target.value)} />
+            <Label className="text-xs">Round # (auto)</Label>
+            <Input type="number" min="1" value={form.round_number} readOnly className="bg-muted/40 font-semibold" />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Article Name</Label>
@@ -74,7 +94,7 @@ function LabDipForm({ open, onOpenChange, onSave, initialData, pos }) {
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Article Code</Label>
-            <Input value={form.article_code} onChange={e => u("article_code", e.target.value)} placeholder="KTM-100" />
+            <Input value={form.article_code} onChange={e => handleFieldChange("article_code", e.target.value)} placeholder="KTM-100" />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Shade Name</Label>
@@ -267,7 +287,7 @@ export default function LabDipsPage() {
         </Card>
       )}
 
-      <LabDipForm open={showForm} onOpenChange={v => { setShowForm(v); if (!v) setEditing(null); }} onSave={handleSave} initialData={editing} pos={pos} />
+      <LabDipForm open={showForm} onOpenChange={v => { setShowForm(v); if (!v) setEditing(null); }} onSave={handleSave} initialData={editing} pos={pos} dips={dips} />
     </div>
   );
 }

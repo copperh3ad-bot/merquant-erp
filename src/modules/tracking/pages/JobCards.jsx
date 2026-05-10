@@ -122,7 +122,7 @@ function JobCardForm({ open, onOpenChange, onSave, initialData, pos }) {
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{initialData ? "Edit Job Card" : "New Job Card"}</DialogTitle></DialogHeader>
         <div className="grid grid-cols-2 gap-3 text-sm">
-          <div className="space-y-1.5"><Label className="text-xs">Job Card Number (manual)</Label><Input value={form.job_card_number} onChange={e => u("job_card_number", e.target.value)} placeholder="e.g. JC-2026-001"/></div>
+          <div className="space-y-1.5"><Label className="text-xs">Job Card Number</Label><Input value={form.job_card_number || ""} readOnly={!initialData} placeholder={initialData ? "" : "Auto-assigned on save"} className={!initialData ? "bg-muted/40 text-muted-foreground" : ""} onChange={e => initialData && u("job_card_number", e.target.value)}/></div>
           <div className="space-y-1.5"><Label className="text-xs">Purchase Order</Label>
             <Select value={form.po_id} onValueChange={v => u("po_id", v)}>
               <SelectTrigger><SelectValue placeholder="Select PO"/></SelectTrigger>
@@ -225,6 +225,26 @@ export default function JobCards() {
     upd.quantity_received = upd.quantity_received === "" ? null : upd.quantity_received;
     upd.updated_at = new Date().toISOString();
     await supabase.from("job_card_steps").update(upd).eq("id", id);
+
+    // Auto-complete parent job card when every step is done
+    const siblings = stepsMap[step.parent_job_card_id] || [];
+    const allDone = siblings.length > 0 && siblings.every(s => (s.id === id ? upd.status : s.status) === "Completed");
+    if (allDone) {
+      const parent = jcs.find(j => j.id === step.parent_job_card_id);
+      if (parent && parent.status !== "Completed") {
+        await supabase.from("job_cards").update({ status: "Completed" }).eq("id", step.parent_job_card_id);
+        await supabase.from("notifications").insert({
+          title: `Job Card Completed — ${parent.job_card_number || parent.po_number}`,
+          message: `All ${siblings.length} steps completed for job card ${parent.job_card_number || "—"} (PO ${parent.po_number || "—"}). Order is ready to proceed to the next stage.`,
+          type: "success",
+          category: "job_card_complete",
+          entity_type: "job_card",
+          entity_id: step.parent_job_card_id,
+          link_page: "JobCards",
+        });
+      }
+    }
+
     await load();
   };
 

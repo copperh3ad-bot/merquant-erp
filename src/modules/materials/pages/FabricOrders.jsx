@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { db, fabricOrders, mfg } from "@/api/supabaseClient";
+import { db, fabricOrders, mfg, supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -70,7 +70,7 @@ function FabricOrderForm({ open, onOpenChange, onSave, initialData, pos }) {
               <SelectContent><SelectItem value="__none">Not linked</SelectItem>{pos.map(p=><SelectItem key={p.id} value={p.id}>{p.po_number} — {p.customer_name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div className="space-y-1.5"><Label className="text-xs">Order Number</Label><Input value={form.fabric_order_number} onChange={e=>u("fabric_order_number",e.target.value)} placeholder="FO-2025-001"/></div>
+          <div className="space-y-1.5"><Label className="text-xs">Order Number</Label><Input value={form.fabric_order_number || ""} readOnly={!initialData} placeholder={initialData ? "" : "Auto-assigned on save"} className={!initialData ? "bg-muted/40 text-muted-foreground" : ""} onChange={e => initialData && u("fabric_order_number", e.target.value)}/></div>
           <div className="space-y-1.5"><Label className="text-xs">Mill Name *</Label><Input value={form.mill_name} onChange={e=>u("mill_name",e.target.value)} placeholder="Faisalabad Textile Mill"/></div>
           <div className="space-y-1.5"><Label className="text-xs">Mill Contact</Label><Input value={form.mill_contact} onChange={e=>u("mill_contact",e.target.value)}/></div>
           <div className="space-y-1.5"><Label className="text-xs">Fabric Type</Label><Input value={form.fabric_type} onChange={e=>u("fabric_type",e.target.value)} placeholder="Single Jersey 100% Cotton"/></div>
@@ -121,11 +121,53 @@ export default function FabricOrdersPage() {
   const { data: pos=[] } = useQuery({ queryKey:["purchaseOrders"], queryFn:()=>db.purchaseOrders.list("-created_at") });
   const { data: orders=[], isLoading } = useQuery({ queryKey:["fabricOrders"], queryFn:()=>fabricOrders.list() });
 
-  const handleSave = async(data)=>{
+  const handleSave = async(data) => {
     const po = pos.find(p=>p.id===data.po_id);
-    const payload = {...data,po_number:po?.po_number||""};
-    if(editing){await fabricOrders.update(editing.id,payload);}else{await fabricOrders.create(payload);}
-    qc.invalidateQueries({queryKey:["fabricOrders"]});
+    let finalData = { ...data };
+
+    // Auto-set Shortfall when received < ordered on receipt
+    if (finalData.received_meters != null && finalData.status === "Received") {
+      const shortfall = Number(finalData.quantity_meters || 0) - Number(finalData.received_meters || 0);
+      if (shortfall > 0) {
+        finalData.status = "Shortfall";
+        finalData.shortfall_meters = shortfall;
+      }
+    }
+
+    const wasOverdue = editing?.expected_delivery && isPast(new Date(editing.expected_delivery)) && !["Received","Cancelled","Shortfall"].includes(editing?.status);
+    const isNowOverdue = finalData.expected_delivery && isPast(new Date(finalData.expected_delivery)) && !["Received","Cancelled","Shortfall"].includes(finalData.status);
+
+    const payload = { ...finalData, po_number: po?.po_number || "" };
+    if (editing) { await fabricOrders.update(editing.id, payload); } else { await fabricOrders.create(payload); }
+
+    // Shortfall notification
+    if (finalData.status === "Shortfall" && editing?.status !== "Shortfall") {
+      const shortfallMeters = Number(finalData.quantity_meters || 0) - Number(finalData.received_meters || 0);
+      await supabase.from("notifications").insert({
+        title: `Fabric Shortfall — ${finalData.fabric_type || ""} (${po?.po_number || ""})`,
+        message: `${finalData.fabric_type} from ${finalData.mill_name || "mill"} for PO ${po?.po_number} — received ${finalData.received_meters}m vs ordered ${finalData.quantity_meters}m. Shortfall: ${shortfallMeters}m. Review procurement immediately.`,
+        type: "warning",
+        category: "fabric_shortfall",
+        entity_type: "purchase_order",
+        entity_id: data.po_id,
+        link_page: "FabricOrders",
+      }).then(({ error }) => { if (error) console.warn("[fabric-shortfall]", error.message); });
+    }
+
+    // Overdue delivery notification (first time only)
+    if (isNowOverdue && !wasOverdue) {
+      await supabase.from("notifications").insert({
+        title: `Fabric Delivery Overdue — ${finalData.fabric_type || ""} (${po?.po_number || ""})`,
+        message: `${finalData.fabric_type} order from ${finalData.mill_name || "mill"} (${finalData.fabric_order_number || ""}) was due on ${finalData.expected_delivery}. Still showing as ${finalData.status}. Follow up with the mill.`,
+        type: "warning",
+        category: "fabric_overdue",
+        entity_type: "purchase_order",
+        entity_id: data.po_id,
+        link_page: "FabricOrders",
+      }).then(({ error }) => { if (error) console.warn("[fabric-overdue]", error.message); });
+    }
+
+    qc.invalidateQueries({ queryKey: ["fabricOrders"] });
     setShowForm(false); setEditing(null);
   };
   const handleDelete=async(id)=>{if(!confirm("Delete?"))return;await fabricOrders.delete(id);qc.invalidateQueries({queryKey:["fabricOrders"]});};
@@ -147,7 +189,7 @@ export default function FabricOrdersPage() {
         if (!y.fabric_type || !y.total_meters) continue;
         await fabricOrders.create({
           po_id: po.id, po_number: po.po_number,
-          fabric_order_number: `FO-${po.po_number}-${y.fabric_type.replace(/[^A-Za-z0-9]/g,"").substring(0,8).toUpperCase()}`,
+          fabric_order_number: null,
           fabric_type: y.fabric_type,
           gsm: y.gsm || null, width_cm: y.width_cm || null,
           quantity_meters: y.total_meters,

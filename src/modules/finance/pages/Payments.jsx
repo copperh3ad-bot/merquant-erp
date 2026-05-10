@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { db, payments } from "@/api/supabaseClient";
+import { db, payments, supabase } from "@/api/supabaseClient";
 import { useAuth } from "@/lib/AuthContext";
 import PermissionGate from "@/components/shared/PermissionGate";
 import { Button } from "@/components/ui/button";
@@ -96,9 +96,29 @@ export default function PaymentsPage() {
 
   const handleSave = async (data) => {
     const po = pos.find(p=>p.id===data.po_id);
-    const payload = {...data, po_number:po?.po_number||""};
-    if (editing) { await payments.update(editing.id,payload); } else { await payments.create(payload); }
-    qc.invalidateQueries({queryKey:["payments"]});
+    // Auto-flip status to Overdue when expected date has passed and payment not received
+    let finalData = { ...data };
+    if (finalData.expected_date && isPast(new Date(finalData.expected_date)) && finalData.status === "Pending") {
+      finalData.status = "Overdue";
+    }
+    const payload = { ...finalData, po_number: po?.po_number || "" };
+    const wasOverdue = editing?.status === "Overdue";
+    if (editing) { await payments.update(editing.id, payload); } else { await payments.create(payload); }
+
+    // Notify on first transition to Overdue
+    if (finalData.status === "Overdue" && !wasOverdue) {
+      await supabase.from("notifications").insert({
+        title: `Payment Overdue — ${po?.po_number || ""}`,
+        message: `${finalData.payment_type} payment of ${finalData.currency} ${Number(finalData.amount||0).toLocaleString()} for PO ${po?.po_number} — ${po?.customer_name} was due on ${finalData.expected_date}. Please follow up with the buyer.`,
+        type: "warning",
+        category: "payment_overdue",
+        entity_type: "purchase_order",
+        entity_id: data.po_id,
+        link_page: "Payments",
+      }).then(({ error }) => { if (error) console.warn("[payment-overdue]", error.message); });
+    }
+
+    qc.invalidateQueries({ queryKey: ["payments"] });
     setShowForm(false); setEditing(null);
   };
   const handleDelete = async (id) => { if(!confirm("Delete?"))return; await payments.delete(id); qc.invalidateQueries({queryKey:["payments"]}); };
