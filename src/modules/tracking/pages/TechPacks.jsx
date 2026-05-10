@@ -1528,7 +1528,9 @@ export default function TechPacks() {
   // Track which tech-pack rows are currently re-extracting barcodes so the
   // button can show a spinner and we can disable double-clicks.
   const [reextractingByUrl, setReextractingByUrl] = useState({}); // { [storageUrl]: true }
+  const [signingOffId, setSigningOffId] = useState(null);
   const qc = useQueryClient();
+  const { profile, isManager, isOwner } = useAuth();
 
   const { data: pos = [] } = useQuery({ queryKey:["purchaseOrders"], queryFn:()=>db.purchaseOrders.list("-created_at") });
   const { data: tps = [], isLoading } = useQuery({ queryKey:["techPacks"], queryFn:()=>techPacks.list() });
@@ -1665,6 +1667,71 @@ export default function TechPacks() {
     }
   };
 
+  // ── Tech pack sign-off ────────────────────────────────────────────────────
+  // Only Manager or Owner can sign off. On approval:
+  //   1. Lock the tech pack (is_locked=true)
+  //   2. Upsert master_articles with extracted fabric components
+  //   3. Upsert articles BOM record so BOM Calculator has something to work with
+  const handleSignOff = async (tp) => {
+    if (!isManager && !isOwner) {
+      alert("Only a Manager or Owner can sign off a tech pack. Please ask your department head to approve.");
+      return;
+    }
+    const label = tp.article_code || tp.article_name || tp.file_name;
+    const fabricCount = (tp.extracted_fabric_specs || []).length;
+    if (!confirm(`Sign off "${label}"?\n\nThis will:\n• Lock this tech pack from further edits\n• Create / update the Article record in master data\n${fabricCount > 0 ? `• Populate the BOM with ${fabricCount} fabric component(s)` : "• No fabric specs found — BOM will be empty"}`)) return;
+
+    setSigningOffId(tp.id);
+    try {
+      const now = new Date().toISOString();
+      const approvedBy = profile?.full_name || profile?.email || "Unknown";
+
+      // 1. Lock tech pack
+      const { error: lockErr } = await supabase
+        .from("tech_packs")
+        .update({ is_locked: true, locked_reason: `Signed off by ${approvedBy}`, locked_at: now, reviewed_by: approvedBy, reviewed_at: now })
+        .eq("id", tp.id);
+      if (lockErr) throw lockErr;
+
+      // 2. Upsert master_articles
+      const fabricComponents = (tp.extracted_fabric_specs || []).map((fs) => ({
+        component_type: fs.component_type,
+        fabric_type: fs.fabric_type,
+        gsm: fs.gsm,
+        width_cm: fs.width_cm,
+        consumption_per_unit: fs.consumption_per_unit,
+        wastage_percent: fs.wastage_percent,
+        color: fs.color,
+      }));
+      if (tp.article_code) {
+        const { error: maErr } = await supabase
+          .from("master_articles")
+          .upsert({ article_code: tp.article_code, article_name: tp.article_name, customer_name: tp.customer_name, fabric_components: fabricComponents, is_active: true, last_updated_by: approvedBy }, { onConflict: "article_code" });
+        if (maErr) console.warn("[sign-off] master_articles upsert failed (non-blocking):", maErr.message);
+      }
+
+      // 3. Upsert articles BOM so BOM Calculator works without manual entry
+      if (fabricComponents.length > 0 && tp.article_code) {
+        const { data: existingArt } = await supabase.from("articles").select("id").eq("tech_pack_id", tp.id).maybeSingle();
+        if (existingArt) {
+          await supabase.from("articles").update({ components: fabricComponents, updated_at: now }).eq("id", existingArt.id);
+        } else if (tp.po_id) {
+          await supabase.from("articles").insert({ tech_pack_id: tp.id, po_id: tp.po_id, po_number: tp.po_number, article_code: tp.article_code, article_name: tp.article_name || "", components: fabricComponents });
+        }
+      }
+
+      qc.invalidateQueries({ queryKey: ["techPacks"] });
+      qc.invalidateQueries({ queryKey: ["master_articles"] });
+      qc.invalidateQueries({ queryKey: ["articles"] });
+      alert(`Signed off. Article record updated.${fabricComponents.length > 0 ? ` BOM populated with ${fabricComponents.length} fabric component(s).` : ""}`);
+    } catch (err) {
+      console.error("[sign-off]", err);
+      alert(`Sign-off failed: ${err?.message || err}`);
+    } finally {
+      setSigningOffId(null);
+    }
+  };
+
   if (isLoading) return <div className="space-y-3">{[1,2,3].map(i=><Skeleton key={i} className="h-20 rounded-xl"/>)}</div>;
 
   return (
@@ -1731,6 +1798,11 @@ export default function TechPacks() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-semibold text-sm">{tp.article_code||tp.article_name||tp.file_name}</span>
                     <span className={cn("text-[10px] font-semibold px-2 py-0.5 rounded-full border capitalize", EXTRACT_STATUS_STYLES[tp.extraction_status]||"")}>{tp.extraction_status}</span>
+                    {tp.is_locked && (
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200 flex items-center gap-0.5">
+                        <ShieldCheck className="h-2.5 w-2.5"/> Signed Off
+                      </span>
+                    )}
                     {tp.crosscheck_status!=="not_run" && (
                       <span className={cn("text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize", CROSSCHECK_STYLES[tp.crosscheck_status]||"")}>
                         {tp.crosscheck_status==="discrepancies"?"⚠ "+((tp.crosscheck_results||[]).length)+" discrepancies":tp.crosscheck_status}
@@ -1794,7 +1866,20 @@ export default function TechPacks() {
                     </Button>
                   )}
                   {tp.extraction_status==="extracted"&&<Button size="sm" variant="outline" className="text-xs gap-1 h-7" onClick={()=>setViewing(tp)}><Eye className="h-3.5 w-3.5"/>View</Button>}
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={async()=>{if(!confirm("Delete?"))return;await techPacks.delete(tp.id);qc.invalidateQueries({queryKey:["techPacks"]});}}><Trash2 className="h-3.5 w-3.5 text-muted-foreground"/></Button>
+                  {tp.extraction_status==="extracted" && !tp.is_locked && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs gap-1 h-7 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                      disabled={signingOffId === tp.id}
+                      title={isManager||isOwner ? "Sign off this tech pack" : "Only Manager or Owner can sign off"}
+                      onClick={() => handleSignOff(tp)}
+                    >
+                      {signingOffId===tp.id ? <Loader2 className="h-3.5 w-3.5 animate-spin"/> : <ShieldCheck className="h-3.5 w-3.5"/>}
+                      Sign Off
+                    </Button>
+                  )}
+                  {!tp.is_locked && <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={async()=>{if(!confirm("Delete?"))return;await techPacks.delete(tp.id);qc.invalidateQueries({queryKey:["techPacks"]});}}><Trash2 className="h-3.5 w-3.5 text-muted-foreground"/></Button>}
                 </div>
               </CardContent>
             </Card>

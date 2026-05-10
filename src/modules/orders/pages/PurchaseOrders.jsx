@@ -119,7 +119,41 @@ export default function PurchaseOrders() {
         status: "PO Received",
       };
 
-      const po = await db.purchaseOrders.create(poData);
+      // ── PO revision detection ─────────────────────────────────────────────
+      // If this PO number already exists, treat it as a revision: diff the key
+      // fields, log every change to po_change_log, archive the old version,
+      // and update the existing row instead of creating a duplicate.
+      const { data: existingPoRows } = await supabase
+        .from("purchase_orders")
+        .select("id, delivery_date, ex_factory_date, etd, eta, total_po_value, total_quantity, payment_terms, status")
+        .eq("po_number", poData.po_number)
+        .limit(1);
+      const existingPo = existingPoRows?.[0];
+
+      let po;
+      if (existingPo) {
+        const TRACKED = ["delivery_date","ex_factory_date","etd","eta","total_po_value","total_quantity","payment_terms"];
+        const changes = TRACKED.filter(f => String(existingPo[f]??'') !== String(poData[f]??''));
+        if (changes.length > 0) {
+          const changeLogRows = changes.map(f => ({
+            po_id: existingPo.id,
+            po_number: poData.po_number,
+            change_type: "revision",
+            field_name: f,
+            old_value: String(existingPo[f] ?? ""),
+            new_value: String(poData[f] ?? ""),
+            reason: "Buyer sent revised PO",
+            requested_by: "Import",
+            status: "applied",
+          }));
+          await supabase.from("po_change_log").insert(changeLogRows);
+          const changedFields = changes.join(", ");
+          setImportMsg(`Revised PO detected — ${changes.length} field(s) changed (${changedFields}). Updating…`);
+        }
+        po = await db.purchaseOrders.update(existingPo.id, { ...poData, status: existingPo.status });
+      } else {
+        po = await db.purchaseOrders.create(poData);
+      }
 
       if (extracted.items?.length > 0) {
         setImportMsg(`Enriching ${extracted.items.length} items…`);
