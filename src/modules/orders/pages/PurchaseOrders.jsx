@@ -12,10 +12,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, FileText, Trash2, Mail, Upload, Loader2, Download, Tag as TagIcon, Users, CheckCheck, FileDown, Square, CheckSquare } from "lucide-react";
+import { Plus, Search, FileText, Trash2, Mail, Upload, Loader2, Download, Tag as TagIcon, Users, CheckCheck, FileDown, Square, CheckSquare, AlertTriangle } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { format } from "date-fns";
+import { format, differenceInHours } from "date-fns";
 import { Skeleton } from "@/components/ui/skeleton";
 import StatusBadge from "@/components/shared/StatusBadge";
 import EmptyState from "@/components/shared/EmptyState";
@@ -49,6 +49,27 @@ export default function PurchaseOrders() {
     queryKey: ["purchaseOrders"],
     queryFn: () => db.purchaseOrders.list("-created_at"),
   });
+
+  // 48-hour discrepancy tracker: po_items with price mismatch, keyed by po_id
+  const { data: mismatchItems = [] } = useQuery({
+    queryKey: ["poMismatchItems"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("po_items")
+        .select("po_id, price_status, updated_at")
+        .eq("price_status", "Mismatch");
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 2 * 60 * 1000,
+  });
+  // Map po_id → earliest mismatch timestamp
+  const mismatchByPo = mismatchItems.reduce((acc, item) => {
+    if (!acc[item.po_id] || new Date(item.updated_at) < new Date(acc[item.po_id])) {
+      acc[item.po_id] = item.updated_at;
+    }
+    return acc;
+  }, {});
 
   const handleCreate = async (data) => {
     const po = await db.purchaseOrders.create(data);
@@ -726,7 +747,21 @@ export default function PurchaseOrders() {
                           {selectedIds.has(po.id) ? <CheckSquare className="h-4 w-4 text-primary"/> : <Square className="h-4 w-4 text-muted-foreground"/>}
                         </button>
                       </TableCell>
-                      <TableCell className="text-xs font-medium text-primary">{po.po_number}</TableCell>
+                      <TableCell className="text-xs font-medium text-primary">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {po.po_number}
+                          {mismatchByPo[po.id] && (() => {
+                            const hrs = differenceInHours(new Date(), new Date(mismatchByPo[po.id]));
+                            return (
+                              <span className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${hrs >= 48 ? "bg-red-50 text-red-700 border-red-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}
+                                title={`Price mismatch since ${format(new Date(mismatchByPo[po.id]), "dd MMM HH:mm")} — notify buyer within 48 hrs`}>
+                                <AlertTriangle className="h-2.5 w-2.5" />
+                                {hrs >= 48 ? `${hrs}h overdue` : `${hrs}h / 48h`}
+                              </span>
+                            );
+                          })()}
+                        </div>
+                      </TableCell>
                       <TableCell className="text-xs">{po.customer_name}</TableCell>
                       <TableCell><StatusBadge status={po.status} /></TableCell>
                       <TableCell className="hidden md:table-cell">

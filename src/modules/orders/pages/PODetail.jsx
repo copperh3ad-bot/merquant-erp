@@ -84,6 +84,21 @@ function BomExplosionPanel({ po, qc }) {
       qc.invalidateQueries({ queryKey: ["allArticles"] });
       qc.invalidateQueries({ queryKey: ["fabricOrders"] });
       qc.invalidateQueries({ queryKey: ["po", po.id] });
+
+      // Internal materials routing: notify departments so they start
+      // sourcing immediately — replaces the manual email/shared-sheet step
+      const notifs = [];
+      if ((data?.fabrics ?? 0) > 0) {
+        notifs.push({ title: `Fabric Required — ${po.po_number}`, message: `BOM explosion populated ${data.fabrics} fabric requirement(s) for PO ${po.po_number} (${po.customer_name}). Please review Fabric Orders and confirm availability dates.`, type: "info", category: "materials_routing", entity_type: "purchase_order", entity_id: po.id, link_page: "FabricOrders" });
+      }
+      if ((data?.accessories ?? 0) > 0 || (data?.trims ?? 0) > 0) {
+        notifs.push({ title: `Accessories & Trims Required — ${po.po_number}`, message: `BOM explosion populated ${(data.accessories ?? 0) + (data.trims ?? 0)} accessory/trim requirement(s) for PO ${po.po_number} (${po.customer_name}). Please review Accessories and confirm sourcing.`, type: "info", category: "materials_routing", entity_type: "purchase_order", entity_id: po.id, link_page: "Shipments" });
+      }
+      if (notifs.length > 0) {
+        await supabase.from("notifications").insert(notifs).then(({ error }) => {
+          if (error) console.warn("[materials-routing notify]", error.message);
+        });
+      }
     } catch (err) {
       setError(err?.message || String(err));
     } finally {
@@ -227,6 +242,37 @@ export default function PODetail() {
 
     await db.statusLogs.log("purchase_order", poId, po?.status, newStatus);
     await db.purchaseOrders.update(poId, { status: newStatus });
+
+    // Auto-trigger BOM explosion when items are entered — removes manual step
+    if (newStatus === "Items Entered") {
+      try {
+        await supabase.rpc("explode_po_bom", { p_po_id: poId, p_force_redo: false });
+        qc.invalidateQueries({ queryKey: ["fabricOrders"] });
+        qc.invalidateQueries({ queryKey: ["accessoryItems"] });
+      } catch (e) {
+        console.warn("[auto-BOM]", e?.message);
+      }
+    }
+
+    // Buyer-facing status update notifications on key milestones
+    const BUYER_NOTIFY = {
+      "In Production":  "Your order is now in production.",
+      "QC Inspection":  "Quality inspection is underway.",
+      "Ready to Ship":  "Your order has passed QC and is ready to ship.",
+      "Shipped":        "Your order has been dispatched.",
+      "Delivered":      "Your order has been delivered.",
+    };
+    if (BUYER_NOTIFY[newStatus]) {
+      await supabase.from("notifications").insert({
+        title: `Order Update — ${po?.po_number}`,
+        message: `${po?.customer_name}: ${BUYER_NOTIFY[newStatus]} (PO ${po?.po_number})`,
+        type: "info",
+        category: "buyer_update",
+        entity_type: "purchase_order",
+        entity_id: poId,
+        link_page: "CustomerOrderStatus",
+      }).then(({ error }) => { if (error) console.warn("[buyer-notify]", error.message); });
+    }
 
     // Auto-create job card when order moves into production
     if (newStatus === "In Production") {
