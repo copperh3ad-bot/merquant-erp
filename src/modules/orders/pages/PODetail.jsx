@@ -23,6 +23,9 @@ import POBatches from "@/modules/orders/components/po/POBatches";
 import POApprovalPanel from "@/modules/orders/components/po/POApprovalPanel";
 import POFabricRequirements from "@/modules/orders/components/po/POFabricRequirements";
 import PriceOverrideCell from "@/modules/orders/components/po/PriceOverrideCell";
+import DataGapsBanner from "@/modules/orders/components/po/DataGapsBanner";
+import { ENABLE_BOM_BLOCKED_UI, ENABLE_DATA_GAPS_BANNER, ENABLE_PRICE_BACKFILL } from "@/lib/featureFlags";
+import { logError } from "@/lib/logger";
 
 // CSV bulk upload helper
 async function parsePOItemsCSV(text, poId, poNumber) {
@@ -134,7 +137,23 @@ function BomExplosionPanel({ po, qc }) {
               : <><Zap className="h-3.5 w-3.5 mr-1.5" />{exploded ? "Re-explode BOM" : "Explode BOM now"}</>}
           </Button>
         </div>
-        {result && (
+        {/* BOM blocked — graceful fallback (ENABLE_BOM_BLOCKED_UI) */}
+        {result && ENABLE_BOM_BLOCKED_UI() && result.status === "blocked" && (
+          <div className="mt-3 text-xs bg-amber-50 border border-amber-200 rounded px-3 py-2 text-amber-900">
+            <div className="font-semibold mb-1">⚠️ BOM explosion blocked</div>
+            <div className="mb-1">{result.reason || "One or more required articles are missing from master data."}</div>
+            {Array.isArray(result.missing) && result.missing.length > 0 && (
+              <div className="mb-1">
+                Missing articles: {result.missing.slice(0, 5).join(", ")}
+                {result.missing.length > 5 && ` + ${result.missing.length - 5} more`}
+              </div>
+            )}
+            <Link to="/MasterDataManagement" className="underline text-amber-800 hover:text-amber-600">
+              Open Master Data Management →
+            </Link>
+          </div>
+        )}
+        {result && (!ENABLE_BOM_BLOCKED_UI() || result.status !== "blocked") && (
           <div className="mt-3 text-xs bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-emerald-800">
             Explosion complete — created {result.fabrics ?? 0} fabric · {result.trims ?? 0} trim · {result.accessories ?? 0} accessory · {result.cartons ?? 0} carton row(s).
             {Array.isArray(result.errors) && result.errors.length > 0 && (
@@ -176,29 +195,37 @@ export default function PODetail() {
   const handleCSVUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
-    const { records, errors } = await parsePOItemsCSV(text, poId, po?.po_number);
-    if (errors.length && !records.length) { alert("CSV errors:\n" + errors.join("\n")); e.target.value=""; return; }
-    // Fetch existing items to upsert by item_code
-    const existing = await db.poItems.listByPO(poId);
-    const existMap = {};
-    existing.forEach(i => { if (i.item_code) existMap[i.item_code.trim().toUpperCase()] = i.id; });
-    let created = 0, updated = 0;
-    for (const rec of records) {
-      const key = rec.item_code.trim().toUpperCase();
-      if (existMap[key]) {
-        await db.poItems.update(existMap[key], rec);
-        updated++;
-      } else {
-        await db.poItems.create(rec);
-        created++;
+    let failedAt = null;
+    try {
+      const text = await file.text();
+      const { records, errors } = await parsePOItemsCSV(text, poId, po?.po_number);
+      if (errors.length && !records.length) { alert("CSV errors:\n" + errors.join("\n")); e.target.value=""; return; }
+      // Fetch existing items to upsert by item_code
+      const existing = await db.poItems.listByPO(poId);
+      const existMap = {};
+      existing.forEach(i => { if (i.item_code) existMap[i.item_code.trim().toUpperCase()] = i.id; });
+      let created = 0, updated = 0;
+      for (const rec of records) {
+        failedAt = rec.item_code;
+        const key = rec.item_code.trim().toUpperCase();
+        if (existMap[key]) {
+          await db.poItems.update(existMap[key], rec);
+          updated++;
+        } else {
+          await db.poItems.create(rec);
+          created++;
+        }
       }
+      const summary = `${created} created, ${updated} updated.`;
+      if (errors.length) alert(`${summary} Skipped:\n${errors.join("\n")}`);
+      else if (records.length) alert(summary);
+      qc.invalidateQueries({ queryKey: ["poItems", poId] });
+    } catch (err) {
+      logError(err, { category: "csv_upload", module: "PODetail", poId, poNumber: po?.po_number, failedAt }).catch(() => {});
+      alert("CSV upload failed" + (failedAt ? ` at item ${failedAt}` : "") + ": " + (err?.message ?? String(err)));
+    } finally {
+      e.target.value = "";
     }
-    const summary = `${created} created, ${updated} updated.`;
-    if (errors.length) alert(`${summary} Skipped:\n${errors.join("\n")}`);
-    else if (records.length) alert(summary);
-    qc.invalidateQueries({ queryKey: ["poItems", poId] });
-    e.target.value = "";
   };
   const [showEditPO, setShowEditPO] = useState(false);
 
@@ -231,6 +258,49 @@ export default function PODetail() {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [poId, qc]);
+
+  // ── Price backfill useEffect ──────────────────────────────────────────────
+  // Fetches price_list for any PO items that have unit_price = 0 / null and
+  // updates them in the DB so costing and price-verification pages have data.
+  // Runs once on mount (when items load) — non-blocking, swallows failures.
+  useEffect(() => {
+    if (!ENABLE_PRICE_BACKFILL()) return;
+    if (!items?.length || !poId) return;
+    const missing = items.filter(i => !i.unit_price || Number(i.unit_price) === 0);
+    if (!missing.length) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const codes = [...new Set(missing.map(i => i.item_code?.trim().toUpperCase()).filter(Boolean))];
+        if (!codes.length) return;
+        const { data: priceRows } = await supabase
+          .from("price_list")
+          .select("item_code, price_usd, cbm_per_carton, qty_per_carton")
+          .in("item_code", codes);
+        if (!priceRows?.length || cancelled) return;
+        const priceMap = {};
+        priceRows.forEach(p => { if (p.item_code) priceMap[p.item_code.trim().toUpperCase()] = p; });
+        for (const item of missing) {
+          if (cancelled) break;
+          const ref = priceMap[item.item_code?.trim().toUpperCase()];
+          if (!ref?.price_usd) continue;
+          const patch = {
+            unit_price: Number(ref.price_usd),
+            expected_price: Number(ref.price_usd),
+            price_status: "Matched",
+          };
+          if (ref.qty_per_carton && !item.pieces_per_carton) patch.pieces_per_carton = Number(ref.qty_per_carton);
+          await supabase.from("po_items").update(patch).eq("id", item.id);
+        }
+        if (!cancelled) qc.invalidateQueries({ queryKey: ["poItems", poId] });
+      } catch {
+        // Swallow — price backfill must never block or crash the PO form
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items?.length, poId]);
 
   const handleStatusChange = async (newStatus) => {
     // LC payment gate: block material booking until LC is confirmed open
@@ -454,6 +524,9 @@ export default function PODetail() {
 
       {/* Approval Panel */}
       <POApprovalPanel po={po} />
+
+      {/* Data-gaps banner — async completeness check; silently hidden on error */}
+      {ENABLE_DATA_GAPS_BANNER() && <DataGapsBanner po={po} poId={poId} />}
 
       {/* BOM explosion — copies extracted_*_specs from tech packs into the
           per-PO trim_items / accessory_items / fabric_orders tables that

@@ -12,6 +12,7 @@ import { ArrowLeft, CheckCircle2, XCircle, AlertTriangle, Clock, FileText, FileI
 import { useAuth } from "@/lib/AuthContext";
 import { validateExtraction } from "@/lib/validators/extractionValidator";
 import { logMLFeedback } from "@/lib/logger";
+import { ENABLE_UNAPPLY_EXTRACTION } from "@/lib/featureFlags";
 
 /* =========================================================================
  * AI Extraction Review
@@ -1023,6 +1024,30 @@ function DetailView({ extractionId }) {
     }
   }
 
+  // ── Unapply extraction ────────────────────────────────────────────────────
+  // Soft-reversal: resets applied_at → NULL and review_status → pending_review
+  // so the operator can correct and re-apply. Does NOT roll back live tables.
+  // Feature-flagged — disable via localStorage('mq_flag_unapply_extraction','off').
+  async function handleUnapply() {
+    if (!ENABLE_UNAPPLY_EXTRACTION()) return;
+    if (!window.confirm(
+      "This will mark the extraction as pending review again so you can correct and re-apply it.\n\n" +
+      "⚠️ Live data already written to Articles / Tech Packs / Suppliers is NOT rolled back — " +
+      "you must correct those records manually if needed.\n\nProceed?"
+    )) return;
+    try {
+      const { data, error } = await supabase.rpc("fn_unapply_extraction", {
+        p_extraction_id: extractionId,
+      });
+      if (error) throw error;
+      if (data?.ok === false) throw new Error(data.error ?? "Unapply failed");
+      qc.invalidateQueries({ queryKey: ["ai_extraction", extractionId] });
+      qc.invalidateQueries({ queryKey: ["ai_extractions"] });
+    } catch (err) {
+      alert("Unapply failed: " + (err?.message ?? String(err)));
+    }
+  }
+
   async function handleReject() {
     const { data, error } = await supabase.rpc("fn_reject_extraction", {
       p_extraction_id: extractionId, p_reason: rejectReason || "(no reason given)",
@@ -1138,13 +1163,25 @@ function DetailView({ extractionId }) {
         </div>
       )}
       {canEdit && isApplied && (
-        <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-start gap-2">
-          <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <div>
-            <strong>Already applied — live edits enabled.</strong> Cell edits and row deletions on this extraction
-            now sync directly to the matching live row in {ext.kind === "tech_pack" ? "Tech Packs" : "Articles / Consumption Library / Price List / Suppliers / Seasons / Production Lines"}.
-            Each save shows a confirmation; if the live update fails, you'll see an error banner with details.
+        <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <div>
+              <strong>Already applied — live edits enabled.</strong> Cell edits and row deletions on this extraction
+              now sync directly to the matching live row in {ext.kind === "tech_pack" ? "Tech Packs" : "Articles / Consumption Library / Price List / Suppliers / Seasons / Production Lines"}.
+              Each save shows a confirmation; if the live update fails, you'll see an error banner with details.
+            </div>
           </div>
+          {ENABLE_UNAPPLY_EXTRACTION() && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 text-xs border-emerald-300 text-emerald-800 hover:bg-emerald-100"
+              onClick={handleUnapply}
+            >
+              Undo Apply
+            </Button>
+          )}
         </div>
       )}
 

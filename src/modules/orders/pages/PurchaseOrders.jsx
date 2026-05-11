@@ -5,6 +5,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createPageUrl } from "@/utils";
 import { db, mfg, priceList as priceListAPI, supabase } from "@/api/supabaseClient";
 import { normalizeDim2D, normalizeDim3D } from "@/lib/dimensionNormalizer";
+import { logError } from "@/lib/logger";
+import { ENABLE_UPLOAD_ERROR_LOG } from "@/lib/featureFlags";
 import { resolveProductSize } from "@/lib/skuSizeInference";
 import { directionForPart } from "@/lib/textileVocabulary";
 import { Card, CardContent } from "@/components/ui/card";
@@ -578,6 +580,14 @@ export default function PurchaseOrders() {
       navigate(`/PODetail?id=${po.id}`);
     } catch (err) {
       console.error("Import error:", err);
+      if (ENABLE_UPLOAD_ERROR_LOG()) {
+        logError(err, {
+          category: "po_import",
+          module: "PurchaseOrders",
+          isMissingSkus: err?.message?.includes("Missing SKU"),
+          severity: "error",
+        }).catch(() => {});
+      }
       alert("Import failed: " + (err.message || "Unknown error"));
     } finally {
       setImporting(false);

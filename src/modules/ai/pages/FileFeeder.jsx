@@ -44,6 +44,9 @@ import {
   slugify          as slugifyShared,
 } from "@/lib/xlsxChunker";
 
+import { logError } from "@/lib/logger";
+import { ENABLE_UPLOAD_ERROR_LOG } from "@/lib/featureFlags";
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB — matches extract-document's server limit
 const ACCEPTED_EXTS = [".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png", ".webp"];
 
@@ -1054,6 +1057,16 @@ export default function FileFeeder() {
       qc.invalidateQueries({ queryKey: ["articles"] });
       qc.invalidateQueries({ queryKey: ["price_list"] });
     } catch (e) {
+      if (ENABLE_UPLOAD_ERROR_LOG()) {
+        logError(e, {
+          category: "file_feeder_apply",
+          module: "FileFeeder",
+          extractionId: ext.id,
+          extractionKind: ext.kind,
+          fileName: ext.file_name,
+          severity: "error",
+        }).catch(() => {});
+      }
       append({
         type: "assistant",
         content: (
