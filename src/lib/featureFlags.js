@@ -76,3 +76,7 @@ export const ENABLE_PRICE_BACKFILL    = () => _readFlag("price_backfill", true);
 
 // logDataError in critical upload paths (FileFeeder, PO import, CSV upload)
 export const ENABLE_UPLOAD_ERROR_LOG  = () => _readFlag("upload_error_log", true);
+
+// Master data gaps banner: dashboard nag for consumption_library fabric
+// components that have a fabric_type set but no consumption_per_unit.
+export const ENABLE_MASTER_DATA_GAPS_BANNER = () => _readFlag("master_data_gaps_banner", true);

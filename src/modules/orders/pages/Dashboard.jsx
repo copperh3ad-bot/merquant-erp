@@ -20,6 +20,7 @@ import {
   articleHasFabricBag,
   resolveFabricBagDimension,
 } from "@/lib/fabricBagDimensionCheck";
+import { ENABLE_MASTER_DATA_GAPS_BANNER } from "@/lib/featureFlags";
 
 const fmt = (d) => { try { return d ? format(new Date(d), "dd MMM") : "—"; } catch { return "—"; } };
 const fmtFull = (d) => { try { return d ? format(new Date(d), "dd MMM yyyy") : "—"; } catch { return "—"; } };
@@ -159,6 +160,24 @@ export default function Dashboard() {
   const articlesNeedingFabricBagDim = fabricBagArticles.filter(a => {
     const partDims = techPackPartDims.get?.(a.article_code) || null;
     return !resolveFabricBagDimension(a, partDims);
+  });
+
+  // Master data gaps: fabric components in consumption_library that have a
+  // fabric_type recorded but are missing consumption_per_unit (NULL only —
+  // cpu = 0 may be intentional for self-fabric / cut-from-wastage items).
+  const { data: masterDataGaps = [] } = useQuery({
+    queryKey: ["masterDataGapsDash"],
+    enabled: ENABLE_MASTER_DATA_GAPS_BANNER(),
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("consumption_library")
+        .select("item_code, component_type, fabric_type")
+        .not("fabric_type", "is", null)
+        .neq("fabric_type", "")
+        .is("consumption_per_unit", null);
+      return data || [];
+    },
   });
 
   const now = new Date();
@@ -385,6 +404,43 @@ export default function Dashboard() {
               <span className="text-[11px] text-amber-800 self-center">
                 +{articlesNeedingFabricBagDim.length - 30} more
               </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Master data gaps — fabric components missing consumption_per_unit.
+          Stays visible until every flagged row is filled in the Consumption
+          Library. cpu = 0 is intentional (cut from wastage) so only NULLs
+          are flagged. */}
+      {ENABLE_MASTER_DATA_GAPS_BANNER() && masterDataGaps.length > 0 && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl px-4 py-3.5">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="flex items-start gap-2 min-w-0">
+              <AlertTriangle className="h-5 w-5 text-red-700 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-red-900">
+                  {masterDataGaps.length} fabric component{masterDataGaps.length !== 1 ? "s" : ""} missing consumption in master data
+                </p>
+                <p className="text-xs text-red-800 mt-0.5">
+                  These SKUs have a fabric type recorded in the Consumption Library but no consumption per unit — fabric meter calculations will be zero until the value is entered.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="mt-2.5 flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+            {masterDataGaps.slice(0, 40).map((g, i) => (
+              <span
+                key={i}
+                title={g.fabric_type}
+                className="inline-flex items-center bg-white border border-red-300 text-red-900 text-[11px] font-mono font-semibold px-2 py-0.5 rounded"
+              >
+                {g.item_code}
+                {g.component_type ? <span className="opacity-60 ml-1 font-normal">· {g.component_type}</span> : null}
+              </span>
+            ))}
+            {masterDataGaps.length > 40 && (
+              <span className="text-[11px] text-red-700 self-center">+{masterDataGaps.length - 40} more</span>
             )}
           </div>
         </div>

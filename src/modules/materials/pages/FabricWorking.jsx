@@ -52,6 +52,7 @@ export default function FabricWorking() {
   const [readOnly, setReadOnly] = useState(false);
   const [showAddArticle, setShowAddArticle] = useState(false);
   const [savingUnits, setSavingUnits] = useState(false);
+  const [warnDismissed, setWarnDismissed] = useState(false);
 
   const { data: pos = [] } = useQuery({ queryKey: ["purchaseOrders"], queryFn: () => db.purchaseOrders.list("-created_at") });
   const activePo = useMemo(() => selectedPoId ? pos.find(p => p.id === selectedPoId) : pos[0], [pos, selectedPoId]);
@@ -93,7 +94,7 @@ export default function FabricWorking() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("tech_packs")
-        .select("article_code, extracted_measurements, created_at")
+        .select("id, article_code, extracted_measurements, created_at")
         .order("created_at", { ascending: false });
       if (error) throw error;
 
@@ -101,6 +102,8 @@ export default function FabricWorking() {
       // byCodeSize:    Map<ARTICLE_CODE, Map<SIZE, product_dimensions string>>
       // byItemPart:    Map<ITEM_CODE, Map<PART_NAME, product_dimensions string>>
       // byCodeSizePart: Map<ARTICLE_CODE, Map<SIZE, Map<PART_NAME, product_dimensions string>>>
+      // byTechPackId:  Map<TP_UUID, { sizeMap, thisSkuDim }> — direct lookup when
+      //                article.tech_pack_id is set (bypasses all code-matching heuristics).
       // The "Part" indexes are populated when size_chart entries include
       // `part_dimensions` (sheet-set tech packs where each part — Flat Sheet,
       // Fitted Sheet, Pillow Case — has its own dimension).
@@ -108,6 +111,7 @@ export default function FabricWorking() {
       const byCodeSize = new Map();
       const byItemPart = new Map();
       const byCodeSizePart = new Map();
+      const byTechPackId = new Map();
 
       for (const tp of data || []) {
         if (!byCodeSize.has(tp.article_code)) byCodeSize.set(tp.article_code, new Map());
@@ -165,8 +169,18 @@ export default function FabricWorking() {
             if (!sizeMap.has(k)) sizeMap.set(k, String(only.product_dimensions));
           }
         }
+
+        // Direct tech_pack_id index: store a reference to this tech pack's
+        // complete sizeMap and its this_sku dim so resolveDims can bypass the
+        // article_code matching heuristics entirely when tech_pack_id is set.
+        if (tp.id) {
+          byTechPackId.set(tp.id, {
+            sizeMap,                                          // byCodeSize ref — already fully built
+            thisSkuDim: only?.product_dimensions ?? null,
+          });
+        }
       }
-      return { byItemCode, byCodeSize, byItemPart, byCodeSizePart };
+      return { byItemCode, byCodeSize, byItemPart, byCodeSizePart, byTechPackId };
     },
   });
 
@@ -284,6 +298,23 @@ export default function FabricWorking() {
     const partKey = part ? normalizeSizeKey(part) : null;
     const sizeKey = productSize ? normalizeSizeKey(productSize) : null;
 
+    // Layer 1.5: direct tech_pack_id link — bypasses all code-matching heuristics.
+    // When articles.tech_pack_id is populated (e.g. for PCSJMO-SPK where the tech pack
+    // lives under PCSJMO-SK, or for any article whose code differs from the tech pack's
+    // article_code), this resolves correctly without requiring naming convention alignment.
+    if (article?.tech_pack_id && dimsIndex.byTechPackId?.has(article.tech_pack_id)) {
+      const { sizeMap: tpSizeMap, thisSkuDim } = dimsIndex.byTechPackId.get(article.tech_pack_id);
+      const combinedL15 = (sizeKey && tpSizeMap?.get(sizeKey)) || thisSkuDim;
+      if (combinedL15) {
+        if (partKey) {
+          const sliced = sliceCombinedForPart(combinedL15, partKey);
+          if (sliced) return sliced;
+          if (splitCombinedDims(combinedL15)) return "";
+        }
+        return combinedL15;
+      }
+    }
+
     // Layer 2a: per-part item_code match (sheet-set tech packs). Now uses
     // the fuzzy part lookup so component_type values with qualifiers
     // (e.g. "Fitted Sheet (Split Head)") still match the tech pack's
@@ -355,7 +386,46 @@ export default function FabricWorking() {
       }
     }
 
-    // Layer 4: family-tech-pack fallback. The article's article_code didn't
+    // Layer 4: base-code fallback — strip the known color suffix (CG, MB, WH
+    // etc. per COLOR_CODE_MAP) and retry the item_code / code+size lookups.
+    //
+    // This resolves the very common case where:
+    //   - tech packs are filed under the size-only base code  (PCSJMO-CK)
+    //   - articles carry an extra colorway suffix              (PCSJMO-CK-CG)
+    //
+    // Only fires when getBaseCode actually strips something, so it never
+    // introduces ambiguity for articles that have no color suffix.
+    const baseCode = getBaseCode(article);
+    if (baseCode && baseCode !== article?.article_code) {
+      // Retry byItemCode with base code
+      const baseIsStructuredByItemPart = partKey && dimsIndex.byItemPart?.has(baseCode);
+      if (!baseIsStructuredByItemPart && dimsIndex.byItemCode.has(baseCode)) {
+        const combined = dimsIndex.byItemCode.get(baseCode);
+        if (partKey) {
+          const sliced = sliceCombinedForPart(combined, partKey);
+          if (sliced) return sliced;
+          if (splitCombinedDims(combined)) return "";
+        }
+        return combined;
+      }
+      // Retry byCodeSize with base code + size
+      if (sizeKey) {
+        const baseSizeMap = dimsIndex.byCodeSize.get(baseCode);
+        if (baseSizeMap) {
+          const combined = baseSizeMap.get(sizeKey);
+          if (combined) {
+            if (partKey) {
+              const sliced = sliceCombinedForPart(combined, partKey);
+              if (sliced) return sliced;
+              if (splitCombinedDims(combined)) return "";
+            }
+            return combined;
+          }
+        }
+      }
+    }
+
+    // Layer 5: family-tech-pack fallback. The article's article_code didn't
     // match any tech-pack-keyed map, but a SIBLING tech-pack (uploaded under
     // a different family base, like PCSJMO-Q for the whole sheet-set family)
     // may have a size_chart entry for this productSize with the right part.
@@ -408,8 +478,11 @@ export default function FabricWorking() {
     const map = {};
     articles.forEach(art => {
       fabricComponentsOf(art).forEach(comp => {
-        const key = `${comp.fabric_type}||${comp.width}`;
-        if (!map[key]) map[key] = { fabric_type: comp.fabric_type, width: comp.width, net_total: 0, total_with_wastage: 0 };
+        // Use a sentinel for null fabric_type so null rows don't all collapse
+        // into one combined group, and so the key is stable (null→"null" in
+        // template literals made every null-type row share key "null||…").
+        const key = `${comp.fabric_type ?? "__MISSING__"}||${comp.width ?? ""}`;
+        if (!map[key]) map[key] = { fabric_type: comp.fabric_type ?? null, width: comp.width ?? null, net_total: 0, total_with_wastage: 0 };
         const net = (comp.consumption_per_unit || 0) * (art.order_quantity || 0);
         const total = comp.total_required || net * (1 + (comp.wastage_percent || 0) / 100);
         map[key].net_total += net;
@@ -423,8 +496,8 @@ export default function FabricWorking() {
     const map = {};
     arts.forEach(art => {
       fabricComponentsOf(art).forEach(comp => {
-        const key = `${comp.fabric_type}||${comp.width}`;
-        if (!map[key]) map[key] = { fabric_type: comp.fabric_type, width: comp.width, net_total: 0, total_with_wastage: 0 };
+        const key = `${comp.fabric_type ?? "__MISSING__"}||${comp.width ?? ""}`;
+        if (!map[key]) map[key] = { fabric_type: comp.fabric_type ?? null, width: comp.width ?? null, net_total: 0, total_with_wastage: 0 };
         const net = (comp.consumption_per_unit || 0) * (art.order_quantity || 0);
         const total = comp.total_required || net * (1 + (comp.wastage_percent || 0) / 100);
         map[key].net_total += net;
@@ -433,6 +506,57 @@ export default function FabricWorking() {
     });
     return { color, items: Object.values(map) };
   }).filter(g => g.items.length > 0), [colorGroups]);
+
+  // Data-quality warnings surfaced as a dismissable banner above the table.
+  // Computed purely from the already-loaded articles array — no extra queries.
+  const dataWarnings = useMemo(() => {
+    if (!articles.length) return [];
+    const warnings = [];
+
+    // Articles with no fabric components at all
+    const noComps = articles.filter(a => fabricComponentsOf(a).length === 0);
+    if (noComps.length > 0) {
+      const sample = noComps.slice(0, 3).map(a => a.article_code || a.article_name || "?").join(", ");
+      warnings.push({
+        key: "no_components",
+        text: `${noComps.length} article${noComps.length > 1 ? "s" : ""} have no fabric components (click edit to add specs): ${sample}${noComps.length > 3 ? ` +${noComps.length - 3} more` : ""}.`,
+      });
+    }
+
+    // Articles with 0 or null order_quantity — all meter totals will be zero
+    const zeroQty = articles.filter(a => !a.order_quantity || Number(a.order_quantity) === 0);
+    if (zeroQty.length > 0) {
+      const sample = zeroQty.slice(0, 3).map(a => a.article_code || a.article_name || "?").join(", ");
+      warnings.push({
+        key: "zero_qty",
+        text: `${zeroQty.length} article${zeroQty.length > 1 ? "s" : ""} have Qty = 0 — Net and Total Mtrs will be zero: ${sample}${zeroQty.length > 3 ? ` +${zeroQty.length - 3} more` : ""}.`,
+      });
+    }
+
+    // Component-level checks
+    let missingFabricType = 0, zeroCut = 0;
+    articles.forEach(a => {
+      fabricComponentsOf(a).forEach(c => {
+        if (!c.fabric_type) missingFabricType++;
+        if (!c.consumption_per_unit || Number(c.consumption_per_unit) === 0) zeroCut++;
+      });
+    });
+
+    if (missingFabricType > 0) {
+      warnings.push({
+        key: "missing_fabric_type",
+        text: `${missingFabricType} component row${missingFabricType > 1 ? "s" : ""} have no Fabrication type — fabric summary will group them separately as "missing".`,
+      });
+    }
+    if (zeroCut > 0) {
+      warnings.push({
+        key: "zero_cut",
+        text: `${zeroCut} component row${zeroCut > 1 ? "s" : ""} have Cut/Unit = 0 — Net and Total Mtrs for those rows will be zero.`,
+      });
+    }
+
+    return warnings;
+  }, [articles]);
 
   const updateMutation = useArticleComponentUpdate({
     invalidateKeys: [["articles", activePo?.id], ["allArticles"]],
@@ -458,9 +582,14 @@ export default function FabricWorking() {
         if (!tpByCode.has(tp.article_code)) tpByCode.set(tp.article_code, tp);
       }
       let updated = 0, skipped = 0, preservedAccessoryRows = 0;
+      const skippedCodes = [];
       for (const art of articles) {
         const tp = tpByCode.get(art.article_code);
-        if (!tp?.fabric_specs?.length) { skipped++; continue; }
+        if (!tp?.fabric_specs?.length) {
+          skipped++;
+          skippedCodes.push(art.article_code || art.article_name || "?");
+          continue;
+        }
         const qty = art.order_quantity || 0;
         const freshFabric = tp.fabric_specs
           .filter(fs => fs.component_type)
@@ -502,7 +631,10 @@ export default function FabricWorking() {
       qc.invalidateQueries({ queryKey: ["articles", activePo.id] });
       qc.invalidateQueries({ queryKey: ["allArticles"] });
       qc.invalidateQueries({ queryKey: ["dimsIndex", activePo.id] });
-      alert(`${updated} article${updated !== 1 ? "s" : ""} updated · ${skipped} skipped (no tech pack) · ${preservedAccessoryRows} accessory/trim row${preservedAccessoryRows !== 1 ? "s" : ""} preserved`);
+      const skippedNote = skippedCodes.length
+        ? `: ${skippedCodes.slice(0, 5).join(", ")}${skippedCodes.length > 5 ? ` +${skippedCodes.length - 5} more` : ""}`
+        : "";
+      alert(`${updated} article${updated !== 1 ? "s" : ""} updated · ${skipped} skipped (no tech pack / no fabric_specs)${skippedNote} · ${preservedAccessoryRows} accessory/trim row${preservedAccessoryRows !== 1 ? "s" : ""} preserved`);
     } catch (e) {
       alert("Failed: " + e.message);
     } finally {
@@ -948,6 +1080,30 @@ export default function FabricWorking() {
         </div>
       )}
 
+      {/* Data-quality warnings — non-blocking, dismissable */}
+      {!warnDismissed && dataWarnings.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 no-print">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <svg className="h-4 w-4 shrink-0 mt-0.5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+              <div className="space-y-1">
+                <div className="font-semibold text-amber-800 text-xs">Fabric working data gaps</div>
+                {dataWarnings.map(w => (
+                  <div key={w.key} className="text-xs text-amber-800">{w.text}</div>
+                ))}
+              </div>
+            </div>
+            <button
+              className="shrink-0 text-amber-500 hover:text-amber-700"
+              onClick={() => setWarnDismissed(true)}
+              aria-label="Dismiss"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          </div>
+        </div>
+      )}
+
       {!activePo || (!isLoading && articles.length === 0) ? (
         <EmptyState icon={Layers} title="No articles for this PO"
           description="Create articles from the PO Detail page, or import line items first."
@@ -991,9 +1147,11 @@ export default function FabricWorking() {
                           <td className={`${tdCls} text-center`}>{comp.product_size||"—"}</td>
                           <td className={`${tdCls} text-center font-mono`}>{dims||"—"}</td>
                           <td className={`${tdCls} text-center`}>{comp.direction||"—"}</td>
-                          <td className={tdCls}>{comp.fabric_type}</td>
+                          <td className={tdCls}>
+                            {comp.fabric_type || <span className="italic text-amber-500 text-[10px]">— missing —</span>}
+                          </td>
                           <td className={`${tdCls} text-center`}>{formatWidth(comp.width, unitSystem)}</td>
-                          <td className={`${tdCls} text-center`}>{(comp.consumption_per_unit||0).toFixed(4)}</td>
+                          <td className={`${tdCls} text-center ${!comp.consumption_per_unit || Number(comp.consumption_per_unit) === 0 ? "text-amber-500" : ""}`}>{(comp.consumption_per_unit||0).toFixed(4)}</td>
                           <td className={`${tdCls} text-center`}>{(comp.net_total||0).toFixed(2)}</td>
                           <td className={`${tdCls} text-center`}>{comp.wastage_percent??6}%</td>
                           <td className={highlightTd} style={{ backgroundColor:"#FFF2CC" }}>{(comp.total_required||0).toFixed(2)}</td>
@@ -1068,9 +1226,11 @@ export default function FabricWorking() {
                                     <td className={`${tdCls} text-center`}>{comp.product_size||"—"}</td>
                                     <td className={`${tdCls} text-center font-mono`}>{dims||"—"}</td>
                                     <td className={`${tdCls} text-center`}>{comp.direction||"—"}</td>
-                                    <td className={tdCls}>{comp.fabric_type}</td>
+                                    <td className={tdCls}>
+                                      {comp.fabric_type || <span className="italic text-amber-500 text-[10px]">— missing —</span>}
+                                    </td>
                                     <td className={`${tdCls} text-center`}>{formatWidth(comp.width, unitSystem)}</td>
-                                    <td className={`${tdCls} text-center`}>{(comp.consumption_per_unit||0).toFixed(4)}</td>
+                                    <td className={`${tdCls} text-center ${!comp.consumption_per_unit || Number(comp.consumption_per_unit) === 0 ? "text-amber-500" : ""}`}>{(comp.consumption_per_unit||0).toFixed(4)}</td>
                                     <td className={`${tdCls} text-center`}>{net.toFixed(2)}</td>
                                     <td className={`${tdCls} text-center`}>{comp.wastage_percent??6}%</td>
                                     <td className={highlightTd} style={{ backgroundColor:"#FFF2CC" }}>{total.toFixed(2)}</td>
@@ -1114,7 +1274,9 @@ export default function FabricWorking() {
                     <tbody>
                       {items.map((f, idx) => (
                         <tr key={idx} style={{ backgroundColor: idx%2===0?"#EBF0FA":"white" }}>
-                          <td className={tdCls} colSpan={2}>{f.fabric_type}</td>
+                          <td className={tdCls} colSpan={2}>
+                            {f.fabric_type || <span className="italic text-amber-500 text-[10px]">— missing fabric type —</span>}
+                          </td>
                           <td className={`${tdCls} text-center`}>{formatWidth(f.width, unitSystem)}</td>
                           <td className={`${tdCls} text-right`}>{(f.net_total||0).toFixed(2)}</td>
                           <td className={highlightTd} style={{ backgroundColor:"#FFF2CC", textAlign:"right" }}>{(f.total_with_wastage||0).toFixed(2)}</td>
@@ -1158,7 +1320,9 @@ export default function FabricWorking() {
                 <tbody>
                   {fabricSummary.map((f, idx) => (
                     <tr key={idx} style={{ backgroundColor: idx%2===0?"#EBF0FA":"#fff" }}>
-                      <td className={tdCls} colSpan={2}>{f.fabric_type}</td>
+                      <td className={tdCls} colSpan={2}>
+                        {f.fabric_type || <span className="italic text-amber-500 text-[10px]">— missing fabric type —</span>}
+                      </td>
                       <td className={`${tdCls} text-center`}>{formatWidth(f.width, unitSystem)}</td>
                       <td className={`${tdCls} text-right`}>{(f.net_total||0).toFixed(2)}</td>
                       <td className={highlightTd} style={{ backgroundColor:"#FFF2CC", textAlign:"right" }}>{(f.total_with_wastage||0).toFixed(2)}</td>
