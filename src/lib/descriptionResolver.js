@@ -432,10 +432,15 @@ function masterRowToSeedRow(m, cfg, articleSizes = null) {
         : m.wastage_percent
       : cfg.defaultWastage;
 
+  // Use consumption_per_unit as the multiplier so rows with e.g. 2 labels
+  // per unit seed with x2, and rows with 0 (not required) are excluded by
+  // the caller.  Fall back to 1 only when the field is absent (legacy rows).
+  const multiplier = m.consumption_per_unit != null ? m.consumption_per_unit : 1;
+
   const base = {
     type: cfg.typeOptions[0],
     wastage_percent: wastage,
-    multiplier: 1,
+    multiplier,
     pc_ean_code: "",
     carton_ean_code: "",
     existing_id: null,
@@ -706,7 +711,13 @@ export function resolveDescription({
   }
 
   if (!shouldFallThrough(masterRows)) {
-    return masterRows.map((m) => masterRowToSeedRow(m, cfg, articleSizes));
+    // Exclude rows explicitly marked as not required (consumption_per_unit === 0).
+    // Rows where the field is null/undefined keep their default multiplier of 1.
+    const required = masterRows.filter(
+      (m) => m.consumption_per_unit == null || m.consumption_per_unit > 0
+    );
+    if (required.length === 0) return null; // nothing required → fall through to tech pack
+    return required.map((m) => masterRowToSeedRow(m, cfg, articleSizes));
   }
 
   // ── Tier 2: tech_packs JSONB ─────────────────────────────────────────

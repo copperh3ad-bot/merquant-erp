@@ -120,6 +120,7 @@ const SUB_TABS = Object.keys(TAB_CONFIG);
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 const inputCls = "w-full text-xs border border-gray-300 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400";
+const textareaCls = "w-full text-xs border border-gray-300 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none min-h-[3rem] whitespace-pre-wrap break-words";
 const numInputCls = "w-16 text-center text-xs border border-gray-300 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400";
 
 const calcInclWastage = (qty, wastage, multiplier = 1) =>
@@ -282,8 +283,8 @@ function ArticleBlock({ art, cfg, rows, onChange, templates = [], cartonSize = "
                 {cfg.splitDescSize ? (
                   <>
                     <td className="border border-gray-300 px-1.5 py-1">
-                      <input className={inputCls} placeholder={cfg.descPlaceholder} value={row.description || ""}
-                        onChange={e => update(idx, "description", e.target.value)} />
+                      <textarea className={textareaCls} placeholder={cfg.descPlaceholder} value={row.description || ""}
+                        onChange={e => update(idx, "description", e.target.value)} rows={2} />
                     </td>
                     <td className="border border-gray-300 px-1.5 py-1" style={{ backgroundColor: "#F1F8E9" }}>
                       <input className={inputCls} placeholder={cfg.sizePlaceholder} value={row.size || ""}
@@ -292,8 +293,8 @@ function ArticleBlock({ art, cfg, rows, onChange, templates = [], cartonSize = "
                   </>
                 ) : (
                   <td className="border border-gray-300 px-1.5 py-1">
-                    <input className={inputCls} placeholder={cfg.qualityPlaceholder} value={row.quality || ""}
-                      onChange={e => update(idx, "quality", e.target.value)} />
+                    <textarea className={textareaCls} placeholder={cfg.qualityPlaceholder} value={row.quality || ""}
+                      onChange={e => update(idx, "quality", e.target.value)} rows={2} />
                   </td>
                 )}
                 <td className="border border-gray-300 px-2 py-1 text-center font-medium">{qty.toLocaleString()}</td>
